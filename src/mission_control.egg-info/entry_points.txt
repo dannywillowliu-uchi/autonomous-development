@@ -1,0 +1,2 @@
+[console_scripts]
+mc = mission_control.cli:main
