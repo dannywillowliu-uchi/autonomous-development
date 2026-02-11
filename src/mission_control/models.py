@@ -113,6 +113,8 @@ class Plan:
 	total_units: int = 0
 	completed_units: int = 0
 	failed_units: int = 0
+	round_id: str | None = None  # link to Round for mission mode
+	root_node_id: str | None = None  # root PlanNode for recursive planning
 
 
 @dataclass
@@ -128,6 +130,9 @@ class WorkUnit:
 	priority: int = 1  # 1=highest
 	status: str = "pending"  # pending/claimed/running/completed/failed/blocked
 	worker_id: str | None = None
+	round_id: str | None = None  # link to Round for mission mode
+	plan_node_id: str | None = None  # leaf PlanNode that produced this unit
+	handoff_id: str | None = None  # structured handoff from worker
 	depends_on: str = ""  # comma-separated WorkUnit IDs
 	branch_name: str = ""
 	claimed_at: str | None = None
@@ -155,6 +160,8 @@ class Worker:
 	units_completed: int = 0
 	units_failed: int = 0
 	total_cost_usd: float = 0.0
+	backend_type: str = "local"  # local/ssh/container
+	backend_metadata: str = ""  # JSON blob for backend-specific data
 
 
 @dataclass
@@ -173,3 +180,73 @@ class MergeRequest:
 	merged_at: str | None = None
 	rejection_reason: str = ""
 	rebase_attempts: int = 0
+
+
+# -- Mission mode models --
+
+
+@dataclass
+class Mission:
+	"""A continuous development mission toward a single objective."""
+
+	id: str = field(default_factory=_new_id)
+	objective: str = ""
+	status: str = "pending"  # pending/running/completed/failed/stalled/stopped
+	started_at: str = field(default_factory=_now_iso)
+	finished_at: str | None = None
+	total_rounds: int = 0
+	total_cost_usd: float = 0.0
+	final_score: float = 0.0
+	stopped_reason: str = ""
+
+
+@dataclass
+class Round:
+	"""A single plan-execute-evaluate cycle within a mission."""
+
+	id: str = field(default_factory=_new_id)
+	mission_id: str = ""
+	number: int = 0
+	status: str = "pending"  # pending/planning/executing/evaluating/completed/failed
+	started_at: str = field(default_factory=_now_iso)
+	finished_at: str | None = None
+	snapshot_hash: str = ""  # git commit hash of mc/green at round start
+	plan_id: str | None = None
+	objective_score: float = 0.0
+	objective_met: bool = False
+	total_units: int = 0
+	completed_units: int = 0
+	failed_units: int = 0
+	cost_usd: float = 0.0
+	discoveries: str = ""  # JSON array of discovery strings from workers
+
+
+@dataclass
+class PlanNode:
+	"""A node in a recursive plan tree (branch or leaf)."""
+
+	id: str = field(default_factory=_new_id)
+	plan_id: str = ""
+	parent_id: str | None = None
+	depth: int = 0
+	scope: str = ""  # what this node is responsible for
+	strategy: str = ""  # subdivide/leaves -- what the planner decided
+	status: str = "pending"  # pending/expanding/expanded/failed
+	node_type: str = "branch"  # branch/leaf
+	work_unit_id: str | None = None  # set if node_type == "leaf"
+	children_ids: str = ""  # comma-separated child PlanNode IDs
+
+
+@dataclass
+class Handoff:
+	"""Structured output from a worker after executing a work unit."""
+
+	id: str = field(default_factory=_new_id)
+	work_unit_id: str = ""
+	round_id: str = ""
+	status: str = ""  # completed/failed/blocked
+	commits: str = ""  # JSON array of commit hashes
+	summary: str = ""
+	discoveries: str = ""  # JSON array of discovery strings
+	concerns: str = ""  # JSON array of concern strings
+	files_changed: str = ""  # JSON array of file paths

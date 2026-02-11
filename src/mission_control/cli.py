@@ -47,6 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
 	par.add_argument("--workers", type=int, default=None, help="Number of workers")
 	par.add_argument("--dry-run", action="store_true", help="Show plan without executing")
 
+	# mc mission
+	mission = sub.add_parser("mission", help="Run continuous mission mode (outer loop)")
+	mission.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	mission.add_argument("--max-rounds", type=int, default=None, help="Max rounds to run")
+	mission.add_argument("--workers", type=int, default=None, help="Number of workers")
+	mission.add_argument("--dry-run", action="store_true", help="Show mission plan without executing")
+
 	# mc init
 	init_cmd = sub.add_parser("init", help="Initialize a mission-control config")
 	init_cmd.add_argument("path", nargs="?", default=".")
@@ -188,6 +195,56 @@ def cmd_parallel(args: argparse.Namespace) -> int:
 		db.close()
 
 
+def cmd_mission(args: argparse.Namespace) -> int:
+	"""Run the continuous mission mode (outer loop)."""
+	from mission_control.round_controller import RoundController
+
+	config = load_config(args.config)
+	db_path = _get_db_path(args.config)
+
+	if args.max_rounds is not None:
+		config.rounds.max_rounds = args.max_rounds
+	if args.workers is not None:
+		config.scheduler.parallel.num_workers = args.workers
+
+	if args.dry_run:
+		print(f"Target: {config.target.name} ({config.target.resolved_path})")
+		print(f"Objective: {config.target.objective}")
+		print(f"Model: {config.scheduler.model}")
+		print(f"Workers: {config.scheduler.parallel.num_workers}")
+		print(f"Max rounds: {config.rounds.max_rounds}")
+		print(f"Stall threshold: {config.rounds.stall_threshold} rounds")
+		print(f"Planner max depth: {config.planner.max_depth}")
+		print(f"Green branch: {config.green_branch.working_branch} / {config.green_branch.green_branch}")
+		print(f"Backend: {config.backend.type}")
+		print(f"Session timeout: {config.scheduler.session_timeout}s")
+		per_session = config.scheduler.budget.max_per_session_usd
+		per_run = config.scheduler.budget.max_per_run_usd
+		print(f"Budget: ${per_session}/session, ${per_run}/run")
+		print(f"Database: {db_path}")
+		return 0
+
+	if not config.target.objective:
+		print("Error: target.objective must be set in config for mission mode.")
+		return 1
+
+	db = Database(db_path)
+	try:
+		controller = RoundController(config, db)
+		result = asyncio.run(controller.run())
+		print(f"Mission: {result.mission_id}")
+		print(f"Objective met: {result.objective_met}")
+		print(f"Final score: {result.final_score:.2f}")
+		print(f"Rounds: {result.total_rounds}")
+		if result.round_scores:
+			print(f"Score progression: {' -> '.join(f'{s:.2f}' for s in result.round_scores)}")
+		print(f"Wall time: {result.wall_time_seconds:.1f}s")
+		print(f"Stopped: {result.stopped_reason}")
+		return 0 if result.objective_met else 1
+	finally:
+		db.close()
+
+
 INIT_TEMPLATE = """\
 [target]
 name = "{name}"
@@ -211,7 +268,27 @@ auto_merge = false
 
 [scheduler.budget]
 max_per_session_usd = 5.0
-max_per_run_usd = 50.0
+max_per_run_usd = 200.0
+
+[scheduler.parallel]
+num_workers = 8
+
+[rounds]
+max_rounds = 20
+stall_threshold = 3
+cooldown_between_rounds = 30
+
+[planner]
+max_depth = 3
+max_children_per_node = 5
+
+[green_branch]
+working_branch = "mc/working"
+green_branch = "mc/green"
+fixup_max_attempts = 3
+
+[backend]
+type = "local"
 """
 
 
@@ -238,6 +315,7 @@ COMMANDS = {
 	"history": cmd_history,
 	"snapshot": cmd_snapshot,
 	"parallel": cmd_parallel,
+	"mission": cmd_mission,
 	"init": cmd_init,
 }
 

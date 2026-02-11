@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from mission_control.backends.local import LocalBackend
 from mission_control.config import MissionConfig
 from mission_control.db import Database
 from mission_control.merge_queue import MergeQueue
@@ -69,6 +70,7 @@ class Coordinator:
 		self._merge_queue: MergeQueue | None = None
 		self._merge_task: asyncio.Task[None] | None = None
 		self._pool: WorkspacePool | None = None
+		self._backend: LocalBackend | None = None
 
 	async def run(self) -> CoordinatorReport:
 		"""Execute the full parallel workflow."""
@@ -108,6 +110,14 @@ class Coordinator:
 			warm = self.config.scheduler.parallel.warm_clones
 			await self._pool.initialize(warm_count=min(warm, self.num_workers + 1))
 
+			# Create a backend for workers
+			self._backend = LocalBackend(
+				source_repo=source_repo,
+				pool_dir=pool_path,
+				max_clones=self.num_workers,
+				base_branch=self.config.target.branch,
+			)
+
 			# 4. Start merge queue in a dedicated clone
 			merge_workspace = await self._pool.acquire()
 			if merge_workspace is None:
@@ -132,7 +142,7 @@ class Coordinator:
 				)
 				self.db.insert_worker(worker)
 
-				agent = WorkerAgent(worker, self.db, self.config)
+				agent = WorkerAgent(worker, self.db, self.config, self._backend)
 				self._workers.append(agent)
 				self._worker_tasks.append(asyncio.create_task(agent.run()))
 				report.workers_spawned += 1

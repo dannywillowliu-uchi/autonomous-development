@@ -84,19 +84,17 @@ async def snapshot_project_health(config: MissionConfig, cwd: str | None = None)
 	cwd = cwd or str(config.target.resolved_path)
 	timeout = config.target.verification.timeout
 
-	# Run pytest, ruff, mypy separately for parsing
-	pytest_result = await _run_command("uv run pytest -q 2>&1", cwd, timeout)
-	ruff_result = await _run_command("uv run ruff check src/ 2>&1", cwd, timeout)
-	mypy_result = await _run_command("uv run mypy src/ --ignore-missing-imports 2>&1", cwd, timeout)
+	# Run the project's configured verification command
+	cmd = config.target.verification.command
+	result = await _run_command(cmd + " 2>&1", cwd, timeout)
+	output = result["output"]
 
-	pytest_data = _parse_pytest(pytest_result["output"])
-	ruff_data = _parse_ruff(ruff_result["output"])
-	mypy_data = _parse_mypy(mypy_result["output"])
+	pytest_data = _parse_pytest(output)
+	ruff_data = _parse_ruff(output)
+	mypy_data = _parse_mypy(output)
 
 	raw = {
-		"pytest": pytest_result["output"][-2000:],
-		"ruff": ruff_result["output"][-2000:],
-		"mypy": mypy_result["output"][-2000:],
+		"verification": output[-4000:],
 	}
 
 	import json

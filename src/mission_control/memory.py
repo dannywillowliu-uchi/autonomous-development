@@ -129,6 +129,27 @@ def load_context_for_work_unit(
 	return "\n\n".join(sections) if sections else ""
 
 
+def load_context_for_mission_worker(
+	unit: WorkUnit,
+	config: MissionConfig,
+) -> str:
+	"""Assemble minimal context for a mission mode worker.
+
+	Fresh-start pattern: workers get ONLY the work unit description + project
+	CLAUDE.md. No session history, no sibling status, no prior decisions.
+	This reduces context drift and keeps workers focused.
+	"""
+	sections: list[str] = []
+
+	# Only project CLAUDE.md (truncated to budget)
+	claude_md = _read_project_claude_md(config)
+	if claude_md:
+		truncated = claude_md[:min(4000, CONTEXT_BUDGET)]
+		sections.append(f"### Project Instructions\n{truncated}")
+
+	return "\n\n".join(sections) if sections else ""
+
+
 def _read_project_claude_md(config: MissionConfig) -> str:
 	"""Read the target project's CLAUDE.md if it exists."""
 	claude_md_path = config.target.resolved_path / "CLAUDE.md"

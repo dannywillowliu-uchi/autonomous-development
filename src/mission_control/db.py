@@ -8,8 +8,12 @@ from typing import Sequence
 
 from mission_control.models import (
 	Decision,
+	Handoff,
 	MergeRequest,
+	Mission,
 	Plan,
+	PlanNode,
+	Round,
 	Session,
 	Snapshot,
 	TaskRecord,
@@ -76,7 +80,10 @@ CREATE TABLE IF NOT EXISTS plans (
 	raw_planner_output TEXT NOT NULL DEFAULT '',
 	total_units INTEGER NOT NULL DEFAULT 0,
 	completed_units INTEGER NOT NULL DEFAULT 0,
-	failed_units INTEGER NOT NULL DEFAULT 0
+	failed_units INTEGER NOT NULL DEFAULT 0,
+	round_id TEXT,
+	root_node_id TEXT,
+	FOREIGN KEY (round_id) REFERENCES rounds(id)
 );
 
 CREATE TABLE IF NOT EXISTS work_units (
@@ -89,6 +96,9 @@ CREATE TABLE IF NOT EXISTS work_units (
 	priority INTEGER NOT NULL DEFAULT 1,
 	status TEXT NOT NULL DEFAULT 'pending',
 	worker_id TEXT,
+	round_id TEXT,
+	plan_node_id TEXT,
+	handoff_id TEXT,
 	depends_on TEXT NOT NULL DEFAULT '',
 	branch_name TEXT NOT NULL DEFAULT '',
 	claimed_at TEXT,
@@ -115,7 +125,9 @@ CREATE TABLE IF NOT EXISTS workers (
 	last_heartbeat TEXT NOT NULL,
 	units_completed INTEGER NOT NULL DEFAULT 0,
 	units_failed INTEGER NOT NULL DEFAULT 0,
-	total_cost_usd REAL NOT NULL DEFAULT 0.0
+	total_cost_usd REAL NOT NULL DEFAULT 0.0,
+	backend_type TEXT NOT NULL DEFAULT 'local',
+	backend_metadata TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS merge_requests (
@@ -135,6 +147,71 @@ CREATE TABLE IF NOT EXISTS merge_requests (
 );
 
 CREATE INDEX IF NOT EXISTS idx_merge_requests_status ON merge_requests(status, position);
+
+CREATE TABLE IF NOT EXISTS missions (
+	id TEXT PRIMARY KEY,
+	objective TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'pending',
+	started_at TEXT NOT NULL,
+	finished_at TEXT,
+	total_rounds INTEGER NOT NULL DEFAULT 0,
+	total_cost_usd REAL NOT NULL DEFAULT 0.0,
+	final_score REAL NOT NULL DEFAULT 0.0,
+	stopped_reason TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS rounds (
+	id TEXT PRIMARY KEY,
+	mission_id TEXT NOT NULL,
+	number INTEGER NOT NULL DEFAULT 0,
+	status TEXT NOT NULL DEFAULT 'pending',
+	started_at TEXT NOT NULL,
+	finished_at TEXT,
+	snapshot_hash TEXT NOT NULL DEFAULT '',
+	plan_id TEXT,
+	objective_score REAL NOT NULL DEFAULT 0.0,
+	objective_met INTEGER NOT NULL DEFAULT 0,
+	total_units INTEGER NOT NULL DEFAULT 0,
+	completed_units INTEGER NOT NULL DEFAULT 0,
+	failed_units INTEGER NOT NULL DEFAULT 0,
+	cost_usd REAL NOT NULL DEFAULT 0.0,
+	discoveries TEXT NOT NULL DEFAULT '',
+	FOREIGN KEY (mission_id) REFERENCES missions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rounds_mission ON rounds(mission_id, number);
+
+CREATE TABLE IF NOT EXISTS plan_nodes (
+	id TEXT PRIMARY KEY,
+	plan_id TEXT NOT NULL,
+	parent_id TEXT,
+	depth INTEGER NOT NULL DEFAULT 0,
+	scope TEXT NOT NULL DEFAULT '',
+	strategy TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'pending',
+	node_type TEXT NOT NULL DEFAULT 'branch',
+	work_unit_id TEXT,
+	children_ids TEXT NOT NULL DEFAULT '',
+	FOREIGN KEY (plan_id) REFERENCES plans(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_nodes_plan ON plan_nodes(plan_id);
+
+CREATE TABLE IF NOT EXISTS handoffs (
+	id TEXT PRIMARY KEY,
+	work_unit_id TEXT NOT NULL,
+	round_id TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT '',
+	commits TEXT NOT NULL DEFAULT '',
+	summary TEXT NOT NULL DEFAULT '',
+	discoveries TEXT NOT NULL DEFAULT '',
+	concerns TEXT NOT NULL DEFAULT '',
+	files_changed TEXT NOT NULL DEFAULT '',
+	FOREIGN KEY (work_unit_id) REFERENCES work_units(id),
+	FOREIGN KEY (round_id) REFERENCES rounds(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_handoffs_round ON handoffs(round_id);
 """
 
 
@@ -357,12 +434,14 @@ class Database:
 		self.conn.execute(
 			"""INSERT INTO plans
 			(id, objective, status, created_at, finished_at,
-			 raw_planner_output, total_units, completed_units, failed_units)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			 raw_planner_output, total_units, completed_units, failed_units,
+			 round_id, root_node_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				plan.id, plan.objective, plan.status, plan.created_at,
 				plan.finished_at, plan.raw_planner_output,
 				plan.total_units, plan.completed_units, plan.failed_units,
+				plan.round_id, plan.root_node_id,
 			),
 		)
 		self.conn.commit()
@@ -372,12 +451,14 @@ class Database:
 			"""UPDATE plans SET
 			objective=?, status=?, finished_at=?,
 			raw_planner_output=?, total_units=?,
-			completed_units=?, failed_units=?
+			completed_units=?, failed_units=?,
+			round_id=?, root_node_id=?
 			WHERE id=?""",
 			(
 				plan.objective, plan.status, plan.finished_at,
 				plan.raw_planner_output, plan.total_units,
-				plan.completed_units, plan.failed_units, plan.id,
+				plan.completed_units, plan.failed_units,
+				plan.round_id, plan.root_node_id, plan.id,
 			),
 		)
 		self.conn.commit()
@@ -400,6 +481,8 @@ class Database:
 			total_units=row["total_units"],
 			completed_units=row["completed_units"],
 			failed_units=row["failed_units"],
+			round_id=row["round_id"],
+			root_node_id=row["root_node_id"],
 		)
 
 	# -- Work Units --
@@ -408,14 +491,16 @@ class Database:
 		self.conn.execute(
 			"""INSERT INTO work_units
 			(id, plan_id, title, description, files_hint, verification_hint,
-			 priority, status, worker_id, depends_on, branch_name,
+			 priority, status, worker_id, round_id, plan_node_id, handoff_id,
+			 depends_on, branch_name,
 			 claimed_at, heartbeat_at, started_at, finished_at,
 			 exit_code, commit_hash, output_summary, attempt, max_attempts)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				unit.id, unit.plan_id, unit.title, unit.description,
 				unit.files_hint, unit.verification_hint, unit.priority,
-				unit.status, unit.worker_id, unit.depends_on, unit.branch_name,
+				unit.status, unit.worker_id, unit.round_id, unit.plan_node_id,
+				unit.handoff_id, unit.depends_on, unit.branch_name,
 				unit.claimed_at, unit.heartbeat_at, unit.started_at,
 				unit.finished_at, unit.exit_code, unit.commit_hash,
 				unit.output_summary, unit.attempt, unit.max_attempts,
@@ -428,6 +513,7 @@ class Database:
 			"""UPDATE work_units SET
 			plan_id=?, title=?, description=?, files_hint=?,
 			verification_hint=?, priority=?, status=?, worker_id=?,
+			round_id=?, plan_node_id=?, handoff_id=?,
 			depends_on=?, branch_name=?, claimed_at=?, heartbeat_at=?,
 			started_at=?, finished_at=?, exit_code=?, commit_hash=?,
 			output_summary=?, attempt=?, max_attempts=?
@@ -435,7 +521,8 @@ class Database:
 			(
 				unit.plan_id, unit.title, unit.description, unit.files_hint,
 				unit.verification_hint, unit.priority, unit.status,
-				unit.worker_id, unit.depends_on, unit.branch_name,
+				unit.worker_id, unit.round_id, unit.plan_node_id,
+				unit.handoff_id, unit.depends_on, unit.branch_name,
 				unit.claimed_at, unit.heartbeat_at, unit.started_at,
 				unit.finished_at, unit.exit_code, unit.commit_hash,
 				unit.output_summary, unit.attempt, unit.max_attempts, unit.id,
@@ -545,6 +632,9 @@ class Database:
 			priority=row["priority"],
 			status=row["status"],
 			worker_id=row["worker_id"],
+			round_id=row["round_id"],
+			plan_node_id=row["plan_node_id"],
+			handoff_id=row["handoff_id"],
 			depends_on=row["depends_on"],
 			branch_name=row["branch_name"],
 			claimed_at=row["claimed_at"],
@@ -564,13 +654,15 @@ class Database:
 		self.conn.execute(
 			"""INSERT INTO workers
 			(id, workspace_path, status, current_unit_id, pid,
-			 started_at, last_heartbeat, units_completed, units_failed, total_cost_usd)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			 started_at, last_heartbeat, units_completed, units_failed, total_cost_usd,
+			 backend_type, backend_metadata)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				worker.id, worker.workspace_path, worker.status,
 				worker.current_unit_id, worker.pid, worker.started_at,
 				worker.last_heartbeat, worker.units_completed,
 				worker.units_failed, worker.total_cost_usd,
+				worker.backend_type, worker.backend_metadata,
 			),
 		)
 		self.conn.commit()
@@ -580,13 +672,15 @@ class Database:
 			"""UPDATE workers SET
 			workspace_path=?, status=?, current_unit_id=?, pid=?,
 			started_at=?, last_heartbeat=?, units_completed=?,
-			units_failed=?, total_cost_usd=?
+			units_failed=?, total_cost_usd=?,
+			backend_type=?, backend_metadata=?
 			WHERE id=?""",
 			(
 				worker.workspace_path, worker.status, worker.current_unit_id,
 				worker.pid, worker.started_at, worker.last_heartbeat,
 				worker.units_completed, worker.units_failed,
-				worker.total_cost_usd, worker.id,
+				worker.total_cost_usd, worker.backend_type,
+				worker.backend_metadata, worker.id,
 			),
 		)
 		self.conn.commit()
@@ -614,6 +708,8 @@ class Database:
 			units_completed=row["units_completed"],
 			units_failed=row["units_failed"],
 			total_cost_usd=row["total_cost_usd"],
+			backend_type=row["backend_type"],
+			backend_metadata=row["backend_metadata"],
 		)
 
 	# -- Merge Requests --
@@ -691,4 +787,243 @@ class Database:
 			merged_at=row["merged_at"],
 			rejection_reason=row["rejection_reason"],
 			rebase_attempts=row["rebase_attempts"],
+		)
+
+	# -- Missions --
+
+	def insert_mission(self, mission: Mission) -> None:
+		self.conn.execute(
+			"""INSERT INTO missions
+			(id, objective, status, started_at, finished_at,
+			 total_rounds, total_cost_usd, final_score, stopped_reason)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				mission.id, mission.objective, mission.status,
+				mission.started_at, mission.finished_at,
+				mission.total_rounds, mission.total_cost_usd,
+				mission.final_score, mission.stopped_reason,
+			),
+		)
+		self.conn.commit()
+
+	def update_mission(self, mission: Mission) -> None:
+		self.conn.execute(
+			"""UPDATE missions SET
+			objective=?, status=?, started_at=?, finished_at=?,
+			total_rounds=?, total_cost_usd=?, final_score=?, stopped_reason=?
+			WHERE id=?""",
+			(
+				mission.objective, mission.status, mission.started_at,
+				mission.finished_at, mission.total_rounds,
+				mission.total_cost_usd, mission.final_score,
+				mission.stopped_reason, mission.id,
+			),
+		)
+		self.conn.commit()
+
+	def get_mission(self, mission_id: str) -> Mission | None:
+		row = self.conn.execute("SELECT * FROM missions WHERE id=?", (mission_id,)).fetchone()
+		if row is None:
+			return None
+		return self._row_to_mission(row)
+
+	def get_latest_mission(self) -> Mission | None:
+		row = self.conn.execute(
+			"SELECT * FROM missions ORDER BY started_at DESC LIMIT 1"
+		).fetchone()
+		if row is None:
+			return None
+		return self._row_to_mission(row)
+
+	@staticmethod
+	def _row_to_mission(row: sqlite3.Row) -> Mission:
+		return Mission(
+			id=row["id"],
+			objective=row["objective"],
+			status=row["status"],
+			started_at=row["started_at"],
+			finished_at=row["finished_at"],
+			total_rounds=row["total_rounds"],
+			total_cost_usd=row["total_cost_usd"],
+			final_score=row["final_score"],
+			stopped_reason=row["stopped_reason"],
+		)
+
+	# -- Rounds --
+
+	def insert_round(self, rnd: Round) -> None:
+		self.conn.execute(
+			"""INSERT INTO rounds
+			(id, mission_id, number, status, started_at, finished_at,
+			 snapshot_hash, plan_id, objective_score, objective_met,
+			 total_units, completed_units, failed_units, cost_usd, discoveries)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				rnd.id, rnd.mission_id, rnd.number, rnd.status,
+				rnd.started_at, rnd.finished_at, rnd.snapshot_hash,
+				rnd.plan_id, rnd.objective_score, int(rnd.objective_met),
+				rnd.total_units, rnd.completed_units, rnd.failed_units,
+				rnd.cost_usd, rnd.discoveries,
+			),
+		)
+		self.conn.commit()
+
+	def update_round(self, rnd: Round) -> None:
+		self.conn.execute(
+			"""UPDATE rounds SET
+			mission_id=?, number=?, status=?, started_at=?, finished_at=?,
+			snapshot_hash=?, plan_id=?, objective_score=?, objective_met=?,
+			total_units=?, completed_units=?, failed_units=?,
+			cost_usd=?, discoveries=?
+			WHERE id=?""",
+			(
+				rnd.mission_id, rnd.number, rnd.status, rnd.started_at,
+				rnd.finished_at, rnd.snapshot_hash, rnd.plan_id,
+				rnd.objective_score, int(rnd.objective_met),
+				rnd.total_units, rnd.completed_units, rnd.failed_units,
+				rnd.cost_usd, rnd.discoveries, rnd.id,
+			),
+		)
+		self.conn.commit()
+
+	def get_round(self, round_id: str) -> Round | None:
+		row = self.conn.execute("SELECT * FROM rounds WHERE id=?", (round_id,)).fetchone()
+		if row is None:
+			return None
+		return self._row_to_round(row)
+
+	def get_rounds_for_mission(self, mission_id: str) -> list[Round]:
+		rows = self.conn.execute(
+			"SELECT * FROM rounds WHERE mission_id=? ORDER BY number ASC",
+			(mission_id,),
+		).fetchall()
+		return [self._row_to_round(r) for r in rows]
+
+	@staticmethod
+	def _row_to_round(row: sqlite3.Row) -> Round:
+		return Round(
+			id=row["id"],
+			mission_id=row["mission_id"],
+			number=row["number"],
+			status=row["status"],
+			started_at=row["started_at"],
+			finished_at=row["finished_at"],
+			snapshot_hash=row["snapshot_hash"],
+			plan_id=row["plan_id"],
+			objective_score=row["objective_score"],
+			objective_met=bool(row["objective_met"]),
+			total_units=row["total_units"],
+			completed_units=row["completed_units"],
+			failed_units=row["failed_units"],
+			cost_usd=row["cost_usd"],
+			discoveries=row["discoveries"],
+		)
+
+	# -- Plan Nodes --
+
+	def insert_plan_node(self, node: PlanNode) -> None:
+		self.conn.execute(
+			"""INSERT INTO plan_nodes
+			(id, plan_id, parent_id, depth, scope, strategy,
+			 status, node_type, work_unit_id, children_ids)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				node.id, node.plan_id, node.parent_id, node.depth,
+				node.scope, node.strategy, node.status, node.node_type,
+				node.work_unit_id, node.children_ids,
+			),
+		)
+		self.conn.commit()
+
+	def update_plan_node(self, node: PlanNode) -> None:
+		self.conn.execute(
+			"""UPDATE plan_nodes SET
+			plan_id=?, parent_id=?, depth=?, scope=?, strategy=?,
+			status=?, node_type=?, work_unit_id=?, children_ids=?
+			WHERE id=?""",
+			(
+				node.plan_id, node.parent_id, node.depth, node.scope,
+				node.strategy, node.status, node.node_type,
+				node.work_unit_id, node.children_ids, node.id,
+			),
+		)
+		self.conn.commit()
+
+	def get_plan_node(self, node_id: str) -> PlanNode | None:
+		row = self.conn.execute("SELECT * FROM plan_nodes WHERE id=?", (node_id,)).fetchone()
+		if row is None:
+			return None
+		return self._row_to_plan_node(row)
+
+	def get_plan_nodes_for_plan(self, plan_id: str) -> list[PlanNode]:
+		rows = self.conn.execute(
+			"SELECT * FROM plan_nodes WHERE plan_id=? ORDER BY depth ASC",
+			(plan_id,),
+		).fetchall()
+		return [self._row_to_plan_node(r) for r in rows]
+
+	def get_leaf_nodes_for_plan(self, plan_id: str) -> list[PlanNode]:
+		"""Get all leaf nodes (that produce work units) for a plan."""
+		rows = self.conn.execute(
+			"SELECT * FROM plan_nodes WHERE plan_id=? AND node_type='leaf' ORDER BY id",
+			(plan_id,),
+		).fetchall()
+		return [self._row_to_plan_node(r) for r in rows]
+
+	@staticmethod
+	def _row_to_plan_node(row: sqlite3.Row) -> PlanNode:
+		return PlanNode(
+			id=row["id"],
+			plan_id=row["plan_id"],
+			parent_id=row["parent_id"],
+			depth=row["depth"],
+			scope=row["scope"],
+			strategy=row["strategy"],
+			status=row["status"],
+			node_type=row["node_type"],
+			work_unit_id=row["work_unit_id"],
+			children_ids=row["children_ids"],
+		)
+
+	# -- Handoffs --
+
+	def insert_handoff(self, handoff: Handoff) -> None:
+		self.conn.execute(
+			"""INSERT INTO handoffs
+			(id, work_unit_id, round_id, status, commits,
+			 summary, discoveries, concerns, files_changed)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				handoff.id, handoff.work_unit_id, handoff.round_id,
+				handoff.status, handoff.commits, handoff.summary,
+				handoff.discoveries, handoff.concerns, handoff.files_changed,
+			),
+		)
+		self.conn.commit()
+
+	def get_handoff(self, handoff_id: str) -> Handoff | None:
+		row = self.conn.execute("SELECT * FROM handoffs WHERE id=?", (handoff_id,)).fetchone()
+		if row is None:
+			return None
+		return self._row_to_handoff(row)
+
+	def get_handoffs_for_round(self, round_id: str) -> list[Handoff]:
+		rows = self.conn.execute(
+			"SELECT * FROM handoffs WHERE round_id=?",
+			(round_id,),
+		).fetchall()
+		return [self._row_to_handoff(r) for r in rows]
+
+	@staticmethod
+	def _row_to_handoff(row: sqlite3.Row) -> Handoff:
+		return Handoff(
+			id=row["id"],
+			work_unit_id=row["work_unit_id"],
+			round_id=row["round_id"],
+			status=row["status"],
+			commits=row["commits"],
+			summary=row["summary"],
+			discoveries=row["discoveries"],
+			concerns=row["concerns"],
+			files_changed=row["files_changed"],
 		)

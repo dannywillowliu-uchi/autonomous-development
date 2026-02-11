@@ -6,10 +6,36 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from mission_control.backends.base import WorkerBackend, WorkerHandle
 from mission_control.config import MissionConfig, TargetConfig, VerificationConfig
 from mission_control.db import Database
-from mission_control.models import Plan, Worker, WorkUnit
+from mission_control.models import Mission, Plan, Round, Worker, WorkUnit
 from mission_control.worker import WorkerAgent, render_worker_prompt
+
+
+class MockBackend(WorkerBackend):
+	"""Minimal mock backend for tests."""
+
+	async def provision_workspace(self, worker_id: str, source_repo: str, base_branch: str) -> str:
+		return "/tmp/mock-workspace"
+
+	async def spawn(self, worker_id: str, workspace_path: str, command: list[str], timeout: int) -> WorkerHandle:
+		return WorkerHandle(worker_id=worker_id, pid=12345, workspace_path=workspace_path)
+
+	async def check_status(self, handle: WorkerHandle) -> str:
+		return "completed"
+
+	async def get_output(self, handle: WorkerHandle) -> str:
+		return ""
+
+	async def kill(self, handle: WorkerHandle) -> None:
+		pass
+
+	async def release_workspace(self, workspace_path: str) -> None:
+		pass
+
+	async def cleanup(self) -> None:
+		pass
 
 
 @pytest.fixture()
@@ -30,9 +56,19 @@ def config() -> MissionConfig:
 
 
 @pytest.fixture()
+def mock_backend() -> MockBackend:
+	return MockBackend()
+
+
+@pytest.fixture()
 def worker_and_unit(db: Database) -> tuple[Worker, WorkUnit]:
-	db.insert_plan(Plan(id="p1", objective="test"))
-	wu = WorkUnit(id="wu1", plan_id="p1", title="Fix tests", description="Fix failing tests")
+	# Create mission + round so handoff FK is satisfied
+	mission = Mission(id="m1", objective="test")
+	db.insert_mission(mission)
+	rnd = Round(id="r1", mission_id="m1")
+	db.insert_round(rnd)
+	db.insert_plan(Plan(id="p1", objective="test", round_id="r1"))
+	wu = WorkUnit(id="wu1", plan_id="p1", title="Fix tests", description="Fix failing tests", round_id="r1")
 	db.insert_work_unit(wu)
 	w = Worker(id="w1", workspace_path="/tmp/clone1")
 	db.insert_worker(w)
@@ -80,9 +116,10 @@ class TestRenderWorkerPrompt:
 class TestWorkerAgent:
 	async def test_heartbeat_fires(
 		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
 	) -> None:
 		w, wu = worker_and_unit
-		agent = WorkerAgent(w, db, config, heartbeat_interval=1)
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=1)
 
 		# Claim the unit manually so heartbeat has something to update
 		claimed = db.claim_work_unit(w.id)
@@ -105,31 +142,29 @@ class TestWorkerAgent:
 
 	async def test_successful_unit_execution(
 		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
 	) -> None:
 		w, _ = worker_and_unit
 
-		mock_proc = AsyncMock()
-		mock_proc.communicate = AsyncMock(return_value=(
-			b'MC_RESULT:{"status":"completed","commits":["abc123"],"summary":"Fixed it","files_changed":["foo.py"]}',
-			b"",
-		))
-		mock_proc.returncode = 0
+		# Configure mock backend to return MC_RESULT output
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":["abc123"],'
+			'"summary":"Fixed it","files_changed":["foo.py"]}'
+		)
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
 
-		with (
-			patch("mission_control.worker.asyncio.create_subprocess_exec", return_value=mock_proc),
-			patch("mission_control.worker.asyncio.wait_for", return_value=mock_proc.communicate.return_value),
-		):
-			agent = WorkerAgent(w, db, config, heartbeat_interval=9999)
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+		agent.running = True
 
-			# Run one iteration
-			agent.running = True
+		# Mock git subprocess (for checkout -b)
+		mock_git_proc = AsyncMock()
+		mock_git_proc.communicate = AsyncMock(return_value=(b"", b""))
+		mock_git_proc.returncode = 0
 
-			async def run_once() -> None:
-				unit = db.claim_work_unit(w.id)
-				if unit:
-					await agent._execute_unit(unit)  # noqa: SLF001
-
-			await run_once()
+		with patch("mission_control.worker.asyncio.create_subprocess_exec", return_value=mock_git_proc):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
 
 		# Check work unit was completed
 		unit = db.get_work_unit("wu1")
@@ -146,33 +181,20 @@ class TestWorkerAgent:
 
 	async def test_failed_unit_marks_correctly(
 		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
 	) -> None:
 		w, _ = worker_and_unit
 
-		# Git operations succeed, Claude session fails
-		git_proc = AsyncMock()
-		git_proc.communicate = AsyncMock(return_value=(b"", b""))
-		git_proc.returncode = 0
+		# Backend returns "failed" status with error output
+		mock_backend.check_status = AsyncMock(return_value="failed")  # type: ignore[method-assign]
+		mock_backend.get_output = AsyncMock(return_value="Error: something broke")  # type: ignore[method-assign]
 
-		claude_proc = AsyncMock()
-		claude_proc.communicate = AsyncMock(return_value=(b"Error: something broke", b""))
-		claude_proc.returncode = 1
+		mock_git_proc = AsyncMock()
+		mock_git_proc.communicate = AsyncMock(return_value=(b"", b""))
+		mock_git_proc.returncode = 0
 
-		call_count = 0
-
-		async def mock_create_subprocess(*args: object, **kwargs: object) -> AsyncMock:
-			nonlocal call_count
-			call_count += 1
-			# First call is git checkout -b, rest could be git or claude
-			if call_count <= 1:
-				return git_proc
-			return claude_proc
-
-		with (
-			patch("mission_control.worker.asyncio.create_subprocess_exec", side_effect=mock_create_subprocess),
-			patch("mission_control.worker.asyncio.wait_for", return_value=(b"Error: something broke", b"")),
-		):
-			agent = WorkerAgent(w, db, config, heartbeat_interval=9999)
+		with patch("mission_control.worker.asyncio.create_subprocess_exec", return_value=mock_git_proc):
+			agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
 			unit = db.claim_work_unit(w.id)
 			assert unit is not None
 			await agent._execute_unit(unit)  # noqa: SLF001
@@ -185,18 +207,23 @@ class TestWorkerAgent:
 
 	async def test_timeout_marks_failed(
 		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
 	) -> None:
 		w, _ = worker_and_unit
 
-		mock_proc = AsyncMock()
-		mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-		mock_proc.returncode = 0
+		# Backend always returns "running" to trigger the deadline timeout
+		mock_backend.check_status = AsyncMock(return_value="running")  # type: ignore[method-assign]
+		mock_backend.kill = AsyncMock()  # type: ignore[method-assign]
 
-		with (
-			patch("mission_control.worker.asyncio.create_subprocess_exec", return_value=mock_proc),
-			patch("mission_control.worker.asyncio.wait_for", side_effect=__import__("asyncio").TimeoutError),
-		):
-			agent = WorkerAgent(w, db, config, heartbeat_interval=9999)
+		# Set a very short timeout so it triggers quickly
+		config.scheduler.session_timeout = 0
+
+		mock_git_proc = AsyncMock()
+		mock_git_proc.communicate = AsyncMock(return_value=(b"", b""))
+		mock_git_proc.returncode = 0
+
+		with patch("mission_control.worker.asyncio.create_subprocess_exec", return_value=mock_git_proc):
+			agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
 			unit = db.claim_work_unit(w.id)
 			assert unit is not None
 			await agent._execute_unit(unit)  # noqa: SLF001
@@ -206,9 +233,9 @@ class TestWorkerAgent:
 		assert result.status == "failed"
 		assert "Timed out" in result.output_summary
 
-	def test_stop(self, db: Database, config: MissionConfig) -> None:
+	def test_stop(self, db: Database, config: MissionConfig, mock_backend: MockBackend) -> None:
 		w = Worker(id="w1", workspace_path="/tmp/clone")
-		agent = WorkerAgent(w, db, config)
+		agent = WorkerAgent(w, db, config, mock_backend)
 		assert agent.running is True
 		agent.stop()
 		assert agent.running is False

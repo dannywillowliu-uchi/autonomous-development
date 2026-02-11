@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
+from mission_control.backends.base import WorkerBackend, WorkerHandle
 from mission_control.config import MissionConfig
 from mission_control.db import Database
-from mission_control.models import MergeRequest, Worker, WorkUnit, _now_iso
+from mission_control.models import Handoff, MergeRequest, Worker, WorkUnit, _now_iso
 from mission_control.session import parse_mc_result
 
 logger = logging.getLogger(__name__)
@@ -46,7 +48,10 @@ Files likely involved: {files_hint}
 
 ## Output
 When done, write a summary as the LAST line of output:
-MC_RESULT:{{"status":"completed|failed|blocked","commits":["hash"],"summary":"what you did","files_changed":["list"]}}
+MC_RESULT:{{"status":"completed|failed|blocked","commits":["hash"],\
+"summary":"what you did","files_changed":["list"],\
+"discoveries":["things discovered during work"],\
+"concerns":["potential issues or risks"]}}
 """
 
 
@@ -79,6 +84,99 @@ def render_worker_prompt(
 	)
 
 
+def _parse_handoff(mc_result: dict[str, object], unit: WorkUnit, round_id: str) -> Handoff:
+	"""Build a Handoff from parsed MC_RESULT data."""
+	commits = mc_result.get("commits", [])
+	discoveries = mc_result.get("discoveries", [])
+	concerns = mc_result.get("concerns", [])
+	files_changed = mc_result.get("files_changed", [])
+
+	return Handoff(
+		work_unit_id=unit.id,
+		round_id=round_id,
+		status=str(mc_result.get("status", "completed")),
+		commits=json.dumps(commits) if isinstance(commits, list) else "[]",
+		summary=str(mc_result.get("summary", "")),
+		discoveries=json.dumps(discoveries) if isinstance(discoveries, list) else "[]",
+		concerns=json.dumps(concerns) if isinstance(concerns, list) else "[]",
+		files_changed=json.dumps(files_changed) if isinstance(files_changed, list) else "[]",
+	)
+
+
+MISSION_WORKER_PROMPT_TEMPLATE = """\
+You are working on {target_name} at {workspace_path}.
+
+## Task
+{title}
+
+{description}
+
+## Constraints
+- ONLY modify files in scope: {files_hint}
+- No TODOs, no partial implementations
+- No modifications to unrelated files
+- No refactoring beyond the task scope
+- Commit when done or explain why blocked
+
+## Verification
+Run: {verification_command}
+
+## Context
+{context_block}
+
+## Output
+When done, write a summary as the LAST line of output:
+MC_RESULT:{{"status":"completed|failed|blocked","commits":["hash"],\
+"summary":"what you did","discoveries":["anything unexpected found"],\
+"concerns":["potential issues"],"files_changed":["list"]}}
+"""
+
+
+def render_mission_worker_prompt(
+	unit: WorkUnit,
+	config: MissionConfig,
+	workspace_path: str,
+	branch_name: str,
+	context: str = "",
+) -> str:
+	"""Render constraint-based prompt for mission mode workers."""
+	return MISSION_WORKER_PROMPT_TEMPLATE.format(
+		target_name=config.target.name,
+		workspace_path=workspace_path,
+		title=unit.title,
+		description=unit.description,
+		files_hint=unit.files_hint or "Not specified",
+		verification_command=config.target.verification.command,
+		context_block=context or "No additional context.",
+	)
+
+
+def parse_handoff(output: str, work_unit_id: str, round_id: str) -> Handoff | None:
+	"""Parse MC_RESULT from output and build a Handoff model.
+
+	Returns None if no MC_RESULT found in the output.
+	"""
+	mc_result = parse_mc_result(output)
+	if mc_result is None:
+		return None
+
+	commits = mc_result.get("commits", [])
+	discoveries = mc_result.get("discoveries", [])
+	concerns = mc_result.get("concerns", [])
+	files_changed = mc_result.get("files_changed", [])
+
+	return Handoff(
+		work_unit_id=work_unit_id,
+		round_id=round_id,
+		status=str(mc_result.get("status", "completed")),
+		commits=json.dumps(commits) if isinstance(commits, list) else "[]",
+		summary=str(mc_result.get("summary", "")),
+		discoveries=json.dumps(discoveries) if isinstance(discoveries, list) else "[]",
+		concerns=json.dumps(concerns) if isinstance(concerns, list) else "[]",
+		files_changed=json.dumps(files_changed) if isinstance(files_changed, list) else "[]",
+	)
+
+
 class WorkerAgent:
 	"""A parallel worker that claims tasks, spawns Claude sessions, and pushes results."""
 
@@ -87,14 +185,17 @@ class WorkerAgent:
 		worker: Worker,
 		db: Database,
 		config: MissionConfig,
+		backend: WorkerBackend,
 		heartbeat_interval: int = 30,
 	) -> None:
 		self.worker = worker
 		self.db = db
 		self.config = config
+		self.backend = backend
 		self.heartbeat_interval = heartbeat_interval
 		self.running = True
 		self._heartbeat_task: asyncio.Task[None] | None = None
+		self._current_handle: WorkerHandle | None = None
 
 	async def run(self) -> None:
 		"""Main loop: claim -> execute -> report, until stopped."""
@@ -115,8 +216,7 @@ class WorkerAgent:
 			self.db.update_worker(self.worker)
 
 	async def _execute_unit(self, unit: WorkUnit) -> None:
-		"""Execute a single work unit: branch, prompt, spawn claude, push."""
-		cwd = self.worker.workspace_path
+		"""Execute a single work unit via backend: provision, spawn, collect."""
 		branch_name = f"mc/unit-{unit.id}"
 		unit.branch_name = branch_name
 		unit.status = "running"
@@ -127,25 +227,27 @@ class WorkerAgent:
 		self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
 		try:
-			# Create branch
-			branch_ok = await self._run_git("checkout", "-b", branch_name, cwd=cwd)
-			if not branch_ok:
-				unit.status = "failed"
-				unit.output_summary = "Failed to create branch"
-				unit.finished_at = _now_iso()
-				self.db.update_work_unit(unit)
-				self.worker.units_failed += 1
-				return
+			# Provision workspace via backend
+			workspace_path = self.worker.workspace_path
+			if not workspace_path:
+				workspace_path = await self.backend.provision_workspace(
+					worker_id=self.worker.id,
+					source_repo=str(self.config.target.resolved_path),
+					base_branch=self.config.target.branch,
+				)
+				self.worker.workspace_path = workspace_path
+				self.db.update_worker(self.worker)
 
-			# Build prompt
+			# Create branch in workspace
+			await self._run_git("checkout", "-b", branch_name, cwd=workspace_path)
+
+			# Build prompt and command
 			prompt = render_worker_prompt(
 				unit=unit,
 				config=self.config,
-				workspace_path=cwd,
+				workspace_path=workspace_path,
 				branch_name=branch_name,
 			)
-
-			# Spawn Claude
 			budget = self.config.scheduler.budget.max_per_session_usd
 			cmd = [
 				"claude",
@@ -157,42 +259,62 @@ class WorkerAgent:
 				prompt,
 			]
 
-			try:
-				proc = await asyncio.create_subprocess_exec(
-					*cmd,
-					stdout=asyncio.subprocess.PIPE,
-					stderr=asyncio.subprocess.STDOUT,
-					cwd=cwd,
-				)
-				stdout_bytes, _ = await asyncio.wait_for(
-					proc.communicate(),
-					timeout=self.config.scheduler.session_timeout,
-				)
-				output = stdout_bytes.decode("utf-8", errors="replace")
-				unit.exit_code = proc.returncode
+			# Spawn via backend
+			handle = await self.backend.spawn(
+				worker_id=self.worker.id,
+				workspace_path=workspace_path,
+				command=cmd,
+				timeout=self.config.scheduler.session_timeout,
+			)
+			self._current_handle = handle
 
-			except asyncio.TimeoutError:
+			# Wait for completion
+			try:
+				deadline = asyncio.get_event_loop().time() + self.config.scheduler.session_timeout
+				while True:
+					status = await self.backend.check_status(handle)
+					if status != "running":
+						break
+					if asyncio.get_event_loop().time() > deadline:
+						await self.backend.kill(handle)
+						unit.status = "failed"
+						unit.output_summary = f"Timed out after {self.config.scheduler.session_timeout}s"
+						unit.finished_at = _now_iso()
+						self.db.update_work_unit(unit)
+						self.worker.units_failed += 1
+						return
+					await asyncio.sleep(2)
+
+				output = await self.backend.get_output(handle)
+				unit.exit_code = 0 if status == "completed" else 1
+
+			except Exception as exc:
+				logger.error("Backend error for unit %s: %s", unit.id, exc)
 				unit.status = "failed"
-				unit.output_summary = f"Timed out after {self.config.scheduler.session_timeout}s"
+				unit.output_summary = f"Backend error: {exc}"
 				unit.finished_at = _now_iso()
 				self.db.update_work_unit(unit)
 				self.worker.units_failed += 1
 				return
 
-			# Parse result
+			# Parse result and build handoff
 			mc_result = parse_mc_result(output)
 			if mc_result:
-				status = str(mc_result.get("status", "completed"))
+				result_status = str(mc_result.get("status", "completed"))
 				unit.output_summary = str(mc_result.get("summary", ""))
 				commits = mc_result.get("commits", [])
 				if isinstance(commits, list) and commits:
 					unit.commit_hash = str(commits[0])
+
+				# Create enhanced handoff record
+				handoff = _parse_handoff(mc_result, unit, round_id=unit.round_id or "")
+				self.db.insert_handoff(handoff)
+				unit.handoff_id = handoff.id
 			else:
-				status = "completed" if unit.exit_code == 0 else "failed"
+				result_status = "completed" if unit.exit_code == 0 else "failed"
 				unit.output_summary = output[-500:]
 
-			if status == "completed" and unit.commit_hash:
-				# Push branch (it stays local in the clone, accessible via filesystem)
+			if result_status == "completed" and unit.commit_hash:
 				unit.status = "completed"
 				unit.finished_at = _now_iso()
 				self.db.update_work_unit(unit)
@@ -215,11 +337,11 @@ class WorkerAgent:
 				self.worker.units_failed += 1
 
 				# Reset workspace to base branch for next task
-				await self._run_git("checkout", self.config.target.branch, cwd=cwd)
-				await self._run_git("branch", "-D", branch_name, cwd=cwd)
+				await self._run_git("checkout", self.config.target.branch, cwd=workspace_path)
+				await self._run_git("branch", "-D", branch_name, cwd=workspace_path)
 
 		finally:
-			# Stop heartbeat
+			self._current_handle = None
 			if self._heartbeat_task:
 				self._heartbeat_task.cancel()
 				try:

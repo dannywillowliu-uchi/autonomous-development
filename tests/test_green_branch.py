@@ -1,0 +1,224 @@
+"""Tests for the green branch manager."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+from mission_control.config import (
+	GreenBranchConfig,
+	MissionConfig,
+	TargetConfig,
+	VerificationConfig,
+)
+from mission_control.db import Database
+from mission_control.green_branch import FixupResult, GreenBranchManager
+
+
+def _config() -> MissionConfig:
+	mc = MissionConfig()
+	mc.target = TargetConfig(
+		name="test",
+		path="/tmp/test",
+		branch="main",
+		verification=VerificationConfig(command="pytest -q"),
+	)
+	mc.green_branch = GreenBranchConfig(
+		working_branch="mc/working",
+		green_branch="mc/green",
+		fixup_max_attempts=3,
+	)
+	return mc
+
+
+def _manager() -> GreenBranchManager:
+	config = _config()
+	db = Database(":memory:")
+	mgr = GreenBranchManager(config, db)
+	mgr.workspace = "/tmp/test-workspace"
+	return mgr
+
+
+class TestFixupResult:
+	def test_defaults(self) -> None:
+		result = FixupResult()
+		assert result.promoted is False
+		assert result.fixup_attempts == 0
+		assert result.failure_output == ""
+
+	def test_custom_values(self) -> None:
+		result = FixupResult(promoted=True, fixup_attempts=2, failure_output="error")
+		assert result.promoted is True
+		assert result.fixup_attempts == 2
+		assert result.failure_output == "error"
+
+
+class TestGreenBranchManagerInit:
+	def test_init_sets_config_and_db(self) -> None:
+		config = _config()
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		assert mgr.config is config
+		assert mgr.db is db
+		assert mgr.workspace == ""
+
+
+class TestMergeToWorking:
+	async def test_successful_merge(self) -> None:
+		"""Successful merge returns True and cleans up remote."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+
+		result = await mgr.merge_to_working("/tmp/worker", "feat/add-tests")
+
+		assert result is True
+		# Verify the sequence: remote add, fetch, checkout, merge, remote remove
+		calls = mgr._run_git.call_args_list
+		assert calls[0].args == ("remote", "add", "worker-feat/add-tests", "/tmp/worker")
+		assert calls[1].args == ("fetch", "worker-feat/add-tests", "feat/add-tests")
+		assert calls[2].args == ("checkout", "mc/working")
+		assert calls[3].args[:2] == ("merge", "--no-ff")
+		assert calls[4].args == ("remote", "remove", "worker-feat/add-tests")
+
+	async def test_fetch_failure_cleans_up_and_returns_false(self) -> None:
+		"""Fetch failure removes the remote and returns False."""
+		mgr = _manager()
+
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "fetch":
+				return (False, "fatal: couldn't find remote ref")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=side_effect)
+
+		result = await mgr.merge_to_working("/tmp/worker", "feat/broken")
+
+		assert result is False
+		# Should have called remote remove to clean up
+		calls = mgr._run_git.call_args_list
+		remove_calls = [c for c in calls if c.args[0] == "remote" and c.args[1] == "remove"]
+		assert len(remove_calls) == 1
+
+	async def test_merge_conflict_aborts_and_returns_false(self) -> None:
+		"""Merge conflict aborts the merge, cleans up remote, returns False."""
+		mgr = _manager()
+
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "merge" and args[1] == "--no-ff":
+				return (False, "CONFLICT (content): Merge conflict in file.py")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=side_effect)
+
+		result = await mgr.merge_to_working("/tmp/worker", "feat/conflict")
+
+		assert result is False
+		# Should have called merge --abort
+		calls = mgr._run_git.call_args_list
+		abort_calls = [c for c in calls if c.args == ("merge", "--abort")]
+		assert len(abort_calls) == 1
+		# Should have cleaned up the remote
+		remove_calls = [c for c in calls if c.args[0] == "remote" and c.args[1] == "remove"]
+		assert len(remove_calls) == 1
+
+
+class TestRunFixup:
+	async def test_verification_passes_first_try(self) -> None:
+		"""Verification passes immediately: promoted=True, 0 fixup attempts."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(True, "10 passed"))
+
+		result = await mgr.run_fixup()
+
+		assert result.promoted is True
+		assert result.fixup_attempts == 0
+		assert result.failure_output == ""
+		# Should have checked out working, run verify, checked out green, merged ff-only
+		git_calls = mgr._run_git.call_args_list
+		assert git_calls[0].args == ("checkout", "mc/working")
+		assert git_calls[1].args == ("checkout", "mc/green")
+		assert git_calls[2].args == ("merge", "--ff-only", "mc/working")
+
+	async def test_verification_fails_fixup_succeeds(self) -> None:
+		"""Verification fails, Claude fixup runs, re-verify passes."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+
+		# First _run_command: verification fails
+		# Second _run_command: claude fixup (succeeds)
+		# Third _run_command: re-verification passes
+		cmd_results = [
+			(False, "2 failed, 8 passed"),  # initial verification
+			(True, ""),                       # claude fixup
+			(True, "10 passed"),              # re-verification
+		]
+		mgr._run_command = AsyncMock(side_effect=cmd_results)
+
+		result = await mgr.run_fixup()
+
+		assert result.promoted is True
+		assert result.fixup_attempts == 1
+		assert result.failure_output == ""
+
+	async def test_verification_fails_all_fixups_exhausted(self) -> None:
+		"""Verification fails, all fixup attempts exhausted."""
+		mgr = _manager()
+		mgr.config.green_branch.fixup_max_attempts = 2
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+
+		# Pattern: initial verify fail, then for each attempt: claude fixup + re-verify fail
+		cmd_results = [
+			(False, "2 failed"),   # initial verification
+			(True, ""),            # claude fixup attempt 1
+			(False, "1 failed"),   # re-verification attempt 1
+			(True, ""),            # claude fixup attempt 2
+			(False, "1 failed"),   # re-verification attempt 2 (final output)
+		]
+		mgr._run_command = AsyncMock(side_effect=cmd_results)
+
+		result = await mgr.run_fixup()
+
+		assert result.promoted is False
+		assert result.fixup_attempts == 2
+		assert result.failure_output == "1 failed"
+
+	async def test_fixup_succeeds_on_second_attempt(self) -> None:
+		"""Verification fails, first fixup fails, second fixup succeeds."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+
+		cmd_results = [
+			(False, "3 failed"),   # initial verification
+			(True, ""),            # claude fixup attempt 1
+			(False, "1 failed"),   # re-verification attempt 1 still fails
+			(True, ""),            # claude fixup attempt 2
+			(True, "10 passed"),   # re-verification attempt 2 passes
+		]
+		mgr._run_command = AsyncMock(side_effect=cmd_results)
+
+		result = await mgr.run_fixup()
+
+		assert result.promoted is True
+		assert result.fixup_attempts == 2
+
+
+class TestGetGreenHash:
+	async def test_returns_hash(self) -> None:
+		"""Returns stripped commit hash from git rev-parse."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, "abc123def456\n"))
+
+		result = await mgr.get_green_hash()
+
+		assert result == "abc123def456"
+		mgr._run_git.assert_called_once_with("rev-parse", "mc/green")
+
+	async def test_returns_empty_on_failure(self) -> None:
+		"""Returns empty string when git rev-parse fails."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(False, "fatal: bad revision"))
+
+		result = await mgr.get_green_hash()
+
+		assert result == ""
