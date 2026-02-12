@@ -263,7 +263,7 @@ class TestWorkerAgent:
 		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
 		mock_backend: MockBackend,
 	) -> None:
-		"""After successful unit, workspace should be reset to base branch and feature branch deleted."""
+		"""After successful unit, workspace checks out base branch but keeps feature branch for merge queue."""
 		w, _ = worker_and_unit
 
 		mc_output = (
@@ -285,11 +285,11 @@ class TestWorkerAgent:
 			assert unit is not None
 			await agent._execute_unit(unit)  # noqa: SLF001
 
-		# Should have: checkout -b branch, then checkout main, then branch -D
+		# Should checkout base branch but NOT delete feature branch (merge queue needs it)
 		checkout_base_calls = [c for c in git_calls if c == ("checkout", "main")]
 		branch_delete_calls = [c for c in git_calls if c[0] == "branch" and c[1] == "-D"]
 		assert len(checkout_base_calls) >= 1, f"Expected checkout to base branch, got: {git_calls}"
-		assert len(branch_delete_calls) >= 1, f"Expected branch delete, got: {git_calls}"
+		assert len(branch_delete_calls) == 0, f"Branch should NOT be deleted on success: {git_calls}"
 
 
 	async def test_checkout_failure_marks_unit_failed(

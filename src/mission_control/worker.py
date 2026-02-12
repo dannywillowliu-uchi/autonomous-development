@@ -263,14 +263,14 @@ class WorkerAgent:
 			)
 			self._current_handle = handle
 
-			# Wait for completion
+			# Wait for completion (drain stdout to prevent pipe buffer deadlock)
 			try:
-				deadline = asyncio.get_event_loop().time() + effective_timeout
+				deadline = asyncio.get_running_loop().time() + effective_timeout
 				while True:
 					status = await self.backend.check_status(handle)
 					if status != "running":
 						break
-					if asyncio.get_event_loop().time() > deadline:
+					if asyncio.get_running_loop().time() > deadline:
 						await self.backend.kill(handle)
 						unit.status = "failed"
 						unit.output_summary = f"Timed out after {effective_timeout}s"
@@ -278,6 +278,7 @@ class WorkerAgent:
 						await self.db.locked_call("update_work_unit", unit)
 						self.worker.units_failed += 1
 						return
+					await self.backend.get_output(handle)
 					await asyncio.sleep(self.config.scheduler.polling_interval)
 
 				output = await self.backend.get_output(handle)
@@ -325,12 +326,10 @@ class WorkerAgent:
 				await self.db.locked_call("insert_merge_request_atomic", mr)
 				self.worker.units_completed += 1
 
-				# Reset workspace to base branch for next task
+				# Checkout base branch but keep feature branch alive for merge queue fetch
 				base = self.config.target.branch
 				if not await self._run_git("checkout", base, cwd=workspace_path):
 					logger.warning("Failed to checkout %s in %s", base, workspace_path)
-				if not await self._run_git("branch", "-D", branch_name, cwd=workspace_path):
-					logger.warning("Failed to delete %s in %s", branch_name, workspace_path)
 			else:
 				unit.status = "failed"
 				unit.finished_at = _now_iso()

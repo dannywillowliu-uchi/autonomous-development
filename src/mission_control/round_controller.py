@@ -421,14 +421,18 @@ class RoundController:
 					unit.output_summary = output[-max_chars:] if output else "No output"
 
 				if unit_status == "completed" and unit.commit_hash:
-					unit.status = "completed"
 					# Merge to working branch
 					merged = await self._green_branch.merge_to_working(
 						workspace if "::" not in workspace else workspace.split("::")[0],
 						branch_name,
 					)
-					if not merged:
+					if merged:
+						unit.status = "completed"
+					else:
 						logger.warning("Merge conflict for unit %s", unit.id)
+						unit.status = "failed"
+						unit.attempt += 1
+						unit.output_summary = "Merge conflict: changes could not be integrated"
 				elif unit_status == "completed":
 					unit.status = "completed"
 					logger.info("Unit %s completed with no commits", unit.id)
