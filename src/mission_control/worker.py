@@ -326,8 +326,10 @@ class WorkerAgent:
 				self.worker.units_failed += 1
 
 				# Reset workspace to base branch for next task
-				await self._run_git("checkout", self.config.target.branch, cwd=workspace_path)
-				await self._run_git("branch", "-D", branch_name, cwd=workspace_path)
+				if not await self._run_git("checkout", self.config.target.branch, cwd=workspace_path):
+					logger.warning("Failed to checkout %s in %s", self.config.target.branch, workspace_path)
+				if not await self._run_git("branch", "-D", branch_name, cwd=workspace_path):
+					logger.warning("Failed to delete branch %s in %s", branch_name, workspace_path)
 
 		finally:
 			self._current_handle = None

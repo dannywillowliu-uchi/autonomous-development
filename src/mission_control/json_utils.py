@@ -7,12 +7,43 @@ import re
 from typing import Any
 
 
+def _find_balanced(text: str, open_char: str, close_char: str) -> str | None:
+	"""Find the first balanced substring between open_char and close_char."""
+	start = text.find(open_char)
+	if start == -1:
+		return None
+	depth = 0
+	in_string = False
+	escape = False
+	for i in range(start, len(text)):
+		ch = text[i]
+		if escape:
+			escape = False
+			continue
+		if ch == "\\":
+			if in_string:
+				escape = True
+			continue
+		if ch == '"':
+			in_string = not in_string
+			continue
+		if in_string:
+			continue
+		if ch == open_char:
+			depth += 1
+		elif ch == close_char:
+			depth -= 1
+			if depth == 0:
+				return text[start:i + 1]
+	return None
+
+
 def extract_json_from_text(text: str, expect_array: bool = False) -> Any | None:
 	"""Extract a JSON object or array from text that may contain markdown fences or prose.
 
 	Tries in order:
 	1. Strip markdown fences (```json ... ``` or ``` ... ```)
-	2. Find a bare JSON object/array via brace/bracket matching
+	2. Find a bare JSON object/array via balanced brace matching
 	3. Return None if nothing parseable found
 
 	Args:
@@ -45,15 +76,15 @@ def extract_json_from_text(text: str, expect_array: bool = False) -> Any | None:
 	except (json.JSONDecodeError, ValueError):
 		pass
 
-	# Step 4: Find a bare JSON object or array
+	# Step 4: Find a bare JSON object or array via balanced brace matching
 	if expect_array:
-		match = re.search(r"(\[[\s\S]*\])", cleaned)
+		candidate = _find_balanced(cleaned, "[", "]")
 	else:
-		match = re.search(r"\{[\s\S]*\}", cleaned, re.DOTALL)
+		candidate = _find_balanced(cleaned, "{", "}")
 
-	if match:
+	if candidate:
 		try:
-			return json.loads(match.group(0) if not expect_array else match.group(1))
+			return json.loads(candidate)
 		except (json.JSONDecodeError, ValueError):
 			pass
 

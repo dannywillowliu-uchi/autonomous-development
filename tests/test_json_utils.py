@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from mission_control.json_utils import extract_json_from_text
+from mission_control.json_utils import _find_balanced, extract_json_from_text
 
 
 class TestExtractJsonFromText:
@@ -74,3 +74,59 @@ class TestExtractJsonFromText:
 		result = extract_json_from_text(raw)
 		assert result is not None
 		assert result.get("first") is True
+
+	def test_nested_json_in_prose_balanced(self) -> None:
+		"""Balanced brace matching correctly extracts nested objects from prose."""
+		data = {"a": {"b": {"c": 1}}, "d": [1, 2]}
+		raw = f"Here is the result: {json.dumps(data)} end of output"
+		result = extract_json_from_text(raw)
+		assert result == data
+
+	def test_nested_array_in_prose_balanced(self) -> None:
+		"""Balanced bracket matching correctly extracts nested arrays."""
+		data = [{"items": [1, 2, 3]}, {"items": [4, 5]}]
+		raw = f"Tasks: {json.dumps(data)} done."
+		result = extract_json_from_text(raw, expect_array=True)
+		assert result == data
+
+	def test_large_input_no_hang(self) -> None:
+		"""Large input with no valid JSON returns None without hanging."""
+		# 100KB of text with nested braces but no valid JSON
+		large_text = "x" * 50000 + " { not json { nested { deeper } } } " + "y" * 50000
+		result = extract_json_from_text(large_text)
+		assert result is None
+
+	def test_json_with_escaped_quotes(self) -> None:
+		"""JSON with escaped quotes inside strings is handled correctly."""
+		data = {"message": 'He said "hello"', "count": 1}
+		raw = f"Output: {json.dumps(data)}"
+		result = extract_json_from_text(raw)
+		assert result == data
+
+
+class TestFindBalanced:
+	def test_simple_object(self) -> None:
+		assert _find_balanced('{"a": 1}', "{", "}") == '{"a": 1}'
+
+	def test_nested(self) -> None:
+		text = '{"a": {"b": 1}}'
+		assert _find_balanced(text, "{", "}") == text
+
+	def test_with_prefix(self) -> None:
+		text = 'prefix {"key": "val"} suffix'
+		assert _find_balanced(text, "{", "}") == '{"key": "val"}'
+
+	def test_no_match(self) -> None:
+		assert _find_balanced("no braces here", "{", "}") is None
+
+	def test_unbalanced(self) -> None:
+		assert _find_balanced("{unclosed", "{", "}") is None
+
+	def test_string_with_braces(self) -> None:
+		"""Braces inside JSON strings should not affect matching."""
+		text = '{"msg": "use {x} here"}'
+		assert _find_balanced(text, "{", "}") == text
+
+	def test_array_balanced(self) -> None:
+		text = '[[1, 2], [3, 4]]'
+		assert _find_balanced(text, "[", "]") == text

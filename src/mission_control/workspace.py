@@ -97,10 +97,11 @@ class WorkspacePool:
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
 		)
-		await proc.communicate()
+		stdout, _ = await proc.communicate()
 
 		if proc.returncode != 0:
-			logger.error("Failed to create shared clone at %s", clone_path)
+			output = stdout.decode(errors="replace") if stdout else ""
+			logger.error("Failed to create shared clone at %s: %s", clone_path, output)
 			return None
 
 		return clone_path

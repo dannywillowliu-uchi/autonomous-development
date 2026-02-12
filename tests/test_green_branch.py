@@ -151,13 +151,11 @@ class TestRunFixup:
 			(True, ""),              # merge --ff-only
 		]
 		mgr._run_git = AsyncMock(side_effect=git_results)
-
-		cmd_results = [
+		mgr._run_command = AsyncMock(side_effect=[
 			(False, "2 failed, 8 passed"),  # initial verification
-			(True, ""),                       # claude fixup
 			(True, "10 passed"),              # re-verification
-		]
-		mgr._run_command = AsyncMock(side_effect=cmd_results)
+		])
+		mgr._run_claude = AsyncMock(return_value=(True, ""))
 
 		result = await mgr.run_fixup()
 
@@ -170,15 +168,12 @@ class TestRunFixup:
 		mgr = _manager()
 		mgr.config.green_branch.fixup_max_attempts = 2
 		mgr._run_git = AsyncMock(return_value=(True, "abc123\n"))
-
-		cmd_results = [
+		mgr._run_command = AsyncMock(side_effect=[
 			(False, "2 failed"),   # initial verification
-			(True, ""),            # claude fixup attempt 1
 			(False, "1 failed"),   # re-verification attempt 1
-			(True, ""),            # claude fixup attempt 2
 			(False, "1 failed"),   # re-verification attempt 2 (final output)
-		]
-		mgr._run_command = AsyncMock(side_effect=cmd_results)
+		])
+		mgr._run_claude = AsyncMock(return_value=(True, ""))
 
 		result = await mgr.run_fixup()
 
@@ -190,15 +185,12 @@ class TestRunFixup:
 		"""Verification fails, first fixup re-verify fails (restore), second succeeds."""
 		mgr = _manager()
 		mgr._run_git = AsyncMock(return_value=(True, "abc123\n"))
-
-		cmd_results = [
+		mgr._run_command = AsyncMock(side_effect=[
 			(False, "3 failed"),   # initial verification
-			(True, ""),            # claude fixup attempt 1
 			(False, "1 failed"),   # re-verification attempt 1 still fails
-			(True, ""),            # claude fixup attempt 2
 			(True, "10 passed"),   # re-verification attempt 2 passes
-		]
-		mgr._run_command = AsyncMock(side_effect=cmd_results)
+		])
+		mgr._run_claude = AsyncMock(return_value=(True, ""))
 
 		result = await mgr.run_fixup()
 
@@ -210,21 +202,14 @@ class TestRunFixup:
 		mgr = _manager()
 		mgr.config.green_branch.fixup_max_attempts = 2
 		mgr._run_git = AsyncMock(return_value=(True, "abc123\n"))
-
-		call_count = 0
-
-		async def mock_run_command(cmd: str) -> tuple[bool, str]:
-			nonlocal call_count
-			call_count += 1
-			if call_count == 1:
-				return (False, "2 failed")  # initial verification
-			if call_count == 2:
-				raise RuntimeError("Claude crashed")  # fixup agent crash
-			if call_count == 3:
-				return (True, "")  # fixup attempt 2
-			return (True, "10 passed")  # re-verification passes
-
-		mgr._run_command = AsyncMock(side_effect=mock_run_command)
+		mgr._run_command = AsyncMock(side_effect=[
+			(False, "2 failed"),   # initial verification
+			(True, "10 passed"),   # re-verification after attempt 2
+		])
+		mgr._run_claude = AsyncMock(side_effect=[
+			RuntimeError("Claude crashed"),  # fixup agent crash attempt 1
+			(True, ""),                        # fixup attempt 2 succeeds
+		])
 
 		result = await mgr.run_fixup()
 
@@ -236,12 +221,8 @@ class TestRunFixup:
 		mgr = _manager()
 		mgr.config.green_branch.fixup_max_attempts = 1
 		mgr._run_git = AsyncMock(return_value=(True, "abc123\n"))
-
-		cmd_results = [
-			(False, "2 failed"),   # initial verification
-			(False, "claude error"),  # fixup agent failed
-		]
-		mgr._run_command = AsyncMock(side_effect=cmd_results)
+		mgr._run_command = AsyncMock(return_value=(False, "2 failed"))
+		mgr._run_claude = AsyncMock(return_value=(False, "claude error"))
 
 		result = await mgr.run_fixup()
 
@@ -251,6 +232,26 @@ class TestRunFixup:
 		git_calls = mgr._run_git.call_args_list
 		reset_calls = [c for c in git_calls if len(c.args) >= 2 and c.args[0] == "reset"]
 		assert len(reset_calls) >= 1
+
+	async def test_claude_receives_prompt_via_method(self) -> None:
+		"""Verify the prompt with shell metacharacters is passed safely via _run_claude."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, "abc123\n"))
+
+		malicious_output = 'test $(rm -rf /) `whoami` "quotes" && echo pwned'
+		mgr._run_command = AsyncMock(side_effect=[
+			(False, malicious_output),  # initial verification with dangerous output
+			(True, "10 passed"),        # re-verification passes
+		])
+		mgr._run_claude = AsyncMock(return_value=(True, ""))
+
+		result = await mgr.run_fixup()
+
+		assert result.promoted is True
+		# Verify the prompt was passed to _run_claude, not _run_command
+		mgr._run_claude.assert_called_once()
+		prompt_arg = mgr._run_claude.call_args.args[0]
+		assert malicious_output in prompt_arg
 
 
 class TestGetGreenHash:

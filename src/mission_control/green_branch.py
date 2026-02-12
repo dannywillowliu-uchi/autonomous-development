@@ -113,10 +113,7 @@ class GreenBranchManager:
 			fixup_budget = self.config.scheduler.budget.fixup_budget_usd
 
 			try:
-				fixup_ok, _ = await self._run_command(
-					f"claude -p --permission-mode bypassPermissions "
-					f"--max-budget-usd {fixup_budget} \"{prompt}\""
-				)
+				fixup_ok, _ = await self._run_claude(prompt, fixup_budget)
 			except Exception as exc:
 				logger.warning("Fixup agent crashed on attempt %d: %s", attempt, exc)
 				await self._restore_to(pre_fixup_hash)
@@ -171,6 +168,21 @@ class GreenBranchManager:
 		)
 		stdout, _ = await proc.communicate()
 		output = stdout.decode() if stdout else ""
+		return (proc.returncode == 0, output)
+
+	async def _run_claude(self, prompt: str, budget: float) -> tuple[bool, str]:
+		"""Run a Claude session with the prompt passed via stdin to avoid injection."""
+		proc = await asyncio.create_subprocess_exec(
+			"claude", "-p",
+			"--permission-mode", "bypassPermissions",
+			"--max-budget-usd", str(budget),
+			cwd=self.workspace,
+			stdin=asyncio.subprocess.PIPE,
+			stdout=asyncio.subprocess.PIPE,
+			stderr=asyncio.subprocess.STDOUT,
+		)
+		stdout, _ = await proc.communicate(input=prompt.encode())
+		output = stdout.decode(errors="replace") if stdout else ""
 		return (proc.returncode == 0, output)
 
 	async def _run_command(self, cmd: str) -> tuple[bool, str]:
