@@ -11,7 +11,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-from mission_control.config import MissionConfig
+from mission_control.config import MissionConfig, claude_subprocess_env
 from mission_control.db import Database
 
 logger = logging.getLogger(__name__)
@@ -205,6 +205,7 @@ class GreenBranchManager:
 			stdin=asyncio.subprocess.PIPE,
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
+			env=claude_subprocess_env(),
 		)
 		try:
 			stdout, _ = await asyncio.wait_for(

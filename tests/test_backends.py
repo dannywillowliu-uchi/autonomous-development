@@ -248,12 +248,12 @@ class TestLocalBackend:
 		assert handle.worker_id == "w1"
 		assert handle.pid == 9999
 		assert handle.workspace_path == "/ws"
-		mock_exec.assert_awaited_once_with(
-			"claude", "code", "--task", "fix",
-			cwd="/ws",
-			stdout=asyncio.subprocess.PIPE,
-			stderr=asyncio.subprocess.STDOUT,
-		)
+		call_kwargs = mock_exec.call_args[1]
+		assert call_kwargs["cwd"] == "/ws"
+		assert call_kwargs["stdout"] == asyncio.subprocess.PIPE
+		assert call_kwargs["stderr"] == asyncio.subprocess.STDOUT
+		assert "env" in call_kwargs
+		assert "ANTHROPIC_API_KEY" not in call_kwargs["env"]
 		assert "w1" in backend._processes
 		assert backend._stdout_bufs["w1"] == b""
 

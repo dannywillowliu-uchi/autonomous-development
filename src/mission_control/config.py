@@ -265,6 +265,15 @@ def _build_backend(data: dict[str, Any]) -> BackendConfig:
 	return bc
 
 
+def claude_subprocess_env() -> dict[str, str]:
+	"""Build a clean environment for claude subprocess calls.
+
+	Strips ANTHROPIC_API_KEY so the subprocess uses the host Claude Code's
+	OAuth auth (e.g. Claude Max) instead of a potentially stale API key.
+	"""
+	return {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+
+
 def load_config(path: str | Path) -> MissionConfig:
 	"""Load a mission-control.toml config file.
 

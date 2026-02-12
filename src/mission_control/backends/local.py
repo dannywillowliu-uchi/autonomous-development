@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from mission_control.backends.base import WorkerBackend, WorkerHandle
+from mission_control.config import claude_subprocess_env
 from mission_control.workspace import WorkspacePool
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ class LocalBackend(WorkerBackend):
 			cwd=workspace_path,
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
+			env=claude_subprocess_env(),
 		)
 		self._processes[worker_id] = proc
 		self._stdout_bufs[worker_id] = b""

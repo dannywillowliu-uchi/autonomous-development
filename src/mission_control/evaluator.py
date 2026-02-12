@@ -6,7 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 
-from mission_control.config import MissionConfig
+from mission_control.config import MissionConfig, claude_subprocess_env
 from mission_control.json_utils import extract_json_from_text
 
 log = logging.getLogger(__name__)
@@ -92,6 +92,7 @@ async def evaluate_objective(
 			*cmd,
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.PIPE,
+			env=claude_subprocess_env(),
 		)
 		stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
 

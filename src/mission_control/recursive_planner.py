@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from mission_control.config import MissionConfig
+from mission_control.config import MissionConfig, claude_subprocess_env
 from mission_control.db import Database
 from mission_control.json_utils import extract_json_from_text
 from mission_control.models import Plan, PlanNode, WorkUnit
@@ -192,6 +192,7 @@ For leaf tasks:
 				stdin=asyncio.subprocess.PIPE,
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.PIPE,
+				env=claude_subprocess_env(),
 			)
 			stdout, stderr = await asyncio.wait_for(
 				proc.communicate(input=prompt.encode()),

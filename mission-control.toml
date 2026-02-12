@@ -1,0 +1,53 @@
+[target]
+name = "autonomous-dev-scheduler"
+path = "/Users/dannyliu/personal_projects/autonomous-dev-scheduler"
+branch = "main"
+objective = "Improve test coverage and code quality: add missing edge-case tests for the feedback module, improve error handling in round_controller.py, and ensure all public functions have type annotations"
+
+[target.verification]
+command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
+timeout = 120
+
+[scheduler]
+session_timeout = 600
+cooldown = 10
+max_sessions_per_run = 5
+model = "sonnet"
+monitor_interval = 5
+output_summary_max_chars = 2000
+
+[scheduler.git]
+strategy = "branch-per-session"
+auto_merge = false
+
+[scheduler.budget]
+max_per_session_usd = 3.0
+max_per_run_usd = 20.0
+
+[scheduler.parallel]
+num_workers = 2
+pool_dir = "/Users/dannyliu/personal_projects/.mc-pool-ads"
+warm_clones = 1
+
+[rounds]
+max_rounds = 2
+stall_threshold = 3
+cooldown_between_rounds = 5
+max_discovery_chars = 4000
+max_discoveries_per_round = 10
+max_summary_items = 5
+timeout_multiplier = 1.5
+stall_score_epsilon = 0.01
+
+[planner]
+max_depth = 2
+max_children_per_node = 3
+budget_per_call_usd = 0.50
+
+[green_branch]
+working_branch = "mc/working"
+green_branch = "mc/green"
+fixup_max_attempts = 3
+
+[backend]
+type = "local"
