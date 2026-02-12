@@ -255,7 +255,7 @@ class TestMergeQueueFlow:
 		# No more pending
 		assert db.get_next_merge_request() is None
 
-	def test_rejected_mr_releases_unit(self, db: Database) -> None:
+	async def test_rejected_mr_releases_unit(self, db: Database) -> None:
 		"""Rejected merge request releases work unit for retry."""
 		plan = Plan(id="p1", objective="test")
 		db.insert_plan(plan)
@@ -275,7 +275,7 @@ class TestMergeQueueFlow:
 		mq = MergeQueue.__new__(MergeQueue)
 		mq.db = db
 		mq.config = MissionConfig()
-		mq._release_unit_for_retry(mr)
+		await mq._release_unit_for_retry(mr)
 
 		# Unit should be back to pending
 		unit = db.get_work_unit("wu1")

@@ -177,25 +177,25 @@ class Coordinator:
 			await asyncio.sleep(MONITOR_INTERVAL)
 
 			# Recover stale units
-			recovered = self.db.recover_stale_units(heartbeat_timeout)
+			recovered = await self.db.locked_call("recover_stale_units", heartbeat_timeout)
 			if recovered:
 				logger.info("Recovered %d stale units", len(recovered))
 
 			# Count unit statuses
-			units = self.db.get_work_units_for_plan(plan.id)
+			units = await self.db.locked_call("get_work_units_for_plan", plan.id)
 			completed = sum(1 for u in units if u.status == "completed")
 			failed = sum(1 for u in units if u.status == "failed" and u.attempt >= u.max_attempts)
 			pending_or_running = sum(1 for u in units if u.status in ("pending", "claimed", "running"))
 
 			plan.completed_units = completed
 			plan.failed_units = failed
-			self.db.update_plan(plan)
+			await self.db.locked_call("update_plan", plan)
 
 			report.units_completed = completed
 			report.units_failed = failed
 
 			# Count merge request outcomes
-			mrs = self.db.get_merge_requests_for_plan(plan.id)
+			mrs = await self.db.locked_call("get_merge_requests_for_plan", plan.id)
 			report.units_merged = sum(1 for mr in mrs if mr.status == "merged")
 			report.units_rejected = sum(1 for mr in mrs if mr.status == "rejected")
 
@@ -203,7 +203,7 @@ class Coordinator:
 			if pending_or_running == 0:
 				# Wait a bit for merge queue to drain
 				await asyncio.sleep(2)
-				remaining_mrs = self.db.get_next_merge_request()
+				remaining_mrs = await self.db.locked_call("get_next_merge_request")
 				if remaining_mrs is None:
 					report.stopped_reason = "all_units_done"
 					return

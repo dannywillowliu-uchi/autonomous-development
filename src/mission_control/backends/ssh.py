@@ -89,6 +89,7 @@ class SSHBackend(WorkerBackend):
 		)
 		self._processes[worker_id] = proc
 		self._stdout_bufs[worker_id] = b""
+		self._stdout_collected.discard(worker_id)
 
 		return WorkerHandle(
 			worker_id=worker_id,

@@ -692,3 +692,39 @@ class TestSSHBackend:
 		running.wait.assert_awaited_once()
 		assert backend._processes == {}
 		assert backend._worker_count == {"host-a": 0, "host-b": 0}
+
+	@patch("mission_control.backends.ssh.asyncio.create_subprocess_exec")
+	async def test_spawn_clears_stdout_collected_on_reuse(
+		self, mock_exec: AsyncMock, backend: SSHBackend,
+	) -> None:
+		"""spawn clears _stdout_collected so reused workers get fresh output."""
+		mock_proc1 = AsyncMock()
+		mock_proc1.pid = 100
+		mock_proc1.returncode = 0
+		mock_stdout1 = AsyncMock()
+		mock_stdout1.read = AsyncMock(return_value=b"output-1")
+		mock_proc1.stdout = mock_stdout1
+
+		mock_proc2 = AsyncMock()
+		mock_proc2.pid = 200
+		mock_proc2.returncode = 0
+		mock_stdout2 = AsyncMock()
+		mock_stdout2.read = AsyncMock(return_value=b"output-2")
+		mock_proc2.stdout = mock_stdout2
+
+		mock_exec.side_effect = [mock_proc1, mock_proc2]
+
+		workspace = '/tmp/mc-worker-w1::{"hostname":"host-a","user":"deploy"}'
+
+		# First spawn + get_output
+		handle1 = await backend.spawn("w1", workspace, ["cmd1"], timeout=60)
+		out1 = await backend.get_output(handle1)
+		assert out1 == "output-1"
+		assert "w1" in backend._stdout_collected
+
+		# Second spawn (same worker_id) should clear _stdout_collected
+		handle2 = await backend.spawn("w1", workspace, ["cmd2"], timeout=60)
+		assert "w1" not in backend._stdout_collected
+
+		out2 = await backend.get_output(handle2)
+		assert out2 == "output-2"

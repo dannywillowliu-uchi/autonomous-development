@@ -146,7 +146,7 @@ class TestMergeQueue:
 		config = _config()
 		queue = MergeQueue(config, db, "/tmp/merge-workspace")
 
-		queue._release_unit_for_retry(mr)
+		await queue._release_unit_for_retry(mr)
 
 		updated_unit = db.get_work_unit("unit1")
 		assert updated_unit is not None
@@ -162,7 +162,7 @@ class TestMergeQueue:
 		config = _config()
 		queue = MergeQueue(config, db, "/tmp/merge-workspace")
 
-		queue._release_unit_for_retry(mr)
+		await queue._release_unit_for_retry(mr)
 
 		updated_unit = db.get_work_unit("unit1")
 		assert updated_unit is not None

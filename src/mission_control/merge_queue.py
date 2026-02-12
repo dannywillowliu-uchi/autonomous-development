@@ -26,7 +26,7 @@ class MergeQueue:
 	async def run(self) -> None:
 		"""Main loop: process merge requests one at a time."""
 		while self.running:
-			mr = self.db.get_next_merge_request()
+			mr = await self.db.locked_call("get_next_merge_request")
 			if mr is None:
 				await asyncio.sleep(POLL_INTERVAL)
 				continue
@@ -35,15 +35,15 @@ class MergeQueue:
 	async def _process_merge_request(self, mr: MergeRequest) -> None:
 		"""Process a single merge request: fetch, rebase, verify, merge/reject."""
 		mr.status = "verifying"
-		self.db.update_merge_request(mr)
+		await self.db.locked_call("update_merge_request", mr)
 
 		# 1. Fetch the branch from worker clone
 		fetch_ok = await self._fetch_worker_branch(mr)
 		if not fetch_ok:
 			mr.status = "conflict"
 			mr.rejection_reason = "Failed to fetch branch from worker"
-			self.db.update_merge_request(mr)
-			self._release_unit_for_retry(mr)
+			await self.db.locked_call("update_merge_request", mr)
+			await self._release_unit_for_retry(mr)
 			return
 
 		# 2. Rebase onto base branch
@@ -52,8 +52,8 @@ class MergeQueue:
 			mr.status = "conflict"
 			mr.rejection_reason = "Rebase conflict"
 			mr.rebase_attempts += 1
-			self.db.update_merge_request(mr)
-			self._release_unit_for_retry(mr)
+			await self.db.locked_call("update_merge_request", mr)
+			await self._release_unit_for_retry(mr)
 			return
 
 		# 3. Take before snapshot on base branch (workspace is on feature branch after rebase)
@@ -77,32 +77,32 @@ class MergeQueue:
 				mr.merged_at = _now_iso()
 				mr.verified_at = _now_iso()
 				# Update the work unit
-				unit = self.db.get_work_unit(mr.work_unit_id)
+				unit = await self.db.locked_call("get_work_unit", mr.work_unit_id)
 				if unit:
 					unit.status = "completed"
 					unit.finished_at = _now_iso()
-					self.db.update_work_unit(unit)
+					await self.db.locked_call("update_work_unit", unit)
 			else:
 				mr.status = "conflict"
 				mr.rejection_reason = "Merge failed"
-				self._release_unit_for_retry(mr)
+				await self._release_unit_for_retry(mr)
 		else:
 			mr.status = "rejected"
 			mr.rejection_reason = f"Verification failed: {verdict.summary}"
 			mr.verified_at = _now_iso()
-			self._release_unit_for_retry(mr)
+			await self._release_unit_for_retry(mr)
 			# Reset workspace to base branch
 			await self._run_git("checkout", self.config.target.branch)
 			await self._run_git("reset", "--hard", f"origin/{self.config.target.branch}")
 
-		self.db.update_merge_request(mr)
+		await self.db.locked_call("update_merge_request", mr)
 
 	async def _fetch_worker_branch(self, mr: MergeRequest) -> bool:
 		"""Fetch branch from worker clone via filesystem path."""
-		unit = self.db.get_work_unit(mr.work_unit_id)
+		unit = await self.db.locked_call("get_work_unit", mr.work_unit_id)
 		if not unit or not unit.worker_id:
 			return False
-		worker = self.db.get_worker(unit.worker_id)
+		worker = await self.db.locked_call("get_worker", unit.worker_id)
 		if not worker:
 			return False
 
@@ -138,20 +138,20 @@ class MergeQueue:
 		await self._run_git("checkout", self.config.target.branch)
 		return await self._run_git("merge", "--no-ff", mr.branch_name, "-m", f"Merge {mr.branch_name}")
 
-	def _release_unit_for_retry(self, mr: MergeRequest) -> None:
+	async def _release_unit_for_retry(self, mr: MergeRequest) -> None:
 		"""Release the work unit back to pending for retry if under max_attempts."""
-		unit = self.db.get_work_unit(mr.work_unit_id)
+		unit = await self.db.locked_call("get_work_unit", mr.work_unit_id)
 		if unit and unit.attempt < unit.max_attempts:
 			unit.status = "pending"
 			unit.worker_id = None
 			unit.claimed_at = None
 			unit.heartbeat_at = None
 			unit.attempt += 1
-			self.db.update_work_unit(unit)
+			await self.db.locked_call("update_work_unit", unit)
 		elif unit:
 			unit.status = "failed"
 			unit.finished_at = _now_iso()
-			self.db.update_work_unit(unit)
+			await self.db.locked_call("update_work_unit", unit)
 
 	async def _run_git(self, *args: str) -> bool:
 		"""Run a git command in the merge workspace."""

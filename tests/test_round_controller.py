@@ -131,13 +131,14 @@ class TestShouldStop:
 		result = controller._should_stop(mission, [])
 		assert result == "user_stopped"
 
-	def test_max_rounds(self, controller: RoundController, mission: Mission) -> None:
+	def test_max_rounds_allows_current(self, controller: RoundController, mission: Mission) -> None:
+		"""When total_rounds == max_rounds, continue (current round should run)."""
 		mission.total_rounds = 10  # config.rounds.max_rounds == 10
 		result = controller._should_stop(mission, [0.5])
-		assert result == "max_rounds"
+		assert result == ""
 
 	def test_max_rounds_exceeded(self, controller: RoundController, mission: Mission) -> None:
-		mission.total_rounds = 15
+		mission.total_rounds = 11  # > max_rounds (10), should stop
 		result = controller._should_stop(mission, [0.5])
 		assert result == "max_rounds"
 
@@ -445,16 +446,30 @@ class TestExecuteUnitsExceptionLogging:
 
 
 class TestShouldStopOffByOne:
-	"""Verify max_rounds boundary is exact (no off-by-one)."""
+	"""Verify max_rounds boundary is exact (no off-by-one).
 
-	def test_stops_at_exactly_max_rounds(self, db: Database) -> None:
-		"""When total_rounds equals max_rounds, should stop."""
+	The main loop sets total_rounds = round_number BEFORE calling _should_stop.
+	With max_rounds=5, rounds 1-5 should execute. _should_stop should return
+	"max_rounds" only when total_rounds > max_rounds (i.e., round 6).
+	"""
+
+	def test_stops_after_max_rounds(self, db: Database) -> None:
+		"""When total_rounds exceeds max_rounds, should stop."""
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(max_rounds=5)
+		ctrl = RoundController(cfg, db)
+		mission = Mission(objective="test")
+		mission.total_rounds = 6
+		assert ctrl._should_stop(mission, []) == "max_rounds"
+
+	def test_does_not_stop_at_max_rounds(self, db: Database) -> None:
+		"""When total_rounds equals max_rounds, should NOT stop (current round runs)."""
 		cfg = MissionConfig()
 		cfg.rounds = RoundsConfig(max_rounds=5)
 		ctrl = RoundController(cfg, db)
 		mission = Mission(objective="test")
 		mission.total_rounds = 5
-		assert ctrl._should_stop(mission, []) == "max_rounds"
+		assert ctrl._should_stop(mission, []) == ""
 
 	def test_does_not_stop_before_max_rounds(self, db: Database) -> None:
 		"""When total_rounds is less than max_rounds, should not stop."""

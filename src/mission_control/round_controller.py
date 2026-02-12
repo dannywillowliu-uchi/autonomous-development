@@ -292,7 +292,7 @@ class RoundController:
 		# Set round_id on all units
 		for unit in units:
 			unit.round_id = rnd.id
-			self.db.update_work_unit(unit)
+			await self.db.locked_call("update_work_unit", unit)
 
 		# Spawn workers for each unit
 		num_workers = self.config.scheduler.parallel.num_workers
@@ -331,14 +331,14 @@ class RoundController:
 				unit.status = "failed"
 				unit.output_summary = str(e)
 				unit.finished_at = _now_iso()
-				self.db.update_work_unit(unit)
+				await self.db.locked_call("update_work_unit", unit)
 				return
 
 			branch_name = f"mc/unit-{unit.id}"
 			unit.branch_name = branch_name
 			unit.status = "running"
 			unit.started_at = _now_iso()
-			self.db.update_work_unit(unit)
+			await self.db.locked_call("update_work_unit", unit)
 
 			# Build prompt (fresh-start pattern)
 			from mission_control.memory import load_context_for_mission_worker
@@ -385,7 +385,7 @@ class RoundController:
 					unit.status = "failed"
 					unit.output_summary = f"Timed out after {timeout}s"
 					unit.finished_at = _now_iso()
-					self.db.update_work_unit(unit)
+					await self.db.locked_call("update_work_unit", unit)
 					return
 
 				output = await self._backend.get_output(handle)
@@ -410,7 +410,7 @@ class RoundController:
 						concerns=json.dumps(mc_result.get("concerns", [])),
 						files_changed=json.dumps(mc_result.get("files_changed", [])),
 					)
-					self.db.insert_handoff(handoff)
+					await self.db.locked_call("insert_handoff", handoff)
 					unit.handoff_id = handoff.id
 				else:
 					unit_status = "completed" if status == "completed" else "failed"
@@ -436,7 +436,7 @@ class RoundController:
 					unit.status = "failed"
 
 				unit.finished_at = _now_iso()
-				self.db.update_work_unit(unit)
+				await self.db.locked_call("update_work_unit", unit)
 
 			except (RuntimeError, OSError) as e:
 				logger.error("Infrastructure error executing unit %s: %s", unit.id, e)
@@ -444,21 +444,21 @@ class RoundController:
 				unit.status = "failed"
 				unit.output_summary = f"Infrastructure error: {e}"
 				unit.finished_at = _now_iso()
-				self.db.update_work_unit(unit)
+				await self.db.locked_call("update_work_unit", unit)
 			except asyncio.CancelledError:
 				logger.info("Unit %s execution cancelled", unit.id)
 				unit.attempt += 1
 				unit.status = "failed"
 				unit.output_summary = "Cancelled"
 				unit.finished_at = _now_iso()
-				self.db.update_work_unit(unit)
+				await self.db.locked_call("update_work_unit", unit)
 			except (ValueError, KeyError, json.JSONDecodeError) as e:
 				logger.error("Data error executing unit %s: %s", unit.id, e)
 				unit.attempt += 1
 				unit.status = "failed"
 				unit.output_summary = f"Data error: {e}"
 				unit.finished_at = _now_iso()
-				self.db.update_work_unit(unit)
+				await self.db.locked_call("update_work_unit", unit)
 			finally:
 				await self._backend.release_workspace(workspace)
 
@@ -487,7 +487,7 @@ class RoundController:
 		if not self.running:
 			return "user_stopped"
 
-		if mission.total_rounds >= self.config.rounds.max_rounds:
+		if mission.total_rounds > self.config.rounds.max_rounds:
 			return "max_rounds"
 
 		# Stall detection: N rounds with negligible score improvement

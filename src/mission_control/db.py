@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from mission_control.models import (
 	Decision,
@@ -237,7 +237,7 @@ class Database:
 	def close(self) -> None:
 		self.conn.close()
 
-	async def locked_call(self, fn: str, *args: object, **kwargs: object) -> object:
+	async def locked_call(self, fn: str, *args: Any, **kwargs: Any) -> Any:
 		"""Call a Database method while holding the asyncio lock.
 
 		Use this to serialize concurrent access from multiple asyncio tasks.
