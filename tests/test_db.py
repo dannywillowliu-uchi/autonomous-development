@@ -125,6 +125,19 @@ class TestBulkPersist:
 		assert db.get_latest_snapshot() is not None
 		assert len(db.get_recent_decisions()) == 1
 
+	def test_persist_session_result_atomic_rollback(self, db: Database) -> None:
+		"""Verify persist_session_result rolls back all inserts on failure."""
+		session = Session(id="atomic1", target_name="proj", task_description="Test atomicity")
+		before = Snapshot(id="snap-b", test_total=5, test_passed=5, test_failed=0)
+		# Create a snapshot with the same ID to trigger a unique constraint violation
+		after = Snapshot(id="snap-b", test_total=5, test_passed=5, test_failed=0)
+
+		with pytest.raises(Exception):
+			db.persist_session_result(session, before, after)
+
+		# Session should NOT have been persisted due to rollback
+		assert db.get_session("atomic1") is None
+
 
 # -- Parallel mode tests --
 

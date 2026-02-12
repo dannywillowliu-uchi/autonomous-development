@@ -419,16 +419,51 @@ class Database:
 		after: Snapshot,
 		decisions: Sequence[Decision] | None = None,
 	) -> None:
-		"""Persist a complete session result atomically."""
-		self.insert_session(session)
+		"""Persist a complete session result atomically.
+
+		Uses a single transaction so all inserts either succeed together
+		or roll back together on failure.
+		"""
 		before.session_id = session.id
 		after.session_id = session.id
-		self.insert_snapshot(before)
-		self.insert_snapshot(after)
-		if decisions:
-			for d in decisions:
-				d.session_id = session.id
-				self.insert_decision(d)
+		try:
+			self.conn.execute(
+				"""INSERT INTO sessions
+				(id, target_name, task_description, status, branch_name,
+				 started_at, finished_at, exit_code, commit_hash, cost_usd, output_summary)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+				(
+					session.id, session.target_name, session.task_description,
+					session.status, session.branch_name, session.started_at,
+					session.finished_at, session.exit_code, session.commit_hash,
+					session.cost_usd, session.output_summary,
+				),
+			)
+			for snap in (before, after):
+				self.conn.execute(
+					"""INSERT INTO snapshots
+					(id, session_id, taken_at, test_total, test_passed, test_failed,
+					 lint_errors, type_errors, security_findings, raw_output)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+					(
+						snap.id, snap.session_id, snap.taken_at,
+						snap.test_total, snap.test_passed, snap.test_failed,
+						snap.lint_errors, snap.type_errors, snap.security_findings,
+						snap.raw_output,
+					),
+				)
+			if decisions:
+				for d in decisions:
+					d.session_id = session.id
+					self.conn.execute(
+						"""INSERT INTO decisions (id, session_id, decision, rationale, timestamp)
+						VALUES (?, ?, ?, ?, ?)""",
+						(d.id, d.session_id, d.decision, d.rationale, d.timestamp),
+					)
+			self.conn.commit()
+		except Exception:
+			self.conn.rollback()
+			raise
 
 	# -- Plans --
 
