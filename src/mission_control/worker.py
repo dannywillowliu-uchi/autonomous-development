@@ -378,14 +378,17 @@ class WorkerAgent:
 			await self.db.locked_call("update_heartbeat", self.worker.id)
 
 	async def _run_git(self, *args: str, cwd: str) -> bool:
-		"""Run a git command."""
+		"""Run a git command, logging output on failure."""
 		proc = await asyncio.create_subprocess_exec(
 			"git", *args,
 			cwd=cwd,
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
 		)
-		await proc.communicate()
+		stdout, _ = await proc.communicate()
+		if proc.returncode != 0:
+			output = stdout.decode(errors="replace") if stdout else ""
+			logger.warning("git %s failed in %s (rc=%d): %s", " ".join(args), cwd, proc.returncode, output)
 		return proc.returncode == 0
 
 	def stop(self) -> None:
