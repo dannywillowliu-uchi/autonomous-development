@@ -103,6 +103,29 @@ class TestExtractJsonFromText:
 		result = extract_json_from_text(raw)
 		assert result == data
 
+	def test_large_repetitive_braces_no_hang(self) -> None:
+		"""Repetitive brace patterns that could cause regex backtracking return promptly."""
+		# Pattern that would cause catastrophic backtracking with greedy [\s\S]*
+		text = "{ " * 500 + "not json" + " }" * 500
+		result = extract_json_from_text(text)
+		# Should return without hanging (balanced matcher handles this linearly)
+		# Result may or may not be None depending on whether inner text parses as JSON
+		assert result is None or isinstance(result, dict)
+
+	def test_large_nested_arrays_no_hang(self) -> None:
+		"""Deeply nested array brackets don't cause backtracking."""
+		text = "[" * 200 + '"inner"' + "]" * 200
+		result = extract_json_from_text(text, expect_array=True)
+		assert result is None or isinstance(result, list)
+
+	def test_malformed_json_large_input_returns_none(self) -> None:
+		"""Large malformed input with partial JSON returns None without hanging."""
+		# 200KB of text interspersed with braces
+		chunks = ['{"broken": ' + "x" * 1000 for _ in range(200)]
+		text = "\n".join(chunks)
+		result = extract_json_from_text(text)
+		assert result is None
+
 
 class TestFindBalanced:
 	def test_simple_object(self) -> None:

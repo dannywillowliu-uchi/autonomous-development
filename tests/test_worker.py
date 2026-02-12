@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -527,6 +528,28 @@ class TestWorkerAgent:
 		# Cleanup must happen before new branch creation
 		if checkout_b_calls:
 			assert delete_calls[0][0] < checkout_b_calls[0][0], "Cleanup should run before branch creation"
+
+	async def test_git_failure_logs_output(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend, caplog: pytest.LogCaptureFixture,
+	) -> None:
+		"""_run_git logs warning with git error output when command fails."""
+		w, _ = worker_and_unit
+
+		# Create a process mock that fails with error output
+		mock_git_proc = AsyncMock()
+		mock_git_proc.communicate = AsyncMock(return_value=(b"fatal: not a git repository", b""))
+		mock_git_proc.returncode = 128
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		with patch("mission_control.worker.asyncio.create_subprocess_exec", return_value=mock_git_proc):
+			with caplog.at_level(logging.WARNING, logger="mission_control.worker"):
+				result = await agent._run_git("checkout", "main", cwd="/tmp/clone1")  # noqa: SLF001
+
+		assert result is False
+		assert "fatal: not a git repository" in caplog.text
+		assert "rc=128" in caplog.text
 
 	def test_stop(self, db: Database, config: MissionConfig, mock_backend: MockBackend) -> None:
 		w = Worker(id="w1", workspace_path="/tmp/clone")
