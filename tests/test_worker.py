@@ -697,6 +697,89 @@ class TestWorkerAgent:
 		# workspace_path should be cleared since git reset failed
 		assert w.workspace_path == "", f"Expected empty string, got {w.workspace_path!r}"
 
+	async def test_unexpected_exception_in_execute_unit_does_not_kill_worker(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend, caplog: pytest.LogCaptureFixture,
+	) -> None:
+		"""An unexpected exception in _execute_unit resets worker to idle and marks unit failed."""
+		w, _ = worker_and_unit
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		# Make _execute_unit raise an unexpected error
+		async def exploding_execute(unit: WorkUnit) -> None:
+			raise RuntimeError("unexpected kaboom")
+
+		with patch.object(agent, "_execute_unit", side_effect=exploding_execute):
+			# Run a single iteration of the main loop
+			claimed = db.claim_work_unit(w.id)
+			assert claimed is not None
+
+			agent.worker.status = "working"
+			agent.worker.current_unit_id = claimed.id
+			await db.locked_call("update_worker", agent.worker)
+
+			# Simulate the try/except/finally from run() directly
+			try:
+				await agent._execute_unit(claimed)  # noqa: SLF001
+			except Exception:
+				try:
+					await agent._mark_unit_failed(claimed)  # noqa: SLF001
+				except Exception:
+					pass
+			finally:
+				agent.worker.status = "idle"
+				agent.worker.current_unit_id = None
+				await db.locked_call("update_worker", agent.worker)
+
+		# Worker should be idle, not dead
+		assert w.status == "idle"
+		assert w.current_unit_id is None
+
+		# Unit should be marked failed (attempt incremented, reset to pending since retries remain)
+		result = db.get_work_unit("wu1")
+		assert result is not None
+		assert result.attempt == 1
+
+	async def test_run_loop_survives_execute_unit_exception(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend, caplog: pytest.LogCaptureFixture,
+	) -> None:
+		"""WorkerAgent.run() continues looping after _execute_unit raises an unexpected exception."""
+		w, _ = worker_and_unit
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		call_count = 0
+
+		async def explode_then_stop(unit: WorkUnit) -> None:
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				raise RuntimeError("unexpected kaboom")
+			# On second call, just stop the agent
+			agent.running = False
+
+		with (
+			patch.object(agent, "_execute_unit", side_effect=explode_then_stop),
+			caplog.at_level(logging.ERROR, logger="mission_control.worker"),
+		):
+			# Insert a second unit so the loop has work after the first failure
+			db.insert_plan(Plan(id="p2", objective="test2", round_id="r1"))
+			wu2 = WorkUnit(id="wu2", plan_id="p2", title="Second task", description="test", round_id="r1")
+			db.insert_work_unit(wu2)
+
+			await agent.run()
+
+		# Worker survived and processed both units
+		assert call_count == 2, f"Expected 2 calls to _execute_unit, got {call_count}"
+		assert w.status == "idle"
+		assert w.current_unit_id is None
+
+		# Exception was logged
+		assert "unexpected kaboom" in caplog.text
+		assert "Unexpected error executing unit" in caplog.text
+
 	def test_stop(self, db: Database, config: MissionConfig, mock_backend: MockBackend) -> None:
 		w = Worker(id="w1", workspace_path="/tmp/clone")
 		agent = WorkerAgent(w, db, config, mock_backend)
