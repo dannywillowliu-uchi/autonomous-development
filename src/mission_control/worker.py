@@ -197,11 +197,18 @@ class WorkerAgent:
 			self.worker.current_unit_id = unit.id
 			await self.db.locked_call("update_worker", self.worker)
 
-			await self._execute_unit(unit)
-
-			self.worker.status = "idle"
-			self.worker.current_unit_id = None
-			await self.db.locked_call("update_worker", self.worker)
+			try:
+				await self._execute_unit(unit)
+			except Exception:
+				logger.exception("Unexpected error executing unit %s, worker %s survives", unit.id, self.worker.id)
+				try:
+					await self._mark_unit_failed(unit)
+				except Exception:
+					logger.exception("Failed to mark unit %s as failed after unexpected error", unit.id)
+			finally:
+				self.worker.status = "idle"
+				self.worker.current_unit_id = None
+				await self.db.locked_call("update_worker", self.worker)
 
 	async def _mark_unit_failed(self, unit: WorkUnit) -> None:
 		"""Mark a unit as failed, resetting to pending if retries remain."""
