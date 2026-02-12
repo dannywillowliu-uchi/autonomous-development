@@ -126,6 +126,8 @@ class MergeQueue:
 		ok = await self._run_git("rebase", f"origin/{self.config.target.branch}")
 		if not ok:
 			await self._run_git("rebase", "--abort")
+			# Return to base branch so workspace is clean for the next MR
+			await self._run_git("checkout", self.config.target.branch)
 		return ok
 
 	async def _merge_into_base(self, mr: MergeRequest) -> bool:

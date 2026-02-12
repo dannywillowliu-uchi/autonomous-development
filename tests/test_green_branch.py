@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from mission_control.config import (
 	GreenBranchConfig,
 	MissionConfig,
+	SchedulerConfig,
 	TargetConfig,
 	VerificationConfig,
 )
@@ -351,3 +352,61 @@ class TestGetGreenHash:
 		result = await mgr.get_green_hash()
 
 		assert result == ""
+
+
+class TestRunClaudeTimeout:
+	async def test_timeout_kills_subprocess(self) -> None:
+		"""_run_claude should kill the subprocess on timeout."""
+		mgr = _manager()
+		mgr.config.scheduler = SchedulerConfig(session_timeout=1)
+
+		mock_proc = AsyncMock()
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+
+		with patch("mission_control.green_branch.asyncio.create_subprocess_exec", return_value=mock_proc):
+			with patch("mission_control.green_branch.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+				ok, output = await mgr._run_claude("fix stuff", 1.0)
+
+		assert ok is False
+		assert "timed out" in output
+		mock_proc.kill.assert_called_once()
+		mock_proc.wait.assert_called_once()
+
+	async def test_normal_completion(self) -> None:
+		"""_run_claude returns output on normal completion."""
+		mgr = _manager()
+		mgr.config.scheduler = SchedulerConfig(session_timeout=60)
+
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+
+		with patch("mission_control.green_branch.asyncio.create_subprocess_exec", return_value=mock_proc):
+			with patch(
+				"mission_control.green_branch.asyncio.wait_for",
+				return_value=(b"fixed it", None),
+			):
+				ok, output = await mgr._run_claude("fix stuff", 1.0)
+
+		assert ok is True
+		assert output == "fixed it"
+
+
+class TestRunCommandTimeout:
+	async def test_timeout_kills_subprocess(self) -> None:
+		"""_run_command should kill the subprocess on timeout."""
+		mgr = _manager()
+		mgr.config.target.verification.timeout = 1
+
+		mock_proc = AsyncMock()
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+
+		with patch("mission_control.green_branch.asyncio.create_subprocess_shell", return_value=mock_proc):
+			with patch("mission_control.green_branch.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+				ok, output = await mgr._run_command("pytest -q")
+
+		assert ok is False
+		assert "timed out" in output
+		mock_proc.kill.assert_called_once()
+		mock_proc.wait.assert_called_once()

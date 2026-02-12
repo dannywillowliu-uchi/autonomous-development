@@ -189,6 +189,7 @@ class GreenBranchManager:
 
 	async def _run_claude(self, prompt: str, budget: float) -> tuple[bool, str]:
 		"""Run a Claude session with the prompt passed via stdin to avoid injection."""
+		timeout = self.config.scheduler.session_timeout
 		proc = await asyncio.create_subprocess_exec(
 			"claude", "-p",
 			"--permission-mode", "bypassPermissions",
@@ -198,18 +199,41 @@ class GreenBranchManager:
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
 		)
-		stdout, _ = await proc.communicate(input=prompt.encode())
+		try:
+			stdout, _ = await asyncio.wait_for(
+				proc.communicate(input=prompt.encode()), timeout=timeout,
+			)
+		except asyncio.TimeoutError:
+			logger.warning("Claude session timed out after %ds", timeout)
+			try:
+				proc.kill()
+				await proc.wait()
+			except ProcessLookupError:
+				pass
+			return (False, f"Claude session timed out after {timeout}s")
 		output = stdout.decode(errors="replace") if stdout else ""
 		return (proc.returncode == 0, output)
 
 	async def _run_command(self, cmd: str) -> tuple[bool, str]:
 		"""Run a shell command in self.workspace."""
+		timeout = self.config.target.verification.timeout
 		proc = await asyncio.create_subprocess_shell(
 			cmd,
 			cwd=self.workspace,
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
 		)
-		stdout, _ = await proc.communicate()
+		try:
+			stdout, _ = await asyncio.wait_for(
+				proc.communicate(), timeout=timeout,
+			)
+		except asyncio.TimeoutError:
+			logger.warning("Command timed out after %ds: %s", timeout, cmd)
+			try:
+				proc.kill()
+				await proc.wait()
+			except ProcessLookupError:
+				pass
+			return (False, f"Command timed out after {timeout}s")
 		output = stdout.decode() if stdout else ""
 		return (proc.returncode == 0, output)
