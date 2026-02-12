@@ -225,8 +225,15 @@ class WorkerAgent:
 				self.worker.workspace_path = workspace_path
 				self.db.update_worker(self.worker)
 
-			# Create branch in workspace
-			await self._run_git("checkout", "-b", branch_name, cwd=workspace_path)
+			# Create branch in workspace (try -b, fallback to -B for retry)
+			if not await self._run_git("checkout", "-b", branch_name, cwd=workspace_path):
+				if not await self._run_git("checkout", "-B", branch_name, cwd=workspace_path):
+					unit.status = "failed"
+					unit.output_summary = f"Failed to create branch {branch_name}"
+					unit.finished_at = _now_iso()
+					self.db.update_work_unit(unit)
+					self.worker.units_failed += 1
+					return
 
 			# Build prompt and command
 			prompt = render_worker_prompt(

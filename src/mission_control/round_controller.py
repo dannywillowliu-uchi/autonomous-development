@@ -399,16 +399,19 @@ class RoundController:
 					if isinstance(commits, list) and commits:
 						unit.commit_hash = str(commits[0])
 
-					# Create handoff
+					# Create handoff (guard non-list values from malformed MC_RESULT)
+					disc = mc_result.get("discoveries", [])
+					conc = mc_result.get("concerns", [])
+					fc = mc_result.get("files_changed", [])
 					handoff = Handoff(
 						work_unit_id=unit.id,
 						round_id=rnd.id,
 						status=unit_status,
 						commits=json.dumps(commits if isinstance(commits, list) else []),
 						summary=unit.output_summary,
-						discoveries=json.dumps(mc_result.get("discoveries", [])),
-						concerns=json.dumps(mc_result.get("concerns", [])),
-						files_changed=json.dumps(mc_result.get("files_changed", [])),
+						discoveries=json.dumps(disc if isinstance(disc, list) else []),
+						concerns=json.dumps(conc if isinstance(conc, list) else []),
+						files_changed=json.dumps(fc if isinstance(fc, list) else []),
 					)
 					await self.db.locked_call("insert_handoff", handoff)
 					unit.handoff_id = handoff.id

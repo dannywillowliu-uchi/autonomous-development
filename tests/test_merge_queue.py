@@ -119,6 +119,10 @@ class TestMergeQueue:
 		assert updated_unit.status == "pending"
 		assert updated_unit.attempt == 1
 
+		# Rejection should checkout local base, NOT reset to origin/ (preserves prior merges)
+		git_calls = [str(c) for c in queue._run_git.call_args_list]
+		assert not any("origin/" in c for c in git_calls), f"Should not reference origin/: {git_calls}"
+
 	async def test_rebase_conflict_handling(self) -> None:
 		"""Rebase failure -> MR status=conflict, unit released for retry."""
 		db, mr, unit, worker = _db_with_mr()

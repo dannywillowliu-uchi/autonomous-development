@@ -291,6 +291,31 @@ class TestWorkerAgent:
 		assert len(checkout_base_calls) >= 1, f"Expected checkout to base branch, got: {git_calls}"
 		assert len(branch_delete_calls) >= 1, f"Expected branch delete, got: {git_calls}"
 
+
+	async def test_checkout_failure_marks_unit_failed(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""If both checkout -b and -B fail, unit is marked failed."""
+		w, _ = worker_and_unit
+
+		# Make git checkout always fail
+		mock_git_proc = AsyncMock()
+		mock_git_proc.communicate = AsyncMock(return_value=(b"error: branch exists", b""))
+		mock_git_proc.returncode = 1
+
+		with patch("mission_control.worker.asyncio.create_subprocess_exec", return_value=mock_git_proc):
+			agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		result = db.get_work_unit("wu1")
+		assert result is not None
+		assert result.status == "failed"
+		assert "Failed to create branch" in result.output_summary
+		assert w.units_failed == 1
+
 	def test_stop(self, db: Database, config: MissionConfig, mock_backend: MockBackend) -> None:
 		w = Worker(id="w1", workspace_path="/tmp/clone")
 		agent = WorkerAgent(w, db, config, mock_backend)

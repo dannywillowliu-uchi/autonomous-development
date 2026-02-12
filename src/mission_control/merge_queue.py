@@ -91,9 +91,8 @@ class MergeQueue:
 			mr.rejection_reason = f"Verification failed: {verdict.summary}"
 			mr.verified_at = _now_iso()
 			await self._release_unit_for_retry(mr)
-			# Reset workspace to base branch
+			# Reset workspace to base branch (local, preserving prior merges)
 			await self._run_git("checkout", self.config.target.branch)
-			await self._run_git("reset", "--hard", f"origin/{self.config.target.branch}")
 
 		await self.db.locked_call("update_merge_request", mr)
 
