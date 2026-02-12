@@ -276,3 +276,78 @@ class TestFetchWorkerBranchRemoteCleanup:
 		assert len(remote_remove_calls) == 1
 		# Same remote name used for add and remove
 		assert remote_add_calls[0][2] == remote_remove_calls[0][2]
+
+	async def test_local_branch_created_from_fetch_head(self) -> None:
+		"""After fetching, a local branch must be created from FETCH_HEAD."""
+		db, mr, unit, worker = _db_with_mr()
+		config = _config()
+		queue = MergeQueue(config, db, "/tmp/merge-workspace")
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def mock_run_git(*args: str) -> bool:
+			git_calls.append(args)
+			return True
+
+		queue._run_git = mock_run_git  # type: ignore[assignment]
+
+		await queue._fetch_worker_branch(mr)
+
+		# Should create local branch from FETCH_HEAD
+		branch_calls = [c for c in git_calls if c[0] == "branch" and c[1] == "-f"]
+		assert len(branch_calls) == 1
+		assert branch_calls[0][2] == mr.branch_name
+		assert branch_calls[0][3] == "FETCH_HEAD"
+		# Branch creation must happen before remote removal
+		branch_idx = git_calls.index(branch_calls[0])
+		remove_idx = next(i for i, c in enumerate(git_calls) if c[0] == "remote" and c[1] == "remove")
+		assert branch_idx < remove_idx
+
+	async def test_fetch_failure_skips_branch_creation(self) -> None:
+		"""If fetch fails, don't try to create a local branch."""
+		db, mr, unit, worker = _db_with_mr()
+		config = _config()
+		queue = MergeQueue(config, db, "/tmp/merge-workspace")
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def mock_run_git(*args: str) -> bool:
+			git_calls.append(args)
+			if args[0] == "fetch":
+				return False
+			return True
+
+		queue._run_git = mock_run_git  # type: ignore[assignment]
+
+		result = await queue._fetch_worker_branch(mr)
+
+		assert result is False
+		# Should NOT have created a branch
+		branch_calls = [c for c in git_calls if c[0] == "branch"]
+		assert len(branch_calls) == 0
+
+
+class TestRebaseOntoBase:
+	async def test_fetch_origin_before_rebase(self) -> None:
+		"""_rebase_onto_base should fetch origin before rebasing."""
+		db, mr, unit, worker = _db_with_mr()
+		config = _config()
+		queue = MergeQueue(config, db, "/tmp/merge-workspace")
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def mock_run_git(*args: str) -> bool:
+			git_calls.append(args)
+			return True
+
+		queue._run_git = mock_run_git  # type: ignore[assignment]
+
+		result = await queue._rebase_onto_base(mr)
+
+		assert result is True
+		# Should have fetched origin first
+		assert git_calls[0] == ("fetch", "origin")
+		# Then checkout
+		assert git_calls[1] == ("checkout", mr.branch_name)
+		# Then rebase
+		assert git_calls[2][0] == "rebase"

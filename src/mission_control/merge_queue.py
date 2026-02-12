@@ -109,13 +109,19 @@ class MergeQueue:
 		# Add remote (ignore error if already exists)
 		await self._run_git("remote", "add", remote_name, worker.workspace_path)
 		# Fetch the branch
-		result = await self._run_git("fetch", remote_name, mr.branch_name)
+		fetch_ok = await self._run_git("fetch", remote_name, mr.branch_name)
+		if fetch_ok:
+			# Create a local branch from FETCH_HEAD before removing the remote,
+			# otherwise the fetched ref is lost when the remote is deleted
+			await self._run_git("branch", "-f", mr.branch_name, "FETCH_HEAD")
 		# Clean up remote to prevent accumulation
 		await self._run_git("remote", "remove", remote_name)
-		return result
+		return fetch_ok
 
 	async def _rebase_onto_base(self, mr: MergeRequest) -> bool:
 		"""Rebase the branch onto the current base branch."""
+		# Fetch origin to ensure base ref is up to date (other MRs may have merged)
+		await self._run_git("fetch", "origin")
 		await self._run_git("checkout", mr.branch_name)
 		ok = await self._run_git("rebase", f"origin/{self.config.target.branch}")
 		if not ok:
