@@ -385,8 +385,8 @@ class TestSnapshotComparison:
 
 
 class TestRebaseOntoBase:
-	async def test_fetch_origin_before_rebase(self) -> None:
-		"""_rebase_onto_base should fetch origin before rebasing."""
+	async def test_rebase_uses_local_base_branch(self) -> None:
+		"""_rebase_onto_base should rebase onto local base branch (not origin/)."""
 		db, mr, unit, worker = _db_with_mr()
 		config = _config()
 		queue = MergeQueue(config, db, "/tmp/merge-workspace")
@@ -402,12 +402,46 @@ class TestRebaseOntoBase:
 		result = await queue._rebase_onto_base(mr)
 
 		assert result is True
-		# Should have fetched origin first
-		assert git_calls[0] == ("fetch", "origin")
-		# Then checkout
-		assert git_calls[1] == ("checkout", mr.branch_name)
-		# Then rebase
-		assert git_calls[2][0] == "rebase"
+		# Should checkout feature branch first
+		assert git_calls[0] == ("checkout", mr.branch_name)
+		# Then rebase onto LOCAL base branch (not origin/main)
+		assert git_calls[1] == ("rebase", "main")
+		# Verify it does NOT use origin/ prefix (local merges would be lost)
+		rebase_calls = [c for c in git_calls if c[0] == "rebase"]
+		for call in rebase_calls:
+			assert not call[1].startswith("origin/"), \
+				f"Rebase should use local ref, not {call[1]}"
+
+	async def test_sequential_merges_preserve_prior_changes(self) -> None:
+		"""Two MRs merged sequentially: second MR rebases onto post-first-merge state."""
+		db, mr, unit, worker = _db_with_mr()
+		config = _config()
+		queue = MergeQueue(config, db, "/tmp/merge-workspace")
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def mock_run_git(*args: str) -> bool:
+			git_calls.append(args)
+			return True
+
+		queue._run_git = mock_run_git  # type: ignore[assignment]
+
+		# First rebase
+		await queue._rebase_onto_base(mr)
+
+		git_calls.clear()
+
+		# Second rebase (different MR)
+		mr2 = MergeRequest(
+			id="mr2", work_unit_id="unit1", worker_id="w1234567",
+			branch_name="fix/other", status="pending", position=2,
+		)
+		await queue._rebase_onto_base(mr2)
+
+		# Second rebase should also use local base branch
+		rebase_calls = [c for c in git_calls if c[0] == "rebase"]
+		assert len(rebase_calls) == 1
+		assert rebase_calls[0] == ("rebase", "main")
 
 	async def test_rebase_failure_returns_to_base_branch(self) -> None:
 		"""On rebase failure, workspace should be on base branch after abort."""
@@ -428,7 +462,7 @@ class TestRebaseOntoBase:
 		result = await queue._rebase_onto_base(mr)
 
 		assert result is False
-		# Should have: fetch, checkout branch, rebase (fail), abort, checkout base
+		# Should have: checkout branch, rebase (fail), abort, checkout base
 		abort_calls = [c for c in git_calls if c == ("rebase", "--abort")]
 		assert len(abort_calls) == 1
 		# Last call should checkout the base branch

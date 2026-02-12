@@ -84,10 +84,15 @@ class TestCoordinator:
 		mock_pool.initialize = AsyncMock()
 		mock_pool.cleanup = AsyncMock()
 
+		mock_backend = AsyncMock()
+		mock_backend._pool = mock_pool
+		mock_backend.initialize = AsyncMock()
+		mock_backend.cleanup = AsyncMock()
+
 		with (
 			patch("mission_control.coordinator.snapshot_project_health", new_callable=AsyncMock) as mock_snap,
 			patch("mission_control.coordinator.create_plan", new_callable=AsyncMock) as mock_create,
-			patch("mission_control.coordinator.WorkspacePool", return_value=mock_pool),
+			patch("mission_control.coordinator.LocalBackend", return_value=mock_backend),
 			patch("mission_control.coordinator.MergeQueue") as mock_mq_cls,
 			patch("mission_control.coordinator.WorkerAgent") as mock_wa_cls,
 		):

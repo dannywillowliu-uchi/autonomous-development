@@ -120,11 +120,13 @@ class MergeQueue:
 		return fetch_ok
 
 	async def _rebase_onto_base(self, mr: MergeRequest) -> bool:
-		"""Rebase the branch onto the current base branch."""
-		# Fetch origin to ensure base ref is up to date (other MRs may have merged)
-		await self._run_git("fetch", "origin")
+		"""Rebase the branch onto the current local base branch.
+
+		Uses the local base branch ref (not origin/) because prior MRs may have
+		been merged locally but not yet pushed to origin.
+		"""
 		await self._run_git("checkout", mr.branch_name)
-		ok = await self._run_git("rebase", f"origin/{self.config.target.branch}")
+		ok = await self._run_git("rebase", self.config.target.branch)
 		if not ok:
 			await self._run_git("rebase", "--abort")
 			# Return to base branch so workspace is clean for the next MR

@@ -426,6 +426,11 @@ class RoundController:
 					)
 					if not merged:
 						logger.warning("Merge conflict for unit %s", unit.id)
+				elif unit_status == "blocked":
+					unit.status = "blocked"
+					logger.info(
+						"Unit %s blocked: %s", unit.id, unit.output_summary,
+					)
 				else:
 					unit.attempt += 1
 					unit.status = "failed"

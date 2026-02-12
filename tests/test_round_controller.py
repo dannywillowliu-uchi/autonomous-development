@@ -464,3 +464,83 @@ class TestShouldStopOffByOne:
 		mission = Mission(objective="test")
 		mission.total_rounds = 4
 		assert ctrl._should_stop(mission, []) == ""
+
+
+class TestBlockedUnitStatus:
+	"""Blocked units should not have attempt counter incremented."""
+
+	async def test_blocked_unit_attempt_not_incremented(
+		self, controller: RoundController, db: Database, mission: Mission,
+	) -> None:
+		"""Unit with MC_RESULT status 'blocked' should keep attempt unchanged."""
+		import asyncio
+		from unittest.mock import AsyncMock
+
+		db.insert_mission(mission)
+		plan = Plan(objective="test")
+		db.insert_plan(plan)
+		rnd = Round(mission_id=mission.id, number=1)
+		db.insert_round(rnd)
+
+		unit = WorkUnit(plan_id=plan.id, title="Blocked unit", attempt=0, max_attempts=3)
+		db.insert_work_unit(unit)
+
+		# Mock backend
+		mock_backend = AsyncMock()
+		mock_backend.provision_workspace = AsyncMock(return_value="/tmp/ws")
+		mock_backend.spawn = AsyncMock()
+		mock_backend.check_status = AsyncMock(return_value="completed")
+		mock_backend.get_output = AsyncMock(
+			return_value='MC_RESULT:{"status":"blocked","summary":"Waiting for dependency"}'
+		)
+		mock_backend.release_workspace = AsyncMock()
+		controller._backend = mock_backend
+
+		# Mock green branch
+		mock_gb = AsyncMock()
+		controller._green_branch = mock_gb
+
+		sem = asyncio.Semaphore(1)
+		await controller._execute_single_unit(unit, rnd, sem)
+
+		refreshed = db.get_work_unit(unit.id)
+		assert refreshed is not None
+		assert refreshed.status == "blocked"
+		assert refreshed.attempt == 0  # NOT incremented
+
+	async def test_failed_unit_attempt_incremented(
+		self, controller: RoundController, db: Database, mission: Mission,
+	) -> None:
+		"""Unit with MC_RESULT status 'failed' should have attempt incremented."""
+		import asyncio
+		from unittest.mock import AsyncMock
+
+		db.insert_mission(mission)
+		plan = Plan(objective="test")
+		db.insert_plan(plan)
+		rnd = Round(mission_id=mission.id, number=1)
+		db.insert_round(rnd)
+
+		unit = WorkUnit(plan_id=plan.id, title="Failing unit", attempt=0, max_attempts=3)
+		db.insert_work_unit(unit)
+
+		mock_backend = AsyncMock()
+		mock_backend.provision_workspace = AsyncMock(return_value="/tmp/ws")
+		mock_backend.spawn = AsyncMock()
+		mock_backend.check_status = AsyncMock(return_value="completed")
+		mock_backend.get_output = AsyncMock(
+			return_value='MC_RESULT:{"status":"failed","summary":"Could not fix"}'
+		)
+		mock_backend.release_workspace = AsyncMock()
+		controller._backend = mock_backend
+
+		mock_gb = AsyncMock()
+		controller._green_branch = mock_gb
+
+		sem = asyncio.Semaphore(1)
+		await controller._execute_single_unit(unit, rnd, sem)
+
+		refreshed = db.get_work_unit(unit.id)
+		assert refreshed is not None
+		assert refreshed.status == "failed"
+		assert refreshed.attempt == 1  # Incremented

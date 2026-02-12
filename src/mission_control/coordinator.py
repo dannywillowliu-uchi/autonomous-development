@@ -16,7 +16,6 @@ from mission_control.models import Plan, Worker, _new_id, _now_iso
 from mission_control.planner import create_plan
 from mission_control.state import snapshot_project_health
 from mission_control.worker import WorkerAgent
-from mission_control.workspace import WorkspacePool
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +68,6 @@ class Coordinator:
 		self._worker_tasks: list[asyncio.Task[None]] = []
 		self._merge_queue: MergeQueue | None = None
 		self._merge_task: asyncio.Task[None] | None = None
-		self._pool: WorkspacePool | None = None
 		self._backend: LocalBackend | None = None
 
 	async def run(self) -> CoordinatorReport:
@@ -99,27 +97,19 @@ class Coordinator:
 			plan.status = "active"
 			self.db.update_plan(plan)
 
-			# 3. Initialize workspace pool
+			# 3. Initialize backend (single pool for workers + merge queue)
 			logger.info("Initializing workspace pool with %d clones...", self.num_workers)
-			self._pool = WorkspacePool(
+			self._backend = LocalBackend(
 				source_repo=source_repo,
 				pool_dir=pool_path,
 				max_clones=self.num_workers + 1,  # +1 for merge queue
 				base_branch=self.config.target.branch,
 			)
 			warm = self.config.scheduler.parallel.warm_clones
-			await self._pool.initialize(warm_count=min(warm, self.num_workers + 1))
-
-			# Create a backend for workers
-			self._backend = LocalBackend(
-				source_repo=source_repo,
-				pool_dir=pool_path,
-				max_clones=self.num_workers,
-				base_branch=self.config.target.branch,
-			)
+			await self._backend.initialize(warm_count=min(warm, self.num_workers + 1))
 
 			# 4. Start merge queue in a dedicated clone
-			merge_workspace = await self._pool.acquire()
+			merge_workspace = await self._backend._pool.acquire()
 			if merge_workspace is None:
 				report.stopped_reason = "failed_to_acquire_merge_workspace"
 				report.wall_time_seconds = time.monotonic() - start_time
@@ -130,7 +120,7 @@ class Coordinator:
 
 			# 5. Start N workers
 			for i in range(self.num_workers):
-				workspace = await self._pool.acquire()
+				workspace = await self._backend._pool.acquire()
 				if workspace is None:
 					logger.warning("Could not acquire workspace for worker %d", i)
 					break
@@ -171,9 +161,9 @@ class Coordinator:
 			# Shutdown workers and merge queue
 			await self._shutdown()
 
-			# Cleanup pool
-			if self._pool:
-				await self._pool.cleanup()
+			# Cleanup backend and its pool
+			if self._backend:
+				await self._backend.cleanup()
 
 			report.wall_time_seconds = time.monotonic() - start_time
 
