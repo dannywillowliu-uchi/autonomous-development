@@ -259,6 +259,38 @@ class TestWorkerAgent:
 		assert result.status == "failed"
 		assert "Timed out" in result.output_summary
 
+	async def test_success_path_cleans_up_workspace(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""After successful unit, workspace should be reset to base branch and feature branch deleted."""
+		w, _ = worker_and_unit
+
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":["abc123"],'
+			'"summary":"Fixed it","files_changed":["foo.py"]}'
+		)
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def tracking_run_git(*args: str, cwd: str) -> bool:
+			git_calls.append(args)
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=tracking_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# Should have: checkout -b branch, then checkout main, then branch -D
+		checkout_base_calls = [c for c in git_calls if c == ("checkout", "main")]
+		branch_delete_calls = [c for c in git_calls if c[0] == "branch" and c[1] == "-D"]
+		assert len(checkout_base_calls) >= 1, f"Expected checkout to base branch, got: {git_calls}"
+		assert len(branch_delete_calls) >= 1, f"Expected branch delete, got: {git_calls}"
+
 	def test_stop(self, db: Database, config: MissionConfig, mock_backend: MockBackend) -> None:
 		w = Worker(id="w1", workspace_path="/tmp/clone")
 		agent = WorkerAgent(w, db, config, mock_backend)

@@ -51,7 +51,7 @@ class SSHBackend(WorkerBackend):
 
 		proc = await asyncio.create_subprocess_exec(
 			"ssh", self._ssh_target(host),
-			f"git clone --depth=1 -b {base_branch} {source_repo} {remote_path}",
+			f"git clone --depth=1 -b {shlex.quote(base_branch)} {shlex.quote(source_repo)} {shlex.quote(remote_path)}",
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
 		)
@@ -134,7 +134,7 @@ class SSHBackend(WorkerBackend):
 			)
 			cleanup = await asyncio.create_subprocess_exec(
 				"ssh", ssh_target,
-				f"pkill -f mc-worker-{handle.worker_id} || true",
+				f"pkill -f {shlex.quote('mc-worker-' + handle.worker_id)} || true",
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.STDOUT,
 			)
@@ -158,7 +158,7 @@ class SSHBackend(WorkerBackend):
 				)
 			)
 			proc = await asyncio.create_subprocess_exec(
-				"ssh", ssh_target, f"rm -rf {remote_path}",
+				"ssh", ssh_target, f"rm -rf {shlex.quote(remote_path)}",
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.STDOUT,
 			)

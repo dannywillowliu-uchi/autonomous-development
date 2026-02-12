@@ -318,6 +318,13 @@ class WorkerAgent:
 				)
 				self.db.insert_merge_request(mr)
 				self.worker.units_completed += 1
+
+				# Reset workspace to base branch for next task
+				base = self.config.target.branch
+				if not await self._run_git("checkout", base, cwd=workspace_path):
+					logger.warning("Failed to checkout %s in %s", base, workspace_path)
+				if not await self._run_git("branch", "-D", branch_name, cwd=workspace_path):
+					logger.warning("Failed to delete %s in %s", branch_name, workspace_path)
 			else:
 				unit.status = "failed"
 				unit.finished_at = _now_iso()

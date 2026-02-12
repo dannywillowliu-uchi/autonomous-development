@@ -44,12 +44,18 @@ class LocalBackend(WorkerBackend):
 
 		branch_name = f"mc/unit-{worker_id}"
 		proc = await asyncio.create_subprocess_exec(
-			"git", "checkout", "-b", branch_name,
+			"git", "checkout", "-B", branch_name,
 			cwd=str(workspace),
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
 		)
-		await proc.communicate()
+		stdout, _ = await proc.communicate()
+		if proc.returncode != 0:
+			await self._pool.release(workspace)
+			raise RuntimeError(
+				f"Failed to create branch {branch_name}: "
+				f"{stdout.decode(errors='replace')}"
+			)
 		return str(workspace)
 
 	async def spawn(

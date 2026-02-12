@@ -134,6 +134,7 @@ class TestLocalBackend:
 
 		# Mock the git checkout subprocess
 		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
 		mock_proc.communicate = AsyncMock(return_value=(b"", None))
 		mock_exec.return_value = mock_proc
 
@@ -142,10 +143,46 @@ class TestLocalBackend:
 		assert result == "/pool/clone-1"
 		backend._pool.acquire.assert_awaited_once()
 		mock_exec.assert_awaited_once()
-		# The command should be git checkout -b mc/unit-w1
+		# The command should be git checkout -B mc/unit-w1 (force-create for retry support)
 		args = mock_exec.call_args
-		assert args[0] == ("git", "checkout", "-b", "mc/unit-w1")
+		assert args[0] == ("git", "checkout", "-B", "mc/unit-w1")
 		assert args[1]["cwd"] == "/pool/clone-1"
+
+	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")
+	async def test_provision_workspace_uses_force_create_branch(
+		self, mock_exec: AsyncMock, backend: LocalBackend,
+	) -> None:
+		"""provision_workspace uses checkout -B (force) so retried units succeed."""
+		backend._pool.acquire.return_value = Path("/pool/clone-1")
+
+		mock_proc = AsyncMock()
+		mock_proc.communicate = AsyncMock(return_value=(b"", None))
+		mock_proc.returncode = 0
+		mock_exec.return_value = mock_proc
+
+		await backend.provision_workspace("w1", "/repo", "main")
+
+		args = mock_exec.call_args[0]
+		# Should use -B (force create) not -b
+		assert args == ("git", "checkout", "-B", "mc/unit-w1")
+
+	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")
+	async def test_provision_workspace_checkout_failure_raises(
+		self, mock_exec: AsyncMock, backend: LocalBackend,
+	) -> None:
+		"""provision_workspace raises and releases workspace if checkout fails."""
+		backend._pool.acquire.return_value = Path("/pool/clone-1")
+
+		mock_proc = AsyncMock()
+		mock_proc.communicate = AsyncMock(return_value=(b"fatal: error", None))
+		mock_proc.returncode = 1
+		mock_exec.return_value = mock_proc
+
+		with pytest.raises(RuntimeError, match="Failed to create branch"):
+			await backend.provision_workspace("w1", "/repo", "main")
+
+		# Should have released the workspace back to the pool
+		backend._pool.release.assert_awaited_once_with(Path("/pool/clone-1"))
 
 	async def test_provision_workspace_no_workspace_available(
 		self, backend: LocalBackend,
@@ -400,6 +437,75 @@ class TestSSHBackend:
 		assert "@" in call_args[1]
 
 	@patch("mission_control.backends.ssh.asyncio.create_subprocess_exec")
+	async def test_provision_workspace_quotes_arguments(
+		self, mock_exec: AsyncMock, backend: SSHBackend,
+	) -> None:
+		"""provision_workspace uses shlex.quote on all interpolated values."""
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate = AsyncMock(return_value=(b"Cloning...", None))
+		mock_exec.return_value = mock_proc
+
+		# Source repo with spaces and metacharacters
+		await backend.provision_workspace("w1", "git@host:repo with spaces.git", "main; rm -rf /")
+
+		mock_exec.assert_awaited_once()
+		call_args = mock_exec.call_args[0]
+		remote_cmd = call_args[2]
+		import shlex
+		# All three values should be quoted
+		assert shlex.quote("main; rm -rf /") in remote_cmd
+		assert shlex.quote("git@host:repo with spaces.git") in remote_cmd
+		assert shlex.quote("/tmp/mc-worker-w1") in remote_cmd
+
+	@patch("mission_control.backends.ssh.asyncio.create_subprocess_exec")
+	async def test_release_workspace_quotes_path(
+		self, mock_exec: AsyncMock, backend: SSHBackend,
+	) -> None:
+		"""release_workspace uses shlex.quote on the remote path."""
+		mock_proc = AsyncMock()
+		mock_proc.communicate = AsyncMock(return_value=(b"", None))
+		mock_exec.return_value = mock_proc
+
+		backend._worker_count["host-a"] = 1
+		metadata = json.dumps({"hostname": "host-a", "user": "deploy"})
+		workspace_path = f"/tmp/path with spaces::{metadata}"
+
+		await backend.release_workspace(workspace_path)
+
+		call_args = mock_exec.call_args[0]
+		import shlex
+		assert shlex.quote("/tmp/path with spaces") in call_args[2]
+
+	@patch("mission_control.backends.ssh.asyncio.create_subprocess_exec")
+	async def test_kill_quotes_worker_id_in_pkill(
+		self, mock_exec: AsyncMock, backend: SSHBackend,
+	) -> None:
+		"""kill uses shlex.quote for worker_id in the pkill command."""
+		mock_proc = MagicMock()
+		mock_proc.returncode = None
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+		backend._processes["w1; evil"] = mock_proc
+
+		mock_cleanup = AsyncMock()
+		mock_cleanup.communicate = AsyncMock(return_value=(b"", None))
+		mock_exec.return_value = mock_cleanup
+
+		metadata = json.dumps({"hostname": "host-a", "user": "deploy"})
+		handle = WorkerHandle(
+			worker_id="w1; evil",
+			workspace_path="/tmp/mc-worker-w1",
+			backend_metadata=metadata,
+		)
+
+		await backend.kill(handle)
+
+		call_args = mock_exec.call_args[0]
+		import shlex
+		assert shlex.quote("mc-worker-w1; evil") in call_args[2]
+
+	@patch("mission_control.backends.ssh.asyncio.create_subprocess_exec")
 	async def test_provision_workspace_failure(
 		self, mock_exec: AsyncMock, backend: SSHBackend,
 	) -> None:
@@ -559,7 +665,7 @@ class TestSSHBackend:
 		mock_exec.assert_awaited_once()
 		call_args = mock_exec.call_args[0]
 		assert call_args[0] == "ssh"
-		assert "rm -rf /tmp/mc-worker-w1" in call_args[2]
+		assert "rm -rf" in call_args[2] and "/tmp/mc-worker-w1" in call_args[2]
 		assert backend._worker_count["host-a"] == 0
 
 	async def test_release_workspace_without_metadata(

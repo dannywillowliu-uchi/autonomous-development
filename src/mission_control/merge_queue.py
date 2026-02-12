@@ -56,10 +56,11 @@ class MergeQueue:
 			self._release_unit_for_retry(mr)
 			return
 
-		# 3. Take before snapshot
+		# 3. Take before snapshot on base branch (workspace is on feature branch after rebase)
+		await self._run_git("checkout", self.config.target.branch)
 		before = await snapshot_project_health(self.config, cwd=self.workspace)
 
-		# 4. Checkout the rebased branch and take after snapshot
+		# 4. Checkout the rebased feature branch and take after snapshot
 		await self._run_git("checkout", mr.branch_name)
 		after = await snapshot_project_health(self.config, cwd=self.workspace)
 

@@ -327,6 +327,63 @@ class TestFetchWorkerBranchRemoteCleanup:
 		assert len(branch_calls) == 0
 
 
+class TestSnapshotComparison:
+	@patch("mission_control.merge_queue.snapshot_project_health", new_callable=AsyncMock)
+	async def test_before_snapshot_taken_on_base_branch(self, mock_snapshot: AsyncMock) -> None:
+		"""Before snapshot must be taken on the base branch, not the feature branch."""
+		db, mr, unit, worker = _db_with_mr()
+		config = _config()
+		queue = MergeQueue(config, db, "/tmp/merge-workspace")
+
+		before_snap = Snapshot(test_total=10, test_passed=10, test_failed=0)
+		after_snap = Snapshot(test_total=10, test_passed=9, test_failed=1)
+		mock_snapshot.side_effect = [before_snap, after_snap]
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def mock_run_git(*args: str) -> bool:
+			git_calls.append(args)
+			return True
+
+		queue._run_git = mock_run_git  # type: ignore[assignment]
+		queue._fetch_worker_branch = AsyncMock(return_value=True)
+		queue._rebase_onto_base = AsyncMock(return_value=True)
+
+		await queue._process_merge_request(mr)
+
+		# After rebase, should checkout base branch BEFORE taking before snapshot
+		# Then checkout feature branch for after snapshot
+		assert git_calls[0] == ("checkout", "main")  # base branch for before
+		assert git_calls[1] == ("checkout", mr.branch_name)  # feature branch for after
+
+	@patch("mission_control.merge_queue.snapshot_project_health", new_callable=AsyncMock)
+	async def test_regression_detected_by_snapshot_diff(self, mock_snapshot: AsyncMock) -> None:
+		"""Feature branch with more failures than base is rejected (not neutral)."""
+		db, mr, unit, worker = _db_with_mr()
+		config = _config()
+		queue = MergeQueue(config, db, "/tmp/merge-workspace")
+
+		# Base branch: all passing. Feature: introduces failure
+		before_snap = Snapshot(test_total=10, test_passed=10, test_failed=0)
+		after_snap = Snapshot(test_total=10, test_passed=8, test_failed=2)
+		mock_snapshot.side_effect = [before_snap, after_snap]
+
+		queue._run_git = AsyncMock(return_value=True)
+		queue._fetch_worker_branch = AsyncMock(return_value=True)
+		queue._rebase_onto_base = AsyncMock(return_value=True)
+
+		await queue._process_merge_request(mr)
+
+		row = db.conn.execute("SELECT * FROM merge_requests WHERE id=?", ("mr1",)).fetchone()
+		assert row["status"] == "rejected"
+		assert "Verification failed" in row["rejection_reason"]
+
+		# Unit should be released for retry
+		updated_unit = db.get_work_unit("unit1")
+		assert updated_unit is not None
+		assert updated_unit.status == "pending"
+
+
 class TestRebaseOntoBase:
 	async def test_fetch_origin_before_rebase(self) -> None:
 		"""_rebase_onto_base should fetch origin before rebasing."""
