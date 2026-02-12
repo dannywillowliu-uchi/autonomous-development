@@ -298,7 +298,14 @@ class RoundController:
 		num_workers = self.config.scheduler.parallel.num_workers
 		semaphore = asyncio.Semaphore(num_workers)
 		tasks = [self._execute_single_unit(unit, rnd, semaphore) for unit in units]
-		await asyncio.gather(*tasks, return_exceptions=True)
+		results = await asyncio.gather(*tasks, return_exceptions=True)
+		for i, result in enumerate(results):
+			if isinstance(result, BaseException):
+				unit_id = units[i].id if i < len(units) else "unknown"
+				logger.error(
+					"Unhandled exception in unit %s: %s",
+					unit_id, result, exc_info=(type(result), result, result.__traceback__),
+				)
 
 	async def _execute_single_unit(
 		self,

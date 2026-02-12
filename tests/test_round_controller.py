@@ -7,7 +7,7 @@ import pytest
 from mission_control.config import MissionConfig, RoundsConfig
 from mission_control.db import Database
 from mission_control.green_branch import FixupResult
-from mission_control.models import Handoff, Mission, Plan, PlanNode, WorkUnit
+from mission_control.models import Handoff, Mission, Plan, PlanNode, Round, WorkUnit
 from mission_control.round_controller import (
 	MissionResult,
 	RoundController,
@@ -342,6 +342,34 @@ class TestPersistPlanTree:
 		assert len(units) == 2
 		titles = {u.title for u in units}
 		assert titles == {"API endpoint", "UI component"}
+
+
+class TestExecuteUnitsExceptionLogging:
+	async def test_gather_logs_unhandled_exceptions(
+		self, controller: RoundController, db: Database, mission: Mission, caplog: pytest.LogCaptureFixture,
+	) -> None:
+		"""Unhandled exceptions from asyncio.gather are logged, not silently swallowed."""
+		import logging
+		from unittest.mock import AsyncMock
+
+		db.insert_mission(mission)
+		plan = Plan(objective="test")
+		db.insert_plan(plan)
+		rnd = Round(mission_id=mission.id, number=1)
+		db.insert_round(rnd)
+
+		unit = WorkUnit(plan_id=plan.id, title="Failing unit")
+		db.insert_work_unit(unit)
+
+		# _green_branch is None, so _execute_single_unit will hit an
+		# AssertionError -- this exercises the gather exception logging
+		controller._backend = AsyncMock()
+
+		with caplog.at_level(logging.ERROR, logger="mission_control.round_controller"):
+			await controller._execute_units(plan, rnd)
+
+		# Verify the exception was logged (not silently swallowed)
+		assert any("Unhandled exception" in msg for msg in caplog.messages)
 
 	def test_forced_leaf_persists(self, controller: RoundController, db: Database) -> None:
 		"""Node with _forced_unit (max depth forced leaf) persists correctly."""

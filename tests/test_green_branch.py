@@ -287,6 +287,50 @@ class TestRunFixup:
 		prompt_arg = mgr._run_claude.call_args.args[0]
 		assert malicious_output in prompt_arg
 
+	async def test_promotion_fails_on_ff_merge_failure(self) -> None:
+		"""When ff-only merge fails, run_fixup returns promoted=False."""
+		mgr = _manager()
+		# _run_git succeeds for checkout but fails for merge
+		call_count = 0
+
+		async def _mock_run_git(*args: str) -> tuple[bool, str]:
+			nonlocal call_count
+			call_count += 1
+			if args[0] == "merge" and "--ff-only" in args:
+				return (False, "fatal: Not possible to fast-forward")
+			return (True, "ok\n")
+
+		mgr._run_git = _mock_run_git  # type: ignore[assignment]
+		mgr._run_command = AsyncMock(return_value=(True, "10 passed"))
+
+		result = await mgr.run_fixup()
+
+		assert result.promoted is False
+		assert result.failure_output == "ff-only merge failed"
+
+	async def test_promotion_fails_on_ff_merge_in_fixup_loop(self) -> None:
+		"""When ff-only merge fails inside the fixup loop, returns promoted=False."""
+		mgr = _manager()
+		mgr.config.green_branch.fixup_max_attempts = 1
+
+		async def _mock_run_git(*args: str) -> tuple[bool, str]:
+			if args[0] == "merge" and "--ff-only" in args:
+				return (False, "fatal: Not possible to fast-forward")
+			return (True, "abc123\n")
+
+		mgr._run_git = _mock_run_git  # type: ignore[assignment]
+		mgr._run_command = AsyncMock(side_effect=[
+			(False, "2 failed"),  # initial verification fails
+			(True, "10 passed"),  # re-verification after fixup passes
+		])
+		mgr._run_claude = AsyncMock(return_value=(True, ""))
+
+		result = await mgr.run_fixup()
+
+		assert result.promoted is False
+		assert result.fixup_attempts == 1
+		assert result.failure_output == "ff-only merge failed"
+
 
 class TestGetGreenHash:
 	async def test_returns_hash(self) -> None:

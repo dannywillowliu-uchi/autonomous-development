@@ -93,7 +93,13 @@ class GreenBranchManager:
 		ok, output = await self._run_command(verify_cmd)
 		if ok:
 			await self._run_git("checkout", gb.green_branch)
-			await self._run_git("merge", "--ff-only", gb.working_branch)
+			merge_ok, merge_out = await self._run_git("merge", "--ff-only", gb.working_branch)
+			if not merge_ok:
+				logger.error(
+					"Failed to fast-forward %s to %s: %s",
+					gb.green_branch, gb.working_branch, merge_out,
+				)
+				return FixupResult(promoted=False, failure_output="ff-only merge failed")
 			logger.info("Promoted %s to %s (clean pass)", gb.working_branch, gb.green_branch)
 			return FixupResult(promoted=True)
 
@@ -130,7 +136,16 @@ class GreenBranchManager:
 			ok, output = await self._run_command(verify_cmd)
 			if ok:
 				await self._run_git("checkout", gb.green_branch)
-				await self._run_git("merge", "--ff-only", gb.working_branch)
+				merge_ok, merge_out = await self._run_git("merge", "--ff-only", gb.working_branch)
+				if not merge_ok:
+					logger.error(
+						"Failed to fast-forward %s to %s: %s",
+						gb.green_branch, gb.working_branch, merge_out,
+					)
+					return FixupResult(
+						promoted=False, fixup_attempts=attempt,
+						failure_output="ff-only merge failed",
+					)
 				logger.info(
 					"Promoted %s to %s after %d fixup attempt(s)",
 					gb.working_branch, gb.green_branch, attempt,
