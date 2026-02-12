@@ -93,8 +93,10 @@ async def snapshot_project_health(config: MissionConfig, cwd: str | None = None)
 	ruff_data = _parse_ruff(output)
 	mypy_data = _parse_mypy(output)
 
+	max_raw_chars = config.scheduler.raw_output_max_chars
+
 	raw = {
-		"verification": output[-4000:],
+		"verification": output[-max_raw_chars:],
 	}
 
 	import json

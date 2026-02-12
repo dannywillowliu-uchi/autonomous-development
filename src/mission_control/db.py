@@ -110,6 +110,8 @@ CREATE TABLE IF NOT EXISTS work_units (
 	output_summary TEXT NOT NULL DEFAULT '',
 	attempt INTEGER NOT NULL DEFAULT 0,
 	max_attempts INTEGER NOT NULL DEFAULT 3,
+	timeout INTEGER,
+	verification_command TEXT,
 	FOREIGN KEY (plan_id) REFERENCES plans(id)
 );
 
@@ -494,8 +496,9 @@ class Database:
 			 priority, status, worker_id, round_id, plan_node_id, handoff_id,
 			 depends_on, branch_name,
 			 claimed_at, heartbeat_at, started_at, finished_at,
-			 exit_code, commit_hash, output_summary, attempt, max_attempts)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			 exit_code, commit_hash, output_summary, attempt, max_attempts,
+			 timeout, verification_command)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				unit.id, unit.plan_id, unit.title, unit.description,
 				unit.files_hint, unit.verification_hint, unit.priority,
@@ -504,6 +507,7 @@ class Database:
 				unit.claimed_at, unit.heartbeat_at, unit.started_at,
 				unit.finished_at, unit.exit_code, unit.commit_hash,
 				unit.output_summary, unit.attempt, unit.max_attempts,
+				unit.timeout, unit.verification_command,
 			),
 		)
 		self.conn.commit()
@@ -516,7 +520,8 @@ class Database:
 			round_id=?, plan_node_id=?, handoff_id=?,
 			depends_on=?, branch_name=?, claimed_at=?, heartbeat_at=?,
 			started_at=?, finished_at=?, exit_code=?, commit_hash=?,
-			output_summary=?, attempt=?, max_attempts=?
+			output_summary=?, attempt=?, max_attempts=?,
+			timeout=?, verification_command=?
 			WHERE id=?""",
 			(
 				unit.plan_id, unit.title, unit.description, unit.files_hint,
@@ -525,7 +530,8 @@ class Database:
 				unit.handoff_id, unit.depends_on, unit.branch_name,
 				unit.claimed_at, unit.heartbeat_at, unit.started_at,
 				unit.finished_at, unit.exit_code, unit.commit_hash,
-				unit.output_summary, unit.attempt, unit.max_attempts, unit.id,
+				unit.output_summary, unit.attempt, unit.max_attempts,
+				unit.timeout, unit.verification_command, unit.id,
 			),
 		)
 		self.conn.commit()
@@ -646,6 +652,8 @@ class Database:
 			output_summary=row["output_summary"],
 			attempt=row["attempt"],
 			max_attempts=row["max_attempts"],
+			timeout=row["timeout"],
+			verification_command=row["verification_command"],
 		)
 
 	# -- Workers --

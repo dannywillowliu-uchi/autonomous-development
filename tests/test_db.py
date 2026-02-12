@@ -276,6 +276,42 @@ class TestWorkUnits:
 		recovered = db.recover_stale_units(timeout_seconds=60)
 		assert len(recovered) == 0
 
+	def test_per_unit_overrides_roundtrip(self, db: Database) -> None:
+		"""timeout and verification_command persist through insert/get."""
+		self._make_plan(db)
+		wu = WorkUnit(
+			id="wu_ov", plan_id="plan1", title="Override test",
+			timeout=600, verification_command="make test",
+		)
+		db.insert_work_unit(wu)
+		result = db.get_work_unit("wu_ov")
+		assert result is not None
+		assert result.timeout == 600
+		assert result.verification_command == "make test"
+
+	def test_per_unit_overrides_default_none(self, db: Database) -> None:
+		"""Without overrides, timeout and verification_command are None."""
+		self._make_plan(db)
+		wu = WorkUnit(id="wu_def", plan_id="plan1", title="Default test")
+		db.insert_work_unit(wu)
+		result = db.get_work_unit("wu_def")
+		assert result is not None
+		assert result.timeout is None
+		assert result.verification_command is None
+
+	def test_per_unit_overrides_update(self, db: Database) -> None:
+		"""Overrides can be set via update."""
+		self._make_plan(db)
+		wu = WorkUnit(id="wu_upd", plan_id="plan1", title="Update test")
+		db.insert_work_unit(wu)
+		wu.timeout = 120
+		wu.verification_command = "pytest tests/specific.py"
+		db.update_work_unit(wu)
+		result = db.get_work_unit("wu_upd")
+		assert result is not None
+		assert result.timeout == 120
+		assert result.verification_command == "pytest tests/specific.py"
+
 
 class TestWorkers:
 	def test_insert_and_get(self, db: Database) -> None:

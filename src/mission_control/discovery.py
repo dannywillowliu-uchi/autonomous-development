@@ -74,7 +74,8 @@ def discover_from_snapshot(
 	if not tasks and config.target.objective:
 		recently_attempted = set()
 		if recent_sessions:
-			recently_attempted = {s.task_description for s in recent_sessions[-5:]}
+			lookback = config.scheduler.session_lookback
+			recently_attempted = {s.task_description for s in recent_sessions[-lookback:]}
 
 		objective_desc = f"Work toward objective: {config.target.objective}"
 		if objective_desc not in recently_attempted:

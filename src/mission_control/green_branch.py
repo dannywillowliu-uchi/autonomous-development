@@ -110,10 +110,12 @@ class GreenBranchManager:
 				f"Failures:\n{output}"
 			)
 
+			fixup_budget = self.config.scheduler.budget.fixup_budget_usd
+
 			try:
 				fixup_ok, _ = await self._run_command(
 					f"claude -p --permission-mode bypassPermissions "
-					f"--max-budget-usd 2.0 \"{prompt}\""
+					f"--max-budget-usd {fixup_budget} \"{prompt}\""
 				)
 			except Exception as exc:
 				logger.warning("Fixup agent crashed on attempt %d: %s", attempt, exc)

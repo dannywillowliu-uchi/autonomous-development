@@ -153,3 +153,125 @@ num_workers = 16
 	cfg = load_config(toml)
 	assert cfg.scheduler.parallel.num_workers == 16
 	assert cfg.scheduler.parallel.heartbeat_timeout == 600  # default
+
+
+def test_new_config_field_defaults() -> None:
+	"""New config fields have sensible defaults."""
+	cfg = MissionConfig()
+	assert cfg.scheduler.budget.evaluator_budget_usd == 0.50
+	assert cfg.scheduler.budget.fixup_budget_usd == 2.0
+	assert cfg.scheduler.monitor_interval == 5
+	assert cfg.scheduler.output_summary_max_chars == 500
+	assert cfg.scheduler.polling_interval == 5
+	assert cfg.scheduler.raw_output_max_chars == 4000
+	assert cfg.scheduler.session_lookback == 5
+
+
+def test_new_config_fields_from_toml(tmp_path: Path) -> None:
+	"""New config fields can be loaded from TOML."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[scheduler]
+monitor_interval = 10
+output_summary_max_chars = 1000
+polling_interval = 3
+raw_output_max_chars = 8000
+session_lookback = 10
+
+[scheduler.budget]
+evaluator_budget_usd = 1.0
+fixup_budget_usd = 3.0
+""")
+	cfg = load_config(toml)
+	assert cfg.scheduler.monitor_interval == 10
+	assert cfg.scheduler.output_summary_max_chars == 1000
+	assert cfg.scheduler.polling_interval == 3
+	assert cfg.scheduler.raw_output_max_chars == 8000
+	assert cfg.scheduler.session_lookback == 10
+	assert cfg.scheduler.budget.evaluator_budget_usd == 1.0
+	assert cfg.scheduler.budget.fixup_budget_usd == 3.0
+
+
+def test_rounds_config_defaults() -> None:
+	"""RoundsConfig new fields have sensible defaults."""
+	cfg = MissionConfig()
+	assert cfg.rounds.stall_score_epsilon == 0.01
+	assert cfg.rounds.max_discoveries_per_round == 20
+	assert cfg.rounds.max_discovery_chars == 4000
+	assert cfg.rounds.max_summary_items == 10
+	assert cfg.rounds.timeout_multiplier == 1.2
+
+
+def test_rounds_config_from_toml(tmp_path: Path) -> None:
+	"""RoundsConfig new fields can be loaded from TOML."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[rounds]
+max_rounds = 5
+stall_threshold = 2
+stall_score_epsilon = 0.05
+max_discoveries_per_round = 10
+max_discovery_chars = 2000
+max_summary_items = 5
+timeout_multiplier = 1.5
+""")
+	cfg = load_config(toml)
+	assert cfg.rounds.max_rounds == 5
+	assert cfg.rounds.stall_threshold == 2
+	assert cfg.rounds.stall_score_epsilon == 0.05
+	assert cfg.rounds.max_discoveries_per_round == 10
+	assert cfg.rounds.max_discovery_chars == 2000
+	assert cfg.rounds.max_summary_items == 5
+	assert cfg.rounds.timeout_multiplier == 1.5
+
+
+def test_planner_config_defaults() -> None:
+	"""PlannerConfig new fields have sensible defaults."""
+	cfg = MissionConfig()
+	assert cfg.planner.max_depth == 3
+	assert cfg.planner.absolute_max_depth == 4
+	assert cfg.planner.max_file_tree_chars == 2000
+
+
+def test_planner_max_depth_capped_at_absolute(tmp_path: Path) -> None:
+	"""max_depth is capped at absolute_max_depth."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[planner]
+max_depth = 10
+absolute_max_depth = 6
+""")
+	cfg = load_config(toml)
+	assert cfg.planner.max_depth == 6
+	assert cfg.planner.absolute_max_depth == 6
+
+
+def test_planner_config_from_toml(tmp_path: Path) -> None:
+	"""PlannerConfig new fields can be loaded from TOML."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[planner]
+max_depth = 2
+max_file_tree_chars = 5000
+budget_per_call_usd = 0.5
+""")
+	cfg = load_config(toml)
+	assert cfg.planner.max_depth == 2
+	assert cfg.planner.max_file_tree_chars == 5000
+	assert cfg.planner.budget_per_call_usd == 0.5

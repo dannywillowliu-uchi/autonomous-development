@@ -144,6 +144,8 @@ class WorkUnit:
 	output_summary: str = ""
 	attempt: int = 0
 	max_attempts: int = 3
+	timeout: int | None = None  # per-unit timeout override (seconds)
+	verification_command: str | None = None  # per-unit verification override
 
 
 @dataclass

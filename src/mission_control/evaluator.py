@@ -78,7 +78,7 @@ async def evaluate_objective(
 	cmd = [
 		"claude", "-p",
 		"--output-format", "text",
-		"--max-budget-usd", "0.50",
+		"--max-budget-usd", str(config.scheduler.budget.evaluator_budget_usd),
 		"--model", config.scheduler.model,
 		prompt,
 	]

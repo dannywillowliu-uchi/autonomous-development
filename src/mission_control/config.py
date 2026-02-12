@@ -46,6 +46,8 @@ class BudgetConfig:
 
 	max_per_session_usd: float = 5.0
 	max_per_run_usd: float = 50.0
+	evaluator_budget_usd: float = 0.50
+	fixup_budget_usd: float = 2.0
 
 
 @dataclass
@@ -67,6 +69,11 @@ class SchedulerConfig:
 	cooldown: int = 60
 	max_sessions_per_run: int = 10
 	model: str = "sonnet"
+	monitor_interval: int = 5
+	output_summary_max_chars: int = 500
+	polling_interval: int = 5  # seconds between status checks during execution
+	raw_output_max_chars: int = 4000  # truncation limit for raw verification output
+	session_lookback: int = 5  # recent sessions to check for dedup in discovery
 	git: GitConfig = field(default_factory=GitConfig)
 	budget: BudgetConfig = field(default_factory=BudgetConfig)
 	parallel: ParallelConfig = field(default_factory=ParallelConfig)
@@ -79,15 +86,22 @@ class RoundsConfig:
 	max_rounds: int = 20
 	stall_threshold: int = 3  # rounds with no improvement before stopping
 	cooldown_between_rounds: int = 30  # seconds
+	stall_score_epsilon: float = 0.01  # score delta below which rounds count as stalled
+	max_discoveries_per_round: int = 20
+	max_discovery_chars: int = 4000
+	max_summary_items: int = 10
+	timeout_multiplier: float = 1.2  # applied to session_timeout for outer deadline
 
 
 @dataclass
 class PlannerConfig:
 	"""Recursive planner settings."""
 
-	max_depth: int = 3  # max recursion depth (capped at 4)
+	max_depth: int = 3  # max recursion depth (hard capped at absolute_max_depth)
+	absolute_max_depth: int = 4  # safety cap to prevent runaway recursion
 	max_children_per_node: int = 5
 	budget_per_call_usd: float = 1.0
+	max_file_tree_chars: int = 2000
 
 
 @dataclass
@@ -158,10 +172,9 @@ def _build_git(data: dict[str, Any]) -> GitConfig:
 
 def _build_budget(data: dict[str, Any]) -> BudgetConfig:
 	bc = BudgetConfig()
-	if "max_per_session_usd" in data:
-		bc.max_per_session_usd = float(data["max_per_session_usd"])
-	if "max_per_run_usd" in data:
-		bc.max_per_run_usd = float(data["max_per_run_usd"])
+	for key in ("max_per_session_usd", "max_per_run_usd", "evaluator_budget_usd", "fixup_budget_usd"):
+		if key in data:
+			setattr(bc, key, float(data[key]))
 	return bc
 
 
@@ -177,7 +190,10 @@ def _build_parallel(data: dict[str, Any]) -> ParallelConfig:
 
 def _build_scheduler(data: dict[str, Any]) -> SchedulerConfig:
 	sc = SchedulerConfig()
-	for key in ("session_timeout", "cooldown", "max_sessions_per_run"):
+	for key in (
+		"session_timeout", "cooldown", "max_sessions_per_run", "monitor_interval",
+		"output_summary_max_chars", "polling_interval", "raw_output_max_chars", "session_lookback",
+	):
 		if key in data:
 			setattr(sc, key, int(data[key]))
 	if "model" in data:
@@ -193,21 +209,27 @@ def _build_scheduler(data: dict[str, Any]) -> SchedulerConfig:
 
 def _build_rounds(data: dict[str, Any]) -> RoundsConfig:
 	rc = RoundsConfig()
-	for key in ("max_rounds", "stall_threshold", "cooldown_between_rounds"):
+	for key in (
+		"max_rounds", "stall_threshold", "cooldown_between_rounds",
+		"max_discoveries_per_round", "max_discovery_chars", "max_summary_items",
+	):
 		if key in data:
 			setattr(rc, key, int(data[key]))
+	for key in ("stall_score_epsilon", "timeout_multiplier"):
+		if key in data:
+			setattr(rc, key, float(data[key]))
 	return rc
 
 
 def _build_planner_config(data: dict[str, Any]) -> PlannerConfig:
 	pc = PlannerConfig()
-	for key in ("max_depth", "max_children_per_node"):
+	for key in ("max_depth", "absolute_max_depth", "max_children_per_node", "max_file_tree_chars"):
 		if key in data:
 			setattr(pc, key, int(data[key]))
 	if "budget_per_call_usd" in data:
 		pc.budget_per_call_usd = float(data["budget_per_call_usd"])
-	# Hard cap max_depth at 4 to prevent runaway recursion
-	pc.max_depth = min(pc.max_depth, 4)
+	# Hard cap max_depth at absolute_max_depth to prevent runaway recursion
+	pc.max_depth = min(pc.max_depth, pc.absolute_max_depth)
 	return pc
 
 

@@ -56,14 +56,11 @@ Rules:
 - Include verification criteria for each unit
 """
 
-_MAX_FILE_TREE_CHARS = 2000
-
-
 async def create_plan(config: MissionConfig, snapshot: Snapshot, db: Database) -> Plan:
 	"""Run planner agent and create a Plan with WorkUnits."""
 	cwd = str(config.target.resolved_path)
 
-	file_tree = await _get_file_tree(cwd)
+	file_tree = await _get_file_tree(cwd, max_chars=config.planner.max_file_tree_chars)
 
 	# Build discovered issues summary from snapshot
 	issues: list[str] = []
@@ -92,7 +89,7 @@ async def create_plan(config: MissionConfig, snapshot: Snapshot, db: Database) -
 		"claude",
 		"-p",
 		"--output-format", "text",
-		"--max-budget-usd", "2.0",
+		"--max-budget-usd", str(config.planner.budget_per_call_usd),
 		prompt,
 	]
 
@@ -176,7 +173,7 @@ def _parse_plan_output(output: str, plan_id: str) -> list[WorkUnit]:
 	return units
 
 
-async def _get_file_tree(cwd: str | Path, max_depth: int = 3) -> str:
+async def _get_file_tree(cwd: str | Path, max_depth: int = 3, max_chars: int = 2000) -> str:
 	"""Get a truncated file tree of the project."""
 	try:
 		proc = await asyncio.create_subprocess_exec(
@@ -196,6 +193,6 @@ async def _get_file_tree(cwd: str | Path, max_depth: int = 3) -> str:
 	except OSError:
 		return "(file tree unavailable)"
 
-	if len(tree) > _MAX_FILE_TREE_CHARS:
-		tree = tree[:_MAX_FILE_TREE_CHARS] + "\n... (truncated)"
+	if len(tree) > max_chars:
+		tree = tree[:max_chars] + "\n... (truncated)"
 	return tree

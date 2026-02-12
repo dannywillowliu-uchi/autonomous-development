@@ -10,7 +10,7 @@ from mission_control.backends.base import WorkerBackend, WorkerHandle
 from mission_control.config import MissionConfig, TargetConfig, VerificationConfig
 from mission_control.db import Database
 from mission_control.models import Mission, Plan, Round, Worker, WorkUnit
-from mission_control.worker import WorkerAgent, render_worker_prompt
+from mission_control.worker import WorkerAgent, render_mission_worker_prompt, render_worker_prompt
 
 
 class MockBackend(WorkerBackend):
@@ -111,6 +111,32 @@ class TestRenderWorkerPrompt:
 		unit = WorkUnit(title="X")
 		prompt = render_worker_prompt(unit, config, "/tmp/clone", "mc/unit-x")
 		assert "Not specified" in prompt
+
+	def test_per_unit_verification_command_override(self, config: MissionConfig) -> None:
+		"""Per-unit verification_command overrides config default."""
+		unit = WorkUnit(title="X", verification_command="make test-specific")
+		prompt = render_worker_prompt(unit, config, "/tmp/clone", "mc/unit-x")
+		assert "make test-specific" in prompt
+		assert "pytest -q" not in prompt
+
+	def test_per_unit_verification_command_none_uses_config(self, config: MissionConfig) -> None:
+		"""When verification_command is None, falls back to config."""
+		unit = WorkUnit(title="X")
+		prompt = render_worker_prompt(unit, config, "/tmp/clone", "mc/unit-x")
+		assert "pytest -q" in prompt
+
+
+class TestRenderMissionWorkerPrompt:
+	def test_uses_config_verification_by_default(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Fix bug", description="Fix the thing")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "pytest -q" in prompt
+
+	def test_per_unit_verification_override(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Fix bug", verification_command="npm test")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "npm test" in prompt
+		assert "pytest -q" not in prompt
 
 
 class TestWorkerAgent:

@@ -176,6 +176,18 @@ class TestShouldStop:
 		result = controller._should_stop(mission, [0.5, 0.5, 0.5])
 		assert result == "user_stopped"
 
+	def test_custom_stall_epsilon(self, db: Database, mission: Mission) -> None:
+		"""Custom stall_score_epsilon changes stall sensitivity."""
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(max_rounds=10, stall_threshold=3, stall_score_epsilon=0.05)
+		ctrl = RoundController(cfg, db)
+
+		# Spread of 0.02 would not trigger default (0.01), but is < custom 0.05
+		mission.total_rounds = 0
+		scores = [0.5, 0.5, 0.52]
+		result = ctrl._should_stop(mission, scores)
+		assert result == "stalled"
+
 
 # -- stop() --
 

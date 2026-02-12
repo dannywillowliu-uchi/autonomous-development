@@ -29,9 +29,6 @@ from mission_control.worker import render_mission_worker_prompt
 
 logger = logging.getLogger(__name__)
 
-MONITOR_INTERVAL = 5
-MAX_DISCOVERY_CHARS = 4000
-
 
 @dataclass
 class MissionResult:
@@ -201,7 +198,7 @@ class RoundController:
 		result = RoundResult(round_id=rnd.id, number=round_number)
 
 		# 1. Recursive planning
-		curated_discoveries = _curate_discoveries(prior_discoveries)
+		curated_discoveries = _curate_discoveries(prior_discoveries, self.config.rounds.max_discovery_chars)
 		plan, root_node = await self._planner.plan_round(
 			objective=mission.objective,
 			snapshot_hash=rnd.snapshot_hash,
@@ -261,7 +258,8 @@ class RoundController:
 		# 6. Finalize round
 		rnd.objective_score = evaluation.score
 		rnd.objective_met = evaluation.met
-		rnd.discoveries = json.dumps(all_discoveries[:20])
+		max_disc = self.config.rounds.max_discoveries_per_round
+		rnd.discoveries = json.dumps(all_discoveries[:max_disc])
 		rnd.status = "completed"
 		rnd.finished_at = _now_iso()
 
@@ -350,19 +348,22 @@ class RoundController:
 			]
 
 			try:
+				# Use per-unit timeout if set, otherwise global
+				effective_timeout = unit.timeout or self.config.scheduler.session_timeout
 				handle = await self._backend.spawn(
 					unit.id, workspace, cmd,
-					timeout=self.config.scheduler.session_timeout,
+					timeout=effective_timeout,
 				)
 
 				# Wait for completion with timeout
-				timeout = int(self.config.scheduler.session_timeout * 1.2)
+				timeout = int(effective_timeout * self.config.rounds.timeout_multiplier)
+				monitor_interval = self.config.scheduler.monitor_interval
 				start = time.monotonic()
 				while time.monotonic() - start < timeout:
 					status = await self._backend.check_status(handle)
 					if status != "running":
 						break
-					await asyncio.sleep(5)
+					await asyncio.sleep(monitor_interval)
 				else:
 					await self._backend.kill(handle)
 					unit.status = "failed"
@@ -397,7 +398,8 @@ class RoundController:
 					unit.handoff_id = handoff.id
 				else:
 					unit_status = "completed" if status == "completed" else "failed"
-					unit.output_summary = output[-500:] if output else "No output"
+					max_chars = self.config.scheduler.output_summary_max_chars
+					unit.output_summary = output[-max_chars:] if output else "No output"
 
 				if unit_status == "completed" and unit.commit_hash:
 					unit.status = "completed"
@@ -451,11 +453,11 @@ class RoundController:
 		if mission.total_rounds >= self.config.rounds.max_rounds:
 			return "max_rounds"
 
-		# Stall detection: N rounds with < 0.01 score improvement
+		# Stall detection: N rounds with negligible score improvement
 		threshold = self.config.rounds.stall_threshold
 		if len(scores) >= threshold:
 			recent = scores[-threshold:]
-			if max(recent) - min(recent) < 0.01:
+			if max(recent) - min(recent) < self.config.rounds.stall_score_epsilon:
 				return "stalled"
 
 		return ""
@@ -473,9 +475,10 @@ class RoundController:
 		failed = sum(1 for h in handoffs if h.status == "failed")
 		parts.append(f"Execution: {completed} completed, {failed} failed")
 
+		max_items = self.config.rounds.max_summary_items
 		summaries = [h.summary for h in handoffs if h.summary]
 		if summaries:
-			parts.append("Work done:\n" + "\n".join(f"- {s}" for s in summaries[:10]))
+			parts.append("Work done:\n" + "\n".join(f"- {s}" for s in summaries[:max_items]))
 
 		if fixup_result.promoted:
 			parts.append(
@@ -490,7 +493,7 @@ class RoundController:
 		self.running = False
 
 
-def _curate_discoveries(discoveries: list[str], max_chars: int = MAX_DISCOVERY_CHARS) -> list[str]:
+def _curate_discoveries(discoveries: list[str], max_chars: int = 4000) -> list[str]:
 	"""Curate discoveries to fit within budget."""
 	if not discoveries:
 		return []

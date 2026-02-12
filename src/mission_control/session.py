@@ -206,7 +206,8 @@ async def spawn_session(
 			session.commit_hash = str(commits[0])
 	else:
 		session.status = "completed" if session.exit_code == 0 else "failed"
-		session.output_summary = output[-500:]
+		max_chars = config.scheduler.output_summary_max_chars
+		session.output_summary = output[-max_chars:]
 
 	session.finished_at = datetime.now(timezone.utc).isoformat()
 	return session

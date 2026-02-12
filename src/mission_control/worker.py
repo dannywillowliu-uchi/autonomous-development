@@ -67,6 +67,7 @@ def render_worker_prompt(
 	context: str = "",
 ) -> str:
 	"""Render the prompt template for a worker session."""
+	verify_cmd = unit.verification_command or config.target.verification.command
 	return WORKER_PROMPT_TEMPLATE.format(
 		target_name=config.target.name,
 		workspace_path=workspace_path,
@@ -80,7 +81,7 @@ def render_worker_prompt(
 		branch_name=branch_name,
 		verification_hint=unit.verification_hint or "Run full verification suite",
 		context_block=context or "No additional context.",
-		verification_command=config.target.verification.command,
+		verification_command=verify_cmd,
 	)
 
 
@@ -140,13 +141,14 @@ def render_mission_worker_prompt(
 	context: str = "",
 ) -> str:
 	"""Render constraint-based prompt for mission mode workers."""
+	verify_cmd = unit.verification_command or config.target.verification.command
 	return MISSION_WORKER_PROMPT_TEMPLATE.format(
 		target_name=config.target.name,
 		workspace_path=workspace_path,
 		title=unit.title,
 		description=unit.description,
 		files_hint=unit.files_hint or "Not specified",
-		verification_command=config.target.verification.command,
+		verification_command=verify_cmd,
 		context_block=context or "No additional context.",
 	)
 
@@ -202,7 +204,7 @@ class WorkerAgent:
 		while self.running:
 			unit = self.db.claim_work_unit(self.worker.id)
 			if unit is None:
-				await asyncio.sleep(2)
+				await asyncio.sleep(self.config.scheduler.polling_interval)
 				continue
 
 			self.worker.status = "working"
@@ -259,18 +261,19 @@ class WorkerAgent:
 				prompt,
 			]
 
-			# Spawn via backend
+			# Spawn via backend -- use per-unit timeout if set
+			effective_timeout = unit.timeout or self.config.scheduler.session_timeout
 			handle = await self.backend.spawn(
 				worker_id=self.worker.id,
 				workspace_path=workspace_path,
 				command=cmd,
-				timeout=self.config.scheduler.session_timeout,
+				timeout=effective_timeout,
 			)
 			self._current_handle = handle
 
 			# Wait for completion
 			try:
-				deadline = asyncio.get_event_loop().time() + self.config.scheduler.session_timeout
+				deadline = asyncio.get_event_loop().time() + effective_timeout
 				while True:
 					status = await self.backend.check_status(handle)
 					if status != "running":
@@ -278,12 +281,12 @@ class WorkerAgent:
 					if asyncio.get_event_loop().time() > deadline:
 						await self.backend.kill(handle)
 						unit.status = "failed"
-						unit.output_summary = f"Timed out after {self.config.scheduler.session_timeout}s"
+						unit.output_summary = f"Timed out after {effective_timeout}s"
 						unit.finished_at = _now_iso()
 						self.db.update_work_unit(unit)
 						self.worker.units_failed += 1
 						return
-					await asyncio.sleep(2)
+					await asyncio.sleep(self.config.scheduler.polling_interval)
 
 				output = await self.backend.get_output(handle)
 				unit.exit_code = 0 if status == "completed" else 1
@@ -312,7 +315,8 @@ class WorkerAgent:
 				unit.handoff_id = handoff.id
 			else:
 				result_status = "completed" if unit.exit_code == 0 else "failed"
-				unit.output_summary = output[-500:]
+				max_chars = self.config.scheduler.output_summary_max_chars
+				unit.output_summary = output[-max_chars:]
 
 			if result_status == "completed" and unit.commit_hash:
 				unit.status = "completed"
