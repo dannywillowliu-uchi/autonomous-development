@@ -559,3 +559,84 @@ class TestBlockedUnitStatus:
 		assert refreshed is not None
 		assert refreshed.status == "failed"
 		assert refreshed.attempt == 1  # Incremented
+
+
+class TestMergeToWorkingFailureMarksUnitFailed:
+	"""When merge_to_working fails, the unit should be marked failed, not completed."""
+
+	async def test_merge_failure_marks_unit_failed(
+		self, controller: RoundController, db: Database, mission: Mission,
+	) -> None:
+		"""Unit completes with commits but merge_to_working returns False -- unit should be failed."""
+		import asyncio
+		from unittest.mock import AsyncMock
+
+		db.insert_mission(mission)
+		plan = Plan(objective="test")
+		db.insert_plan(plan)
+		rnd = Round(mission_id=mission.id, number=1)
+		db.insert_round(rnd)
+
+		unit = WorkUnit(plan_id=plan.id, title="Merge conflict unit", attempt=0, max_attempts=3)
+		db.insert_work_unit(unit)
+
+		mock_backend = AsyncMock()
+		mock_backend.provision_workspace = AsyncMock(return_value="/tmp/ws")
+		mock_backend.spawn = AsyncMock()
+		mock_backend.check_status = AsyncMock(return_value="completed")
+		mock_backend.get_output = AsyncMock(
+			return_value='MC_RESULT:{"status":"completed","summary":"Added feature","commits":["abc123"]}'
+		)
+		mock_backend.release_workspace = AsyncMock()
+		controller._backend = mock_backend
+
+		mock_gb = AsyncMock()
+		mock_gb.merge_to_working = AsyncMock(return_value=False)
+		controller._green_branch = mock_gb
+
+		sem = asyncio.Semaphore(1)
+		await controller._execute_single_unit(unit, rnd, sem)
+
+		refreshed = db.get_work_unit(unit.id)
+		assert refreshed is not None
+		assert refreshed.status == "failed"
+		assert refreshed.attempt == 1  # Incremented on merge failure
+		assert "merge" in refreshed.output_summary.lower()
+
+	async def test_merge_success_marks_unit_completed(
+		self, controller: RoundController, db: Database, mission: Mission,
+	) -> None:
+		"""Unit completes with commits and merge_to_working succeeds -- unit should be completed."""
+		import asyncio
+		from unittest.mock import AsyncMock
+
+		db.insert_mission(mission)
+		plan = Plan(objective="test")
+		db.insert_plan(plan)
+		rnd = Round(mission_id=mission.id, number=1)
+		db.insert_round(rnd)
+
+		unit = WorkUnit(plan_id=plan.id, title="Successful unit", attempt=0, max_attempts=3)
+		db.insert_work_unit(unit)
+
+		mock_backend = AsyncMock()
+		mock_backend.provision_workspace = AsyncMock(return_value="/tmp/ws")
+		mock_backend.spawn = AsyncMock()
+		mock_backend.check_status = AsyncMock(return_value="completed")
+		mock_backend.get_output = AsyncMock(
+			return_value='MC_RESULT:{"status":"completed","summary":"Added feature","commits":["abc123"]}'
+		)
+		mock_backend.release_workspace = AsyncMock()
+		controller._backend = mock_backend
+
+		mock_gb = AsyncMock()
+		mock_gb.merge_to_working = AsyncMock(return_value=True)
+		controller._green_branch = mock_gb
+
+		sem = asyncio.Semaphore(1)
+		await controller._execute_single_unit(unit, rnd, sem)
+
+		refreshed = db.get_work_unit(unit.id)
+		assert refreshed is not None
+		assert refreshed.status == "completed"
+		assert refreshed.attempt == 0  # NOT incremented on success
