@@ -191,3 +191,95 @@ class TestScheduler:
 		assert len(captured_previous) == 1
 		assert captured_previous[0] is not None
 		assert captured_previous[0].id == "prior-snap"
+
+	@pytest.mark.asyncio
+	async def test_failed_delete_branch_sets_revert_failed(self) -> None:
+		"""Failed delete_branch sets session status to revert_failed."""
+		config = _config()
+		db = Database(":memory:")
+
+		call_count = 0
+
+		async def mock_snapshot(_cfg: MissionConfig) -> Snapshot:
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				return Snapshot(test_total=10, test_passed=10, test_failed=0)
+			# After session: worse results trigger revert
+			return Snapshot(test_total=10, test_passed=8, test_failed=2)
+
+		mock_recover_proc = AsyncMock()
+		mock_recover_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+		with (
+			patch("mission_control.scheduler.snapshot_project_health", side_effect=mock_snapshot),
+			patch("mission_control.scheduler.spawn_session", new_callable=AsyncMock) as mock_spawn,
+			patch("mission_control.scheduler.delete_branch", new_callable=AsyncMock) as mock_delete,
+			patch("mission_control.scheduler.merge_branch", new_callable=AsyncMock),
+			patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec,
+		):
+			mock_spawn.return_value = _session()
+			mock_delete.return_value = False  # delete_branch fails
+			mock_exec.return_value = mock_recover_proc
+
+			scheduler = Scheduler(config, db)
+			report = await scheduler.run(max_sessions=1)
+
+		assert report.sessions_run == 1
+		# Verify the session was persisted with revert_failed status
+		sessions = db.get_recent_sessions(1)
+		assert sessions[0].status == "revert_failed"
+
+	@pytest.mark.asyncio
+	async def test_failed_merge_branch_sets_merge_failed(self) -> None:
+		"""Failed merge_branch sets session status to merge_failed."""
+		config = _config()
+		config.scheduler.git.auto_merge = True
+		db = Database(":memory:")
+
+		call_count = 0
+
+		async def mock_snapshot(_cfg: MissionConfig) -> Snapshot:
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				return Snapshot(test_total=10, test_passed=8, test_failed=2)
+			# After session: improvement triggers merge
+			return Snapshot(test_total=10, test_passed=10, test_failed=0)
+
+		with (
+			patch("mission_control.scheduler.snapshot_project_health", side_effect=mock_snapshot),
+			patch("mission_control.scheduler.spawn_session", new_callable=AsyncMock) as mock_spawn,
+			patch("mission_control.scheduler.delete_branch", new_callable=AsyncMock),
+			patch("mission_control.scheduler.merge_branch", new_callable=AsyncMock) as mock_merge,
+		):
+			mock_spawn.return_value = _session()
+			mock_merge.return_value = False  # merge_branch fails
+
+			scheduler = Scheduler(config, db)
+			report = await scheduler.run(max_sessions=1)
+
+		assert report.sessions_run == 1
+		sessions = db.get_recent_sessions(1)
+		assert sessions[0].status == "merge_failed"
+
+	@pytest.mark.asyncio
+	async def test_spawn_session_oserror_caught(self) -> None:
+		"""OSError from spawn_session is caught and scheduler stops gracefully."""
+		config = _config()
+		db = Database(":memory:")
+
+		async def mock_snapshot(_cfg: MissionConfig) -> Snapshot:
+			return Snapshot(test_total=10, test_passed=8, test_failed=2)
+
+		with (
+			patch("mission_control.scheduler.snapshot_project_health", side_effect=mock_snapshot),
+			patch("mission_control.scheduler.spawn_session", new_callable=AsyncMock) as mock_spawn,
+		):
+			mock_spawn.side_effect = OSError("No such file or directory: 'claude'")
+
+			scheduler = Scheduler(config, db)
+			report = await scheduler.run(max_sessions=3)
+
+		assert report.sessions_run == 0
+		assert report.stopped_reason == "spawn_error"

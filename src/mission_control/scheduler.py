@@ -74,7 +74,12 @@ class Scheduler:
 			context = load_context(task, self.db, self.config)
 
 			# Spawn session
-			session = await spawn_session(task, before, self.config, context)
+			try:
+				session = await spawn_session(task, before, self.config, context)
+			except (OSError, FileNotFoundError) as exc:
+				logger.error("Failed to spawn session: %s", exc)
+				report.stopped_reason = "spawn_error"
+				break
 
 			# Take after snapshot
 			after = await snapshot_project_health(self.config)
@@ -90,10 +95,25 @@ class Scheduler:
 			# Act on verdict
 			cwd = str(self.config.target.resolved_path)
 			if verdict.should_revert:
-				await delete_branch(session.branch_name, self.config.target.branch, cwd)
-				session.status = "reverted"
+				reverted = await delete_branch(session.branch_name, self.config.target.branch, cwd)
+				if reverted:
+					session.status = "reverted"
+				else:
+					logger.error("Failed to delete branch %s, attempting checkout recovery", session.branch_name)
+					session.status = "revert_failed"
+					# Attempt to at least get back to the base branch
+					recover = await asyncio.create_subprocess_exec(
+						"git", "checkout", self.config.target.branch,
+						cwd=cwd,
+						stdout=asyncio.subprocess.PIPE,
+						stderr=asyncio.subprocess.STDOUT,
+					)
+					await recover.communicate()
 			elif verdict.should_merge:
-				await merge_branch(session.branch_name, self.config.target.branch, cwd)
+				merged = await merge_branch(session.branch_name, self.config.target.branch, cwd)
+				if not merged:
+					logger.error("Failed to merge branch %s into %s", session.branch_name, self.config.target.branch)
+					session.status = "merge_failed"
 
 			# Update session summary
 			session.output_summary = summarize_session(session, verdict)
