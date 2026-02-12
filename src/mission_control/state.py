@@ -28,7 +28,8 @@ def _parse_pytest(output: str) -> dict[str, int]:
 		failed = int(failed_m.group(1))
 
 	errors = int(error_m.group(1)) if error_m else 0
-	total = passed + failed + errors
+	failed += errors
+	total = passed + failed
 
 	return {"test_total": total, "test_passed": passed, "test_failed": failed}
 

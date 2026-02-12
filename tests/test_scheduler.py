@@ -156,3 +156,40 @@ class TestScheduler:
 		assert report.sessions_run == 0
 		assert report.total_cost_usd == 0.0
 		assert report.stopped_reason == ""
+
+	@pytest.mark.asyncio
+	async def test_previous_snapshot_is_from_prior_run(self) -> None:
+		"""previous snapshot should be from the prior run, not the just-inserted before."""
+		config = _config()
+		db = Database(":memory:")
+
+		# Insert a "prior run" snapshot first
+		prior = Snapshot(id="prior-snap", test_total=5, test_passed=3, test_failed=2)
+		db.insert_snapshot(prior)
+
+		captured_previous: list[Snapshot | None] = []
+
+		call_count = 0
+
+		async def mock_snapshot(_cfg: MissionConfig) -> Snapshot:
+			nonlocal call_count
+			call_count += 1
+			return Snapshot(test_total=10, test_passed=10, test_failed=0)
+
+		original_discover = None
+
+		def mock_discover(before, cfg, recent, previous):
+			captured_previous.append(previous)
+			return []  # no work -> stop
+
+		with (
+			patch("mission_control.scheduler.snapshot_project_health", side_effect=mock_snapshot),
+			patch("mission_control.scheduler.discover_from_snapshot", side_effect=mock_discover),
+		):
+			scheduler = Scheduler(config, db)
+			await scheduler.run(max_sessions=1)
+
+		# previous should be the prior snapshot, NOT the just-inserted before
+		assert len(captured_previous) == 1
+		assert captured_previous[0] is not None
+		assert captured_previous[0].id == "prior-snap"

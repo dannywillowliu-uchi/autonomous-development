@@ -38,6 +38,15 @@ class TestParsePytest:
 		result = _parse_pytest(output)
 		assert result["test_total"] == 5
 		assert result["test_passed"] == 3
+		# errors are included in test_failed count
+		assert result["test_failed"] == 2
+
+	def test_errors_only(self) -> None:
+		"""Errors with no failures should still result in nonzero test_failed."""
+		output = "2 passed, 1 error in 0.05s"
+		result = _parse_pytest(output)
+		assert result["test_total"] == 3
+		assert result["test_passed"] == 2
 		assert result["test_failed"] == 1
 
 	def test_no_tests(self) -> None:

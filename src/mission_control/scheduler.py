@@ -52,11 +52,14 @@ class Scheduler:
 		while self.running and report.sessions_run < max_sessions:
 			# Take health snapshot
 			before = await snapshot_project_health(self.config)
+
+			# Get previous snapshot BEFORE inserting the new one,
+			# otherwise get_latest_snapshot returns the just-inserted before
+			previous = self.db.get_latest_snapshot()
 			self.db.insert_snapshot(before)
 
 			# Discover work
 			recent = self.db.get_recent_sessions(10)
-			previous = self.db.get_latest_snapshot()
 			tasks = discover_from_snapshot(before, self.config, recent, previous)
 
 			if not tasks:
