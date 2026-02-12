@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from typing import Any
 
@@ -98,8 +99,6 @@ async def snapshot_project_health(config: MissionConfig, cwd: str | None = None)
 	raw = {
 		"verification": output[-max_raw_chars:],
 	}
-
-	import json
 
 	return Snapshot(
 		test_total=pytest_data["test_total"],

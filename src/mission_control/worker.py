@@ -85,7 +85,7 @@ def render_worker_prompt(
 	)
 
 
-def _parse_handoff(mc_result: dict[str, object], unit: WorkUnit, round_id: str) -> Handoff:
+def _build_handoff(mc_result: dict[str, object], work_unit_id: str, round_id: str) -> Handoff:
 	"""Build a Handoff from parsed MC_RESULT data."""
 	commits = mc_result.get("commits", [])
 	discoveries = mc_result.get("discoveries", [])
@@ -93,7 +93,7 @@ def _parse_handoff(mc_result: dict[str, object], unit: WorkUnit, round_id: str) 
 	files_changed = mc_result.get("files_changed", [])
 
 	return Handoff(
-		work_unit_id=unit.id,
+		work_unit_id=work_unit_id,
 		round_id=round_id,
 		status=str(mc_result.get("status", "completed")),
 		commits=json.dumps(commits) if isinstance(commits, list) else "[]",
@@ -161,22 +161,7 @@ def parse_handoff(output: str, work_unit_id: str, round_id: str) -> Handoff | No
 	mc_result = parse_mc_result(output)
 	if mc_result is None:
 		return None
-
-	commits = mc_result.get("commits", [])
-	discoveries = mc_result.get("discoveries", [])
-	concerns = mc_result.get("concerns", [])
-	files_changed = mc_result.get("files_changed", [])
-
-	return Handoff(
-		work_unit_id=work_unit_id,
-		round_id=round_id,
-		status=str(mc_result.get("status", "completed")),
-		commits=json.dumps(commits) if isinstance(commits, list) else "[]",
-		summary=str(mc_result.get("summary", "")),
-		discoveries=json.dumps(discoveries) if isinstance(discoveries, list) else "[]",
-		concerns=json.dumps(concerns) if isinstance(concerns, list) else "[]",
-		files_changed=json.dumps(files_changed) if isinstance(files_changed, list) else "[]",
-	)
+	return _build_handoff(mc_result, work_unit_id, round_id)
 
 
 class WorkerAgent:
@@ -310,7 +295,7 @@ class WorkerAgent:
 					unit.commit_hash = str(commits[0])
 
 				# Create enhanced handoff record
-				handoff = _parse_handoff(mc_result, unit, round_id=unit.round_id or "")
+				handoff = _build_handoff(mc_result, unit.id, round_id=unit.round_id or "")
 				self.db.insert_handoff(handoff)
 				unit.handoff_id = handoff.id
 			else:
