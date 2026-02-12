@@ -808,6 +808,19 @@ class Database:
 			return None
 		return self._row_to_merge_request(row)
 
+	def get_processed_merge_requests_for_worker(self, worker_id: str) -> list[MergeRequest]:
+		"""Get merge requests for a worker that have been processed (merged/rejected/conflict).
+
+		These are MRs whose branches can safely be cleaned up from the worker workspace.
+		"""
+		rows = self.conn.execute(
+			"""SELECT * FROM merge_requests
+			WHERE worker_id = ? AND status IN ('merged', 'rejected', 'conflict')
+			ORDER BY position ASC""",
+			(worker_id,),
+		).fetchall()
+		return [self._row_to_merge_request(r) for r in rows]
+
 	def get_merge_requests_for_plan(self, plan_id: str) -> list[MergeRequest]:
 		"""Get all merge requests for work units in a plan."""
 		rows = self.conn.execute(

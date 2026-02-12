@@ -202,6 +202,21 @@ class WorkerAgent:
 			self.worker.current_unit_id = None
 			await self.db.locked_call("update_worker", self.worker)
 
+	async def _cleanup_merged_branches(self, workspace_path: str) -> None:
+		"""Delete feature branches for MRs that have been processed by the merge queue.
+
+		Called before starting a new unit to prevent stale branches from accumulating.
+		Only deletes branches for MRs in terminal states (merged/rejected/conflict),
+		which means the merge queue has already fetched them.
+		"""
+		processed_mrs: list[MergeRequest] = await self.db.locked_call(
+			"get_processed_merge_requests_for_worker", self.worker.id,
+		)
+		for mr in processed_mrs:
+			if mr.branch_name:
+				if not await self._run_git("branch", "-D", mr.branch_name, cwd=workspace_path):
+					logger.debug("Branch %s already cleaned up in %s", mr.branch_name, workspace_path)
+
 	async def _execute_unit(self, unit: WorkUnit) -> None:
 		"""Execute a single work unit via backend: provision, spawn, collect."""
 		branch_name = f"mc/unit-{unit.id}"
@@ -224,6 +239,9 @@ class WorkerAgent:
 				)
 				self.worker.workspace_path = workspace_path
 				await self.db.locked_call("update_worker", self.worker)
+
+			# Clean up branches from previously processed MRs (deferred cleanup)
+			await self._cleanup_merged_branches(workspace_path)
 
 			# Create branch in workspace (try -b, fallback to -B for retry)
 			if not await self._run_git("checkout", "-b", branch_name, cwd=workspace_path):

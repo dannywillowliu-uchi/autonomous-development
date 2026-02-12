@@ -316,6 +316,218 @@ class TestWorkerAgent:
 		assert "Failed to create branch" in result.output_summary
 		assert w.units_failed == 1
 
+	async def test_large_output_drains_stdout_during_polling(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""WorkerAgent drains stdout during polling to prevent pipe deadlock for >64KB output."""
+		w, _ = worker_and_unit
+
+		# Simulate a process that produces >64KB of output
+		large_output = "x" * 100_000  # 100KB of output
+		mc_line = (
+			'MC_RESULT:{"status":"completed","commits":["abc123"],'
+			'"summary":"Fixed it","files_changed":["foo.py"]}'
+		)
+		full_output = large_output + "\n" + mc_line
+
+		# Track get_output calls to verify draining happens during polling
+		get_output_call_count = 0
+		check_status_call_count = 0
+
+		async def mock_check_status(handle: WorkerHandle) -> str:
+			nonlocal check_status_call_count
+			check_status_call_count += 1
+			# Simulate running for a few iterations, then completed
+			if check_status_call_count < 3:
+				return "running"
+			return "completed"
+
+		async def mock_get_output(handle: WorkerHandle) -> str:
+			nonlocal get_output_call_count
+			get_output_call_count += 1
+			return full_output
+
+		mock_backend.check_status = mock_check_status  # type: ignore[method-assign]
+		mock_backend.get_output = mock_get_output  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		mock_git_proc = AsyncMock()
+		mock_git_proc.communicate = AsyncMock(return_value=(b"", b""))
+		mock_git_proc.returncode = 0
+
+		with patch("mission_control.worker.asyncio.create_subprocess_exec", return_value=mock_git_proc):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# get_output should have been called during polling (at least once while running)
+		# plus once after completion = at least 3 calls total (2 running + 1 final)
+		assert get_output_call_count >= 3, (
+			f"Expected get_output called during polling, got {get_output_call_count} calls"
+		)
+
+		# Unit should complete successfully
+		result = db.get_work_unit("wu1")
+		assert result is not None
+		assert result.status == "completed"
+
+	async def test_branch_exists_until_merge_queue_processes(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""After MR submission, feature branch is NOT deleted -- merge queue needs to fetch it."""
+		w, _ = worker_and_unit
+
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":["abc123"],'
+			'"summary":"Fixed it","files_changed":["foo.py"]}'
+		)
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def tracking_run_git(*args: str, cwd: str) -> bool:
+			git_calls.append(args)
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=tracking_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# MR should be pending (not yet processed by merge queue)
+		mr = db.get_next_merge_request()
+		assert mr is not None
+		assert mr.status == "pending"
+
+		# No branch -D calls should have happened on the success path
+		delete_calls = [c for c in git_calls if c[0] == "branch" and c[1] == "-D"]
+		assert len(delete_calls) == 0, f"Branch should NOT be deleted before merge queue fetches: {git_calls}"
+
+	async def test_cleanup_deletes_branches_for_processed_mrs(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""_cleanup_merged_branches deletes branches for MRs that have been processed."""
+		w, _ = worker_and_unit
+
+		# Insert a processed (merged) MR for this worker
+		from mission_control.models import MergeRequest
+		mr = MergeRequest(
+			id="mr-old",
+			work_unit_id="wu1",
+			worker_id=w.id,
+			branch_name="mc/unit-old",
+			commit_hash="def456",
+			status="merged",
+		)
+		db.insert_merge_request(mr)
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def tracking_run_git(*args: str, cwd: str) -> bool:
+			git_calls.append(args)
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=tracking_run_git):
+			await agent._cleanup_merged_branches("/tmp/clone1")  # noqa: SLF001
+
+		# Should delete the old branch
+		delete_calls = [c for c in git_calls if c[0] == "branch" and c[1] == "-D"]
+		assert len(delete_calls) == 1
+		assert delete_calls[0] == ("branch", "-D", "mc/unit-old")
+
+	async def test_cleanup_skips_pending_mr_branches(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""_cleanup_merged_branches does NOT delete branches for pending MRs."""
+		w, _ = worker_and_unit
+
+		# Insert a pending MR for this worker (merge queue hasn't fetched yet)
+		from mission_control.models import MergeRequest
+		mr = MergeRequest(
+			id="mr-pending",
+			work_unit_id="wu1",
+			worker_id=w.id,
+			branch_name="mc/unit-pending",
+			commit_hash="abc123",
+			status="pending",
+		)
+		db.insert_merge_request(mr)
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def tracking_run_git(*args: str, cwd: str) -> bool:
+			git_calls.append(args)
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=tracking_run_git):
+			await agent._cleanup_merged_branches("/tmp/clone1")  # noqa: SLF001
+
+		# Should NOT delete branches for pending MRs
+		delete_calls = [c for c in git_calls if c[0] == "branch" and c[1] == "-D"]
+		assert len(delete_calls) == 0, f"Should not delete pending MR branches: {git_calls}"
+
+	async def test_cleanup_runs_before_new_unit(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""Cleanup of old branches runs at the start of _execute_unit."""
+		w, _ = worker_and_unit
+
+		# Insert a processed (merged) MR for this worker
+		from mission_control.models import MergeRequest
+		mr = MergeRequest(
+			id="mr-old",
+			work_unit_id="wu1",
+			worker_id=w.id,
+			branch_name="mc/unit-old",
+			commit_hash="def456",
+			status="merged",
+		)
+		db.insert_merge_request(mr)
+
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":["abc123"],'
+			'"summary":"Fixed it","files_changed":["foo.py"]}'
+		)
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def tracking_run_git(*args: str, cwd: str) -> bool:
+			git_calls.append(args)
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=tracking_run_git):
+			# Need a second work unit for the second execution
+			db.insert_plan(Plan(id="p2", objective="test2", round_id="r1"))
+			wu2 = WorkUnit(id="wu2", plan_id="p2", title="Fix more", description="Fix more tests", round_id="r1")
+			db.insert_work_unit(wu2)
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# The old branch should be cleaned up BEFORE the new checkout -b
+		delete_calls = [(i, c) for i, c in enumerate(git_calls) if c[0] == "branch" and c[1] == "-D"]
+		checkout_b_calls = [(i, c) for i, c in enumerate(git_calls) if c[0:2] == ("checkout", "-b")]
+		assert len(delete_calls) >= 1, f"Expected cleanup of old branch, got: {git_calls}"
+		assert delete_calls[0][1] == ("branch", "-D", "mc/unit-old")
+		# Cleanup must happen before new branch creation
+		if checkout_b_calls:
+			assert delete_calls[0][0] < checkout_b_calls[0][0], "Cleanup should run before branch creation"
+
 	def test_stop(self, db: Database, config: MissionConfig, mock_backend: MockBackend) -> None:
 		w = Worker(id="w1", workspace_path="/tmp/clone")
 		agent = WorkerAgent(w, db, config, mock_backend)

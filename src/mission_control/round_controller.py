@@ -370,20 +370,21 @@ class RoundController:
 					timeout=effective_timeout,
 				)
 
-				# Wait for completion with timeout
-				timeout = int(effective_timeout * self.config.rounds.timeout_multiplier)
+				# Wait for completion with timeout (multiplied for monitoring slack)
+				poll_deadline = int(effective_timeout * self.config.rounds.timeout_multiplier)
 				monitor_interval = self.config.scheduler.monitor_interval
 				start = time.monotonic()
-				while time.monotonic() - start < timeout:
+				while time.monotonic() - start < poll_deadline:
 					status = await self._backend.check_status(handle)
 					if status != "running":
 						break
+					await self._backend.get_output(handle)
 					await asyncio.sleep(monitor_interval)
 				else:
 					await self._backend.kill(handle)
 					unit.attempt += 1
 					unit.status = "failed"
-					unit.output_summary = f"Timed out after {timeout}s"
+					unit.output_summary = f"Timed out after {effective_timeout}s"
 					unit.finished_at = _now_iso()
 					await self.db.locked_call("update_work_unit", unit)
 					return

@@ -110,8 +110,19 @@ class SSHBackend(WorkerBackend):
 		proc = self._processes.get(handle.worker_id)
 		if proc is None:
 			return ""
-		if proc.returncode is not None and proc.stdout:
-			if handle.worker_id not in self._stdout_collected:
+		if proc.returncode is None:
+			# Process still running -- drain available stdout to prevent pipe buffer deadlock
+			if proc.stdout:
+				try:
+					chunk = await asyncio.wait_for(proc.stdout.read(65536), timeout=0.1)
+					self._stdout_bufs[handle.worker_id] = (
+						self._stdout_bufs.get(handle.worker_id, b"") + chunk
+					)
+				except asyncio.TimeoutError:
+					pass
+		else:
+			# Process finished -- collect remaining output once
+			if proc.stdout and handle.worker_id not in self._stdout_collected:
 				remaining = await proc.stdout.read()
 				self._stdout_bufs[handle.worker_id] = (
 					self._stdout_bufs.get(handle.worker_id, b"") + remaining

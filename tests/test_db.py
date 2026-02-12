@@ -407,6 +407,50 @@ class TestMergeRequests:
 		))
 		assert db.get_next_merge_position() == 2
 
+	def test_get_processed_merge_requests_for_worker(self, db: Database) -> None:
+		"""Returns only merged/rejected/conflict MRs for the specified worker."""
+		self._setup(db)
+		db.insert_work_unit(WorkUnit(id="wu2", plan_id="p1"))
+		db.insert_work_unit(WorkUnit(id="wu3", plan_id="p1"))
+		db.insert_work_unit(WorkUnit(id="wu4", plan_id="p1"))
+
+		# Pending MR -- should NOT be returned
+		db.insert_merge_request(MergeRequest(
+			id="mr1", work_unit_id="wu1", worker_id="w1",
+			branch_name="mc/unit-wu1", status="pending", position=1,
+		))
+		# Merged MR -- SHOULD be returned
+		db.insert_merge_request(MergeRequest(
+			id="mr2", work_unit_id="wu2", worker_id="w1",
+			branch_name="mc/unit-wu2", status="merged", position=2,
+		))
+		# Rejected MR -- SHOULD be returned
+		db.insert_merge_request(MergeRequest(
+			id="mr3", work_unit_id="wu3", worker_id="w1",
+			branch_name="mc/unit-wu3", status="rejected", position=3,
+		))
+		# Different worker -- should NOT be returned
+		db.insert_merge_request(MergeRequest(
+			id="mr4", work_unit_id="wu4", worker_id="w2",
+			branch_name="mc/unit-wu4", status="merged", position=4,
+		))
+
+		results = db.get_processed_merge_requests_for_worker("w1")
+		assert len(results) == 2
+		assert {r.id for r in results} == {"mr2", "mr3"}
+
+	def test_get_processed_merge_requests_includes_conflict(self, db: Database) -> None:
+		"""Conflict status MRs are also returned as processed."""
+		self._setup(db)
+		db.insert_merge_request(MergeRequest(
+			id="mr1", work_unit_id="wu1", worker_id="w1",
+			branch_name="mc/unit-wu1", status="conflict", position=1,
+		))
+
+		results = db.get_processed_merge_requests_for_worker("w1")
+		assert len(results) == 1
+		assert results[0].status == "conflict"
+
 
 class TestAsyncLock:
 	def test_db_has_lock(self) -> None:

@@ -694,6 +694,39 @@ class TestSSHBackend:
 		assert backend._worker_count == {"host-a": 0, "host-b": 0}
 
 	@patch("mission_control.backends.ssh.asyncio.create_subprocess_exec")
+	async def test_get_output_drains_stdout_while_running(
+		self, mock_exec: AsyncMock, backend: SSHBackend,
+	) -> None:
+		"""get_output reads chunks incrementally while process is running to prevent pipe deadlock."""
+		mock_proc = AsyncMock()
+		mock_proc.pid = 777
+		mock_proc.returncode = None  # Still running
+		mock_stdout = AsyncMock()
+		# Simulate incremental reads: each call returns a chunk
+		mock_stdout.read = AsyncMock(return_value=b"chunk1")
+		mock_proc.stdout = mock_stdout
+		mock_exec.return_value = mock_proc
+
+		workspace = '/tmp/mc-worker-w3::{"hostname":"host-a","user":"deploy"}'
+		handle = await backend.spawn("w3", workspace, ["cmd"], timeout=60)
+
+		# First call while running -- should read a chunk
+		out1 = await backend.get_output(handle)
+		assert out1 == "chunk1"
+		mock_stdout.read.assert_awaited_once()
+
+		# Second call while still running -- reads another chunk
+		mock_stdout.read = AsyncMock(return_value=b"chunk2")
+		out2 = await backend.get_output(handle)
+		assert out2 == "chunk1chunk2"  # Accumulated
+
+		# Process finishes -- get remaining output
+		mock_proc.returncode = 0
+		mock_stdout.read = AsyncMock(return_value=b"final")
+		out3 = await backend.get_output(handle)
+		assert out3 == "chunk1chunk2final"
+
+	@patch("mission_control.backends.ssh.asyncio.create_subprocess_exec")
 	async def test_spawn_clears_stdout_collected_on_reuse(
 		self, mock_exec: AsyncMock, backend: SSHBackend,
 	) -> None:

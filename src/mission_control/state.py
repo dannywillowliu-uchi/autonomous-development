@@ -101,7 +101,7 @@ async def snapshot_project_health(config: MissionConfig, cwd: str | None = None)
 
 	# Run the project's configured verification command
 	cmd = config.target.verification.command
-	result = await _run_command(cmd + " 2>&1", cwd, timeout)
+	result = await _run_command(cmd, cwd, timeout)
 	output = result["output"]
 
 	pytest_data = _parse_pytest(output)
