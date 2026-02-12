@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 from typing import Sequence
@@ -227,6 +228,7 @@ class Database:
 		if db_path != ":memory:":
 			self.conn.execute("PRAGMA journal_mode=WAL")
 		self.conn.execute("PRAGMA foreign_keys=ON")
+		self._lock = asyncio.Lock()
 		self._create_tables()
 
 	def _create_tables(self) -> None:
@@ -234,6 +236,14 @@ class Database:
 
 	def close(self) -> None:
 		self.conn.close()
+
+	async def locked_call(self, fn: str, *args: object, **kwargs: object) -> object:
+		"""Call a Database method while holding the asyncio lock.
+
+		Use this to serialize concurrent access from multiple asyncio tasks.
+		"""
+		async with self._lock:
+			return getattr(self, fn)(*args, **kwargs)
 
 	# -- Sessions --
 
@@ -635,7 +645,8 @@ class Database:
 
 		rows = self.conn.execute(
 			"""UPDATE work_units SET
-				status='pending', worker_id=NULL, claimed_at=NULL, heartbeat_at=NULL
+				status='pending', worker_id=NULL, claimed_at=NULL, heartbeat_at=NULL,
+				attempt = attempt + 1
 			WHERE status IN ('claimed', 'running')
 			AND heartbeat_at IS NOT NULL
 			AND (julianday(?) - julianday(heartbeat_at)) * 86400 > ?

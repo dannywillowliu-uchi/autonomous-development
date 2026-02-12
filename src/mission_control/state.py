@@ -45,10 +45,18 @@ def _parse_ruff(output: str) -> dict[str, int]:
 
 
 def _parse_mypy(output: str) -> dict[str, int]:
-	"""Parse mypy output -- count 'error:' lines."""
+	"""Parse mypy output -- count lines matching mypy error format.
+
+	Uses anchored regex to avoid false positives from pytest tracebacks
+	that also contain 'error:'.
+	"""
 	if "Success" in output:
 		return {"type_errors": 0}
-	error_count = sum(1 for line in output.splitlines() if "error:" in line)
+	# Match mypy-specific format: file.py:line: error: message
+	error_count = sum(
+		1 for line in output.splitlines()
+		if re.match(r"\S+\.py:\d+: error:", line)
+	)
 	return {"type_errors": error_count}
 
 
@@ -99,6 +107,7 @@ async def snapshot_project_health(config: MissionConfig, cwd: str | None = None)
 	pytest_data = _parse_pytest(output)
 	ruff_data = _parse_ruff(output)
 	mypy_data = _parse_mypy(output)
+	bandit_data = _parse_bandit(output)
 
 	max_raw_chars = config.scheduler.raw_output_max_chars
 
@@ -112,6 +121,7 @@ async def snapshot_project_health(config: MissionConfig, cwd: str | None = None)
 		test_failed=pytest_data["test_failed"],
 		lint_errors=ruff_data["lint_errors"],
 		type_errors=mypy_data["type_errors"],
+		security_findings=bandit_data["security_findings"],
 		raw_output=json.dumps(raw),
 	)
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from mission_control.db import Database
@@ -260,7 +262,7 @@ class TestWorkUnits:
 		assert claimed.id == "wu2"
 
 	def test_recover_stale_units(self, db: Database) -> None:
-		"""Stale units should be released back to pending."""
+		"""Stale units should be released back to pending with incremented attempt."""
 		self._make_plan(db)
 		wu = WorkUnit(
 			id="wu1", plan_id="plan1", title="Stale",
@@ -275,6 +277,7 @@ class TestWorkUnits:
 		assert recovered[0].id == "wu1"
 		assert recovered[0].status == "pending"
 		assert recovered[0].worker_id is None
+		assert recovered[0].attempt == 2  # incremented from 1
 
 	def test_recover_skips_max_attempts(self, db: Database) -> None:
 		"""Units at max attempts should not be recovered."""
@@ -402,3 +405,60 @@ class TestMergeRequests:
 			id="mr1", work_unit_id="wu1", worker_id="w1", position=1,
 		))
 		assert db.get_next_merge_position() == 2
+
+
+class TestAsyncLock:
+	def test_db_has_lock(self) -> None:
+		"""Database should have an asyncio.Lock attribute."""
+		db = Database(":memory:")
+		assert hasattr(db, "_lock")
+		assert isinstance(db._lock, asyncio.Lock)
+
+	async def test_locked_call(self) -> None:
+		"""locked_call should serialize access through the asyncio lock."""
+		db = Database(":memory:")
+		db.insert_plan(Plan(id="p1", objective="test"))
+		wu = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(wu)
+
+		result = await db.locked_call("get_work_unit", "wu1")
+		assert result is not None
+		assert result.id == "wu1"
+
+	async def test_concurrent_claims_via_locked_call(self) -> None:
+		"""Concurrent locked_call claims should return different units."""
+		db = Database(":memory:")
+		db.insert_plan(Plan(id="p1", objective="test"))
+		db.insert_work_unit(WorkUnit(id="wu1", plan_id="p1", title="Task 1", priority=1))
+		db.insert_work_unit(WorkUnit(id="wu2", plan_id="p1", title="Task 2", priority=2))
+
+		results = await asyncio.gather(
+			db.locked_call("claim_work_unit", "worker-A"),
+			db.locked_call("claim_work_unit", "worker-B"),
+		)
+
+		# Both should succeed with different units
+		assert results[0] is not None
+		assert results[1] is not None
+		assert results[0].id != results[1].id
+
+	async def test_recover_stale_increments_attempt(self) -> None:
+		"""recover_stale_units should increment attempt counter."""
+		db = Database(":memory:")
+		db.insert_plan(Plan(id="p1", objective="test"))
+		wu = WorkUnit(
+			id="wu1", plan_id="p1", title="Stale",
+			status="running", worker_id="dead",
+			heartbeat_at="2020-01-01T00:00:00",
+			attempt=0, max_attempts=3,
+		)
+		db.insert_work_unit(wu)
+
+		recovered = db.recover_stale_units(timeout_seconds=60)
+		assert len(recovered) == 1
+		assert recovered[0].attempt == 1  # incremented from 0
+
+		# Verify in DB too
+		fresh = db.get_work_unit("wu1")
+		assert fresh is not None
+		assert fresh.attempt == 1

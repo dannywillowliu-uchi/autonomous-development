@@ -100,6 +100,27 @@ Found 2 errors in 1 file"""
 		result = _parse_mypy("")
 		assert result["type_errors"] == 0
 
+	def test_no_false_positives_from_pytest_output(self) -> None:
+		"""Pytest tracebacks with 'error:' should not be counted as mypy errors."""
+		output = """\
+FAILED tests/test_foo.py::test_bar - ValueError: error: something broke
+E   ValueError: error: unexpected
+tests/test_baz.py::test_qux PASSED
+3 passed, 1 failed in 0.5s"""
+		result = _parse_mypy(output)
+		assert result["type_errors"] == 0
+
+	def test_combined_pytest_and_mypy_output(self) -> None:
+		"""Only mypy-format lines should be counted, not pytest tracebacks."""
+		output = """\
+10 passed, 1 failed in 0.5s
+FAILED tests/test_foo.py::test_bar - AssertionError: error: mismatch
+src/mission_control/db.py:10: error: Incompatible types
+src/mission_control/worker.py:20: error: Missing return
+Found 2 errors in 2 files"""
+		result = _parse_mypy(output)
+		assert result["type_errors"] == 2
+
 
 class TestCompareSnapshots:
 	def test_improvement(self) -> None:

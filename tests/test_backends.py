@@ -177,6 +177,21 @@ class TestLocalBackend:
 		assert "w1" in backend._processes
 		assert backend._stdout_bufs["w1"] == b""
 
+	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")
+	async def test_spawn_clears_stdout_collected(self, mock_exec: AsyncMock, backend: LocalBackend) -> None:
+		"""spawn should clear _stdout_collected so a reused worker collects output."""
+		mock_proc = AsyncMock()
+		mock_proc.pid = 1111
+		mock_exec.return_value = mock_proc
+
+		# Simulate a prior spawn that already collected output
+		backend._stdout_collected.add("w1")
+
+		await backend.spawn("w1", "/ws", ["echo", "hi"], 60)
+
+		# _stdout_collected should no longer contain w1
+		assert "w1" not in backend._stdout_collected
+
 	async def test_check_status_running(self, backend: LocalBackend) -> None:
 		"""check_status returns 'running' when returncode is None."""
 		mock_proc = MagicMock()
