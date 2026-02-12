@@ -410,3 +410,83 @@ class TestRunCommandTimeout:
 		assert "timed out" in output
 		mock_proc.kill.assert_called_once()
 		mock_proc.wait.assert_called_once()
+
+
+class TestInitializeResetOnInit:
+	"""Phase 65: Existing branches are reset to base on init when reset_on_init=True."""
+
+	async def test_existing_branches_reset_to_base(self) -> None:
+		"""When branches exist and reset_on_init is True, update-ref is called."""
+		config = _config()
+		config.green_branch.reset_on_init = True
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def mock_run_git(*args: str) -> tuple[bool, str]:
+			git_calls.append(args)
+			# rev-parse succeeds (branches exist)
+			if args[0] == "rev-parse":
+				return True, "abc123"
+			return True, ""
+
+		with patch.object(mgr, "_run_git", side_effect=mock_run_git):
+			await mgr.initialize("/tmp/workspace")
+
+		# Should call update-ref for both branches
+		update_ref_calls = [c for c in git_calls if c[0] == "update-ref"]
+		assert len(update_ref_calls) == 2
+		assert update_ref_calls[0] == ("update-ref", "refs/heads/mc/working", "main")
+		assert update_ref_calls[1] == ("update-ref", "refs/heads/mc/green", "main")
+
+		# Should NOT call branch (branches already exist)
+		branch_create_calls = [c for c in git_calls if c[0] == "branch"]
+		assert len(branch_create_calls) == 0
+
+	async def test_reset_on_init_false_preserves_branches(self) -> None:
+		"""When reset_on_init is False, existing branches are not touched."""
+		config = _config()
+		config.green_branch.reset_on_init = False
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def mock_run_git(*args: str) -> tuple[bool, str]:
+			git_calls.append(args)
+			if args[0] == "rev-parse":
+				return True, "abc123"
+			return True, ""
+
+		with patch.object(mgr, "_run_git", side_effect=mock_run_git):
+			await mgr.initialize("/tmp/workspace")
+
+		# No update-ref calls
+		update_ref_calls = [c for c in git_calls if c[0] == "update-ref"]
+		assert len(update_ref_calls) == 0
+
+	async def test_new_branches_created_regardless_of_setting(self) -> None:
+		"""New branches are created even when reset_on_init is True."""
+		config = _config()
+		config.green_branch.reset_on_init = True
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		git_calls: list[tuple[str, ...]] = []
+
+		async def mock_run_git(*args: str) -> tuple[bool, str]:
+			git_calls.append(args)
+			# rev-parse fails (branches don't exist)
+			if args[0] == "rev-parse":
+				return False, ""
+			return True, ""
+
+		with patch.object(mgr, "_run_git", side_effect=mock_run_git):
+			await mgr.initialize("/tmp/workspace")
+
+		# Should create branches, not update-ref
+		branch_create_calls = [c for c in git_calls if c[0] == "branch"]
+		update_ref_calls = [c for c in git_calls if c[0] == "update-ref"]
+		assert len(branch_create_calls) == 2
+		assert len(update_ref_calls) == 0

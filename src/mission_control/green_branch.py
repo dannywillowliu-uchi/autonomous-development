@@ -34,7 +34,11 @@ class GreenBranchManager:
 		self._merge_lock = asyncio.Lock()
 
 	async def initialize(self, workspace: str) -> None:
-		"""Create mc/working and mc/green branches if they don't exist."""
+		"""Create mc/working and mc/green branches if they don't exist.
+
+		If reset_on_init is True (default), existing branches are reset to the
+		latest base branch HEAD to prevent divergence across missions.
+		"""
 		self.workspace = workspace
 		base = self.config.target.branch
 		gb = self.config.green_branch
@@ -47,6 +51,9 @@ class GreenBranchManager:
 			if not ok:
 				logger.info("Creating branch %s from %s", branch, base)
 				await self._run_git("branch", branch, base)
+			elif gb.reset_on_init:
+				logger.info("Resetting branch %s to %s", branch, base)
+				await self._run_git("update-ref", f"refs/heads/{branch}", base)
 
 	async def merge_to_working(self, worker_workspace: str, branch_name: str) -> bool:
 		"""Merge a worker branch into mc/working. Serialized via lock."""

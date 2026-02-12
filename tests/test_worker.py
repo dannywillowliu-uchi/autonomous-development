@@ -630,6 +630,73 @@ class TestWorkerAgent:
 		assert result.attempt == 1
 		assert result.finished_at is not None
 
+
+	async def test_completed_no_commits_treated_as_success(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""Completed status with no commits is a no-op success, not a failure."""
+		w, _ = worker_and_unit
+
+		# Backend returns completed with no commits
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":[],'
+			'"summary":"Task already done, no changes needed","files_changed":[]}'
+		)
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		result = db.get_work_unit("wu1")
+		assert result is not None
+		assert result.status == "completed", f"No-op should be completed, got {result.status}"
+		assert result.finished_at is not None
+		assert w.units_completed == 1
+		assert w.units_failed == 0
+
+		# No merge request should be created for no-op
+		mr = db.get_next_merge_request()
+		assert mr is None, "No MR should exist for no-op completion"
+
+
+	async def test_workspace_cleared_when_reset_fails(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""If workspace reset fails after failure, workspace_path is cleared for re-provisioning."""
+		w, _ = worker_and_unit
+		assert w.workspace_path == "/tmp/clone1"
+
+		# Backend returns failed output
+		mock_backend.check_status = AsyncMock(return_value="failed")  # type: ignore[method-assign]
+		mock_backend.get_output = AsyncMock(return_value="Error: crash")  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		# First call (checkout -b) succeeds, then all subsequent git calls fail
+		call_count = 0
+		async def failing_run_git(*args: str, cwd: str) -> bool:
+			nonlocal call_count
+			call_count += 1
+			# Let first 2 calls succeed (checkout -b, cleanup), then fail all
+			return call_count <= 2
+
+		with patch.object(agent, "_run_git", side_effect=failing_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# workspace_path should be cleared since git reset failed
+		assert w.workspace_path == "", f"Expected empty string, got {w.workspace_path!r}"
+
 	def test_stop(self, db: Database, config: MissionConfig, mock_backend: MockBackend) -> None:
 		w = Worker(id="w1", workspace_path="/tmp/clone")
 		agent = WorkerAgent(w, db, config, mock_backend)

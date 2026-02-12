@@ -111,6 +111,7 @@ class GreenBranchConfig:
 	working_branch: str = "mc/working"
 	green_branch: str = "mc/green"
 	fixup_max_attempts: int = 3
+	reset_on_init: bool = True
 
 
 @dataclass

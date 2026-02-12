@@ -313,6 +313,7 @@ class WorkerAgent:
 						await self.backend.kill(handle)
 						unit.output_summary = f"Timed out after {effective_timeout}s"
 						await self._mark_unit_failed(unit)
+						await self._reset_workspace(workspace_path, branch_name)
 						return
 					await self.backend.get_output(handle)
 					await asyncio.sleep(self.config.scheduler.polling_interval)
@@ -324,6 +325,7 @@ class WorkerAgent:
 				logger.error("Backend error for unit %s: %s", unit.id, exc)
 				unit.output_summary = f"Backend error: {exc}"
 				await self._mark_unit_failed(unit)
+				await self._reset_workspace(workspace_path, branch_name)
 				return
 
 			# Parse result and build handoff
@@ -363,14 +365,22 @@ class WorkerAgent:
 				base = self.config.target.branch
 				if not await self._run_git("checkout", base, cwd=workspace_path):
 					logger.warning("Failed to checkout %s in %s", base, workspace_path)
-			else:
-				await self._mark_unit_failed(unit)
+			elif result_status == "completed":
+				# No-op: worker completed but produced no commits (task already done)
+				logger.info("Unit %s completed with no commits (no-op)", unit.id)
+				unit.status = "completed"
+				unit.finished_at = _now_iso()
+				await self.db.locked_call("update_work_unit", unit)
+				self.worker.units_completed += 1
 
-				# Reset workspace to base branch for next task
+				# Clean up: checkout base and delete feature branch (nothing to merge)
 				if not await self._run_git("checkout", self.config.target.branch, cwd=workspace_path):
 					logger.warning("Failed to checkout %s in %s", self.config.target.branch, workspace_path)
 				if not await self._run_git("branch", "-D", branch_name, cwd=workspace_path):
 					logger.warning("Failed to delete branch %s in %s", branch_name, workspace_path)
+			else:
+				await self._mark_unit_failed(unit)
+				await self._reset_workspace(workspace_path, branch_name)
 
 		finally:
 			self._current_handle = None
@@ -381,6 +391,29 @@ class WorkerAgent:
 				except asyncio.CancelledError:
 					pass
 				self._heartbeat_task = None
+
+	async def _reset_workspace(self, workspace_path: str, branch_name: str) -> None:
+		"""Reset workspace to clean base branch state after a failure.
+
+		If the reset fails, clear workspace_path to force re-provisioning.
+		"""
+		base = self.config.target.branch
+		# Hard reset to discard any partial changes
+		if not await self._run_git("reset", "--hard", cwd=workspace_path):
+			logger.warning("Workspace %s corrupted, clearing for re-provision", workspace_path)
+			self.worker.workspace_path = ""
+			await self.db.locked_call("update_worker", self.worker)
+			return
+		# Checkout base branch
+		if not await self._run_git("checkout", base, cwd=workspace_path):
+			logger.warning("Workspace %s corrupted, clearing for re-provision", workspace_path)
+			self.worker.workspace_path = ""
+			await self.db.locked_call("update_worker", self.worker)
+			return
+		# Clean untracked files
+		await self._run_git("clean", "-fdx", cwd=workspace_path)
+		# Delete feature branch
+		await self._run_git("branch", "-D", branch_name, cwd=workspace_path)
 
 	async def _heartbeat_loop(self) -> None:
 		"""Periodically update heartbeat in the DB."""
