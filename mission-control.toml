@@ -2,7 +2,7 @@
 name = "autonomous-dev-scheduler"
 path = "/Users/dannyliu/personal_projects/autonomous-dev-scheduler"
 branch = "main"
-objective = "Implement improvements from BACKLOG.md in priority order (P0 through P9). Read BACKLOG.md first to understand the full backlog. Each round should tackle one backlog item completely: implement the feature, add tests, ensure all existing tests pass. Do NOT skip items -- work through them sequentially. Current priorities: P0 (replace LLM evaluator with deterministic objective scoring), P1 (N-of-M candidate selection for fixup), P2 (per-component model config), P3 (structured schedule output for planner parsing)."
+objective = "Implement improvements from BACKLOG.md in priority order. Read BACKLOG.md first. P0 and P3 are DONE -- start from P1. Each round: implement one backlog item completely with tests, ensure all existing tests pass. P1 (N-of-M candidate selection for fixup), P2 (per-component model config), P4 (discovery dedup), P5 (structured handoff format)."
 
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
