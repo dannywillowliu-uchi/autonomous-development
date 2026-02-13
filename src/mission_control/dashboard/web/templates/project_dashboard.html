@@ -14,7 +14,7 @@
 	</section>
 
 	{% if mode == 'continuous' %}
-	<!-- Continuous mode: status + event timeline -->
+	<!-- Continuous mode: status + workers + event timeline -->
 	<section class="card span-2">
 		<h2>Continuous Status</h2>
 		<div hx-get="/project/{{ project_name }}/partials/continuous-status"
@@ -24,8 +24,24 @@
 	</section>
 
 	<section class="card">
+		<h2>Workers</h2>
+		<div hx-get="/project/{{ project_name }}/partials/worker-pool"
+			hx-trigger="load, every 2s"
+			hx-swap="morph:innerHTML">
+		</div>
+	</section>
+
+	<section class="card span-2">
 		<h2>Work Units</h2>
 		<div hx-get="/project/{{ project_name }}/partials/work-units"
+			hx-trigger="load, every 2s"
+			hx-swap="morph:innerHTML">
+		</div>
+	</section>
+
+	<section class="card">
+		<h2>Merge Queue</h2>
+		<div hx-get="/project/{{ project_name }}/partials/merge-queue"
 			hx-trigger="load, every 2s"
 			hx-swap="morph:innerHTML">
 		</div>

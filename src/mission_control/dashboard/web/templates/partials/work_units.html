@@ -11,6 +11,7 @@
 	<span class="count running" title="{{ tooltip('running') }}">{{ snap.units_running }} {{ label('running').lower() }}</span>
 	<span class="count completed" title="{{ tooltip('completed') }}">{{ snap.units_completed }} {{ label('completed').lower() }}</span>
 	<span class="count failed" title="{{ tooltip('failed') }}">{{ snap.units_failed }} {{ label('failed').lower() }}</span>
+	<span class="count blocked" title="{{ tooltip('units_blocked') }}">{{ snap.units_blocked }} {{ label('blocked').lower() }}</span>
 </div>
 {% if units %}
 <ul class="unit-list">

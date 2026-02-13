@@ -64,6 +64,7 @@ class DashboardSnapshot:
 	units_running: int = 0
 	units_completed: int = 0
 	units_failed: int = 0
+	units_blocked: int = 0
 	# Merge queue
 	merge_queue_depth: int = 0
 	# Cost
@@ -238,6 +239,7 @@ class DashboardProvider:
 			snap.units_running = sum(1 for u in units if u.status == "running")
 			snap.units_completed = sum(1 for u in units if u.status == "completed")
 			snap.units_failed = sum(1 for u in units if u.status == "failed")
+			snap.units_blocked = sum(1 for u in units if u.status == "blocked")
 
 			# Merge queue
 			merge_requests = db.get_merge_requests_for_plan(current_round.plan_id)
@@ -363,6 +365,12 @@ def _build_events(
 				timestamp=u.finished_at,
 				message=f'Failed "{u.title}"',
 				event_type="failed",
+			))
+		elif u.status == "blocked" and u.finished_at:
+			events.append(DashboardEvent(
+				timestamp=u.finished_at,
+				message=f'Blocked "{u.title}"',
+				event_type="blocked",
 			))
 
 	for mr in merge_requests:
