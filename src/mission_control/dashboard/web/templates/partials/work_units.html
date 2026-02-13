@@ -1,0 +1,17 @@
+{% if snap and snap.units_total > 0 %}
+<div class="progress-bar-container">
+	<div class="progress-bar">
+		<div class="progress-fill" style="width: {{ snap.completion_pct }}%"></div>
+	</div>
+	<span class="progress-label">{{ '%.0f'|format(snap.completion_pct) }}%</span>
+</div>
+<div class="unit-counts">
+	<span class="count">{{ snap.units_total }} total</span>
+	<span class="count pending">{{ snap.units_pending }} pending</span>
+	<span class="count running">{{ snap.units_running }} running</span>
+	<span class="count completed">{{ snap.units_completed }} done</span>
+	<span class="count failed">{{ snap.units_failed }} failed</span>
+</div>
+{% else %}
+<p class="muted">No work units</p>
+{% endif %}

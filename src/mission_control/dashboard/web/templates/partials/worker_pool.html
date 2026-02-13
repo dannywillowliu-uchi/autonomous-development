@@ -1,0 +1,43 @@
+{% if snap and snap.workers %}
+<table class="worker-table">
+	<thead>
+		<tr>
+			<th>ID</th>
+			<th>Status</th>
+			<th>Current Task</th>
+			<th>Done</th>
+			<th>Failed</th>
+			<th>Cost</th>
+		</tr>
+	</thead>
+	<tbody>
+		{% for w in snap.workers %}
+		<tr>
+			<td class="mono">{{ w.id[:8] }}</td>
+			<td>
+				{% if w.status == 'working' %}
+					<span class="dot dot-green"></span> working
+				{% elif w.status == 'idle' %}
+					<span class="dot dot-gray"></span> idle
+				{% elif w.status == 'dead' %}
+					<span class="dot dot-red"></span> dead
+				{% else %}
+					<span class="dot dot-gray"></span> {{ w.status }}
+				{% endif %}
+			</td>
+			<td>{{ w.current_unit_title or '-' }}</td>
+			<td>{{ w.units_completed }}</td>
+			<td>{{ w.units_failed }}</td>
+			<td>${{ '%.2f'|format(w.total_cost_usd) }}</td>
+		</tr>
+		{% endfor %}
+	</tbody>
+</table>
+<div class="worker-summary">
+	<span class="dot dot-green"></span> {{ snap.workers_active }} active
+	<span class="dot dot-gray"></span> {{ snap.workers_idle }} idle
+	<span class="dot dot-red"></span> {{ snap.workers_dead }} dead
+</div>
+{% else %}
+<p class="muted">No workers registered</p>
+{% endif %}

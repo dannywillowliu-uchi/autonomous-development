@@ -59,6 +59,15 @@ def build_parser() -> argparse.ArgumentParser:
 	init_cmd = sub.add_parser("init", help="Initialize a mission-control config")
 	init_cmd.add_argument("path", nargs="?", default=".")
 
+	# mc dashboard
+	dash = sub.add_parser("dashboard", help="Launch TUI dashboard")
+	dash.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+
+	# mc web
+	web = sub.add_parser("web", help="Launch web dashboard")
+	web.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	web.add_argument("--port", type=int, default=8080, help="Port to serve on")
+
 	return parser
 
 
@@ -310,6 +319,45 @@ def cmd_init(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_dashboard(args: argparse.Namespace) -> int:
+	"""Launch the TUI dashboard."""
+	try:
+		from mission_control.dashboard.tui import DashboardApp
+	except ImportError:
+		print("Dashboard dependencies not installed. Run: pip install -e '.[dashboard]'")
+		return 1
+
+	db_path = _get_db_path(args.config)
+	if not db_path.exists():
+		print("No database found. Run 'mc start' or 'mc mission' first.")
+		return 1
+
+	app = DashboardApp(db_path=str(db_path))
+	app.run()
+	return 0
+
+
+def cmd_web(args: argparse.Namespace) -> int:
+	"""Launch the web dashboard."""
+	try:
+		import uvicorn
+
+		from mission_control.dashboard.web.server import create_app
+	except ImportError:
+		print("Dashboard dependencies not installed. Run: pip install -e '.[dashboard]'")
+		return 1
+
+	db_path = _get_db_path(args.config)
+	if not db_path.exists():
+		print("No database found. Run 'mc start' or 'mc mission' first.")
+		return 1
+
+	app = create_app(str(db_path))
+	print(f"Starting web dashboard at http://localhost:{args.port}")
+	uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
+	return 0
+
+
 COMMANDS = {
 	"start": cmd_start,
 	"status": cmd_status,
@@ -318,6 +366,8 @@ COMMANDS = {
 	"parallel": cmd_parallel,
 	"mission": cmd_mission,
 	"init": cmd_init,
+	"dashboard": cmd_dashboard,
+	"web": cmd_web,
 }
 
 

@@ -1,0 +1,8 @@
+{% if snap %}
+<div class="merge-queue">
+	<span class="queue-depth">{{ snap.merge_queue_depth }}</span>
+	<span class="queue-label">pending merges</span>
+</div>
+{% else %}
+<p class="muted">-</p>
+{% endif %}
