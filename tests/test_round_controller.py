@@ -598,3 +598,200 @@ class TestSSHBackendMissionModeRejection:
 			await controller._init_components()  # noqa: SLF001
 
 
+class TestDependencyAwareExecution:
+	"""Tests for topological execution in _execute_units."""
+
+	async def _setup_controller(
+		self,
+		db: Database,
+		units: list[WorkUnit],
+		execution_order: list[str],
+	) -> tuple[RoundController, Plan, Round]:
+		"""Helper: set up controller with mock backend that tracks execution order."""
+		import asyncio
+		from unittest.mock import AsyncMock
+
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(max_rounds=10)
+		ctrl = RoundController(cfg, db)
+
+		mission = Mission(objective="test", status="running")
+		db.insert_mission(mission)
+		plan = Plan(objective="test")
+		db.insert_plan(plan)
+		rnd = Round(mission_id=mission.id, number=1)
+		db.insert_round(rnd)
+
+		for u in units:
+			u.plan_id = plan.id
+			db.insert_work_unit(u)
+
+		mock_backend = AsyncMock()
+		mock_backend.provision_workspace = AsyncMock(return_value="/tmp/ws")
+		mock_backend.spawn = AsyncMock()
+		mock_backend.check_status = AsyncMock(return_value="completed")
+		mock_backend.get_output = AsyncMock(
+			return_value='MC_RESULT:{"status":"completed","summary":"done","commits":["abc"]}'
+		)
+		mock_backend.release_workspace = AsyncMock()
+		ctrl._backend = mock_backend
+
+		mock_gb = AsyncMock()
+		mock_gb.merge_to_working = AsyncMock(return_value=True)
+		ctrl._green_branch = mock_gb
+
+		# Track execution order
+		async def tracking_execute(unit: WorkUnit, rnd: Round, sem: asyncio.Semaphore) -> None:
+			execution_order.append(unit.id)
+			# Simulate some work
+			await asyncio.sleep(0.01)
+			# Mark as completed in DB
+			unit.status = "completed"
+			unit.finished_at = "2025-01-01T00:00:00Z"
+			db.update_work_unit(unit)
+
+		ctrl._execute_single_unit = tracking_execute  # type: ignore[assignment]
+
+		return ctrl, plan, rnd
+
+	async def test_independent_units_run_in_parallel(self, db: Database) -> None:
+		"""Units with no deps all run (order may vary but all execute)."""
+		execution_order: list[str] = []
+
+		a = WorkUnit(title="A")
+		b = WorkUnit(title="B")
+		c = WorkUnit(title="C")
+
+		ctrl, plan, rnd = await self._setup_controller(db, [a, b, c], execution_order)
+		await ctrl._execute_units(plan, rnd)
+
+		assert set(execution_order) == {a.id, b.id, c.id}
+
+	async def test_dependent_unit_waits(self, db: Database) -> None:
+		"""Unit B depends on A: B must start after A completes."""
+		execution_order: list[str] = []
+
+		a = WorkUnit(title="A")
+		b = WorkUnit(title="B", depends_on=a.id)
+
+		ctrl, plan, rnd = await self._setup_controller(db, [a, b], execution_order)
+		await ctrl._execute_units(plan, rnd)
+
+		assert execution_order.index(a.id) < execution_order.index(b.id)
+
+	async def test_dependency_failure_cascades(self, db: Database) -> None:
+		"""When A fails, dependent B is cascade-failed."""
+		import asyncio
+
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(max_rounds=10)
+		ctrl = RoundController(cfg, db)
+
+		mission = Mission(objective="test", status="running")
+		db.insert_mission(mission)
+		plan = Plan(objective="test")
+		db.insert_plan(plan)
+		rnd = Round(mission_id=mission.id, number=1)
+		db.insert_round(rnd)
+
+		a = WorkUnit(plan_id=plan.id, title="A")
+		b = WorkUnit(plan_id=plan.id, title="B", depends_on=a.id)
+		db.insert_work_unit(a)
+		db.insert_work_unit(b)
+
+		from unittest.mock import AsyncMock
+		mock_backend = AsyncMock()
+		ctrl._backend = mock_backend
+		mock_gb = AsyncMock()
+		ctrl._green_branch = mock_gb
+
+		async def fail_execute(unit: WorkUnit, rnd: Round, sem: asyncio.Semaphore) -> None:
+			# A fails, B should never run
+			unit.status = "failed"
+			unit.finished_at = "2025-01-01T00:00:00Z"
+			db.update_work_unit(unit)
+
+		ctrl._execute_single_unit = fail_execute  # type: ignore[assignment]
+
+		await ctrl._execute_units(plan, rnd)
+
+		refreshed_a = db.get_work_unit(a.id)
+		refreshed_b = db.get_work_unit(b.id)
+		assert refreshed_a is not None
+		assert refreshed_a.status == "failed"
+		assert refreshed_b is not None
+		assert refreshed_b.status == "failed"
+		assert "Dependency failed" in refreshed_b.output_summary
+
+	async def test_diamond_dependency(self, db: Database) -> None:
+		"""Diamond: A -> B, A -> C, B -> D, C -> D. D runs after B and C."""
+		execution_order: list[str] = []
+
+		a = WorkUnit(title="A")
+		b = WorkUnit(title="B", depends_on=a.id)
+		c = WorkUnit(title="C", depends_on=a.id)
+		d = WorkUnit(title="D", depends_on=f"{b.id},{c.id}")
+
+		ctrl, plan, rnd = await self._setup_controller(db, [a, b, c, d], execution_order)
+		await ctrl._execute_units(plan, rnd)
+
+		assert execution_order.index(a.id) < execution_order.index(b.id)
+		assert execution_order.index(a.id) < execution_order.index(c.id)
+		assert execution_order.index(b.id) < execution_order.index(d.id)
+		assert execution_order.index(c.id) < execution_order.index(d.id)
+
+	async def test_circular_dependency_detection(self, db: Database) -> None:
+		"""Circular A -> B -> A: both units should be failed as deadlock."""
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(max_rounds=10)
+		ctrl = RoundController(cfg, db)
+
+		mission = Mission(objective="test", status="running")
+		db.insert_mission(mission)
+		plan = Plan(objective="test")
+		db.insert_plan(plan)
+		rnd = Round(mission_id=mission.id, number=1)
+		db.insert_round(rnd)
+
+		a = WorkUnit(plan_id=plan.id, title="A")
+		b = WorkUnit(plan_id=plan.id, title="B")
+		# Create circular deps
+		a.depends_on = b.id
+		b.depends_on = a.id
+		db.insert_work_unit(a)
+		db.insert_work_unit(b)
+
+		from unittest.mock import AsyncMock
+		ctrl._backend = AsyncMock()
+		ctrl._green_branch = AsyncMock()
+
+		await ctrl._execute_units(plan, rnd)
+
+		refreshed_a = db.get_work_unit(a.id)
+		refreshed_b = db.get_work_unit(b.id)
+		assert refreshed_a is not None
+		assert refreshed_a.status == "failed"
+		assert "circular" in refreshed_a.output_summary.lower() or "deadlock" in refreshed_a.output_summary.lower()
+		assert refreshed_b is not None
+		assert refreshed_b.status == "failed"
+
+	async def test_empty_units(self, db: Database) -> None:
+		"""No units: _execute_units returns immediately."""
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(max_rounds=10)
+		ctrl = RoundController(cfg, db)
+
+		mission = Mission(objective="test", status="running")
+		db.insert_mission(mission)
+		plan = Plan(objective="test", total_units=0)
+		db.insert_plan(plan)
+		rnd = Round(mission_id=mission.id, number=1)
+		db.insert_round(rnd)
+
+		from unittest.mock import AsyncMock
+		ctrl._backend = AsyncMock()
+
+		# Should not raise
+		await ctrl._execute_units(plan, rnd)
+
+

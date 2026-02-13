@@ -261,6 +261,16 @@ class RoundController:
 			logger.error("Failed to persist plan tree for round %d: %s", round_number, exc, exc_info=True)
 			raise RuntimeError(f"Database error persisting plan tree: {exc}") from exc
 
+		# Post-planning: detect file overlaps and inject dependency edges
+		try:
+			from mission_control.overlap import resolve_file_overlaps
+			all_units = self.db.get_work_units_for_plan(plan.id)
+			resolve_file_overlaps(all_units)
+			for u in all_units:
+				self.db.update_work_unit(u)
+		except Exception as exc:
+			logger.warning("Failed to resolve file overlaps: %s", exc)
+
 		result.total_units = plan.total_units
 		rnd.total_units = plan.total_units
 		rnd.status = "executing"
@@ -399,7 +409,14 @@ class RoundController:
 		return result
 
 	async def _execute_units(self, plan: Plan, rnd: Round) -> None:
-		"""Execute all work units using worker backend."""
+		"""Execute work units respecting depends_on edges (topological order).
+
+		Units with no unmet dependencies are dispatched in parallel (bounded
+		by the worker semaphore).  When a unit completes, its dependents are
+		checked and dispatched if all their dependencies are satisfied.
+		If a dependency fails, all downstream units are cascade-failed.
+		Circular dependencies are detected and failed as deadlocks.
+		"""
 		assert self._backend is not None
 		units = self.db.get_work_units_for_plan(plan.id)
 
@@ -408,18 +425,153 @@ class RoundController:
 			unit.round_id = rnd.id
 			await self.db.locked_call("update_work_unit", unit)
 
-		# Spawn workers for each unit
+		if not units:
+			return
+
+		# Build dependency graph
+		unit_map: dict[str, WorkUnit] = {u.id: u for u in units}
+		# deps_of[uid] = set of unit IDs that uid depends on
+		deps_of: dict[str, set[str]] = {}
+		# dependents_of[uid] = set of unit IDs that depend on uid
+		dependents_of: dict[str, set[str]] = {u.id: set() for u in units}
+
+		for unit in units:
+			dep_ids: set[str] = set()
+			if unit.depends_on:
+				for dep_id in unit.depends_on.split(","):
+					dep_id = dep_id.strip()
+					if dep_id and dep_id in unit_map:
+						dep_ids.add(dep_id)
+			deps_of[unit.id] = dep_ids
+			for dep_id in dep_ids:
+				dependents_of[dep_id].add(unit.id)
+
+		# Detect circular dependencies
+		# If after removing all zero-dep nodes we still have nodes left, there's a cycle
+		temp_deps = {uid: set(d) for uid, d in deps_of.items()}
+		topo_queue = [uid for uid, d in temp_deps.items() if not d]
+		visited = set()
+		while topo_queue:
+			uid = topo_queue.pop()
+			visited.add(uid)
+			for dependent_id in dependents_of.get(uid, set()):
+				temp_deps[dependent_id].discard(uid)
+				if not temp_deps[dependent_id]:
+					topo_queue.append(dependent_id)
+
+		cycle_units = set(unit_map.keys()) - visited
+		if cycle_units:
+			logger.error("Circular dependency detected among units: %s", cycle_units)
+			for uid in cycle_units:
+				unit = unit_map[uid]
+				unit.status = "failed"
+				unit.output_summary = "Deadlock: circular dependency detected"
+				unit.finished_at = _now_iso()
+				await self.db.locked_call("update_work_unit", unit)
+			# Remove cycle units from processing
+			for uid in cycle_units:
+				del unit_map[uid]
+				deps_of.pop(uid, None)
+				dependents_of.pop(uid, None)
+
+		if not unit_map:
+			return
+
+		# Execution state
 		num_workers = self.config.scheduler.parallel.num_workers
 		semaphore = asyncio.Semaphore(num_workers)
-		tasks = [self._execute_single_unit(unit, rnd, semaphore) for unit in units]
-		results = await asyncio.gather(*tasks, return_exceptions=True)
-		for i, result in enumerate(results):
-			if isinstance(result, BaseException):
-				unit_id = units[i].id if i < len(units) else "unknown"
+		completed: dict[str, bool] = {}  # uid -> success
+		pending: set[str] = set(unit_map.keys())
+		running: set[str] = set()
+		done_event = asyncio.Event()
+
+		def _is_ready(uid: str) -> bool:
+			"""Check if all dependencies of uid are satisfied."""
+			for dep_id in deps_of.get(uid, set()):
+				if dep_id not in completed:
+					return False
+			return True
+
+		async def _run_unit(unit: WorkUnit) -> None:
+			"""Run a single unit and process completion."""
+			try:
+				await self._execute_single_unit(unit, rnd, semaphore)
+			except BaseException as exc:
 				logger.error(
 					"Unhandled exception in unit %s: %s",
-					unit_id, result, exc_info=(type(result), result, result.__traceback__),
+					unit.id, exc,
+					exc_info=(type(exc), exc, exc.__traceback__),
 				)
+
+			# Check completion status from DB
+			refreshed = self.db.get_work_unit(unit.id)
+			success = refreshed is not None and refreshed.status == "completed"
+			completed[unit.id] = success
+			running.discard(unit.id)
+			pending.discard(unit.id)
+
+			if not success:
+				# Cascade failure to all downstream units
+				await _cascade_failure(unit.id)
+
+			# Signal that state changed so dispatcher can check for newly-ready units
+			done_event.set()
+
+		async def _cascade_failure(failed_uid: str) -> None:
+			"""Mark all transitive dependents of a failed unit as failed."""
+			queue = list(dependents_of.get(failed_uid, set()))
+			while queue:
+				uid = queue.pop(0)
+				if uid in completed or uid in running:
+					continue
+				if uid not in pending:
+					continue
+				unit = unit_map.get(uid)
+				if unit is None:
+					continue
+				unit.status = "failed"
+				unit.output_summary = f"Dependency failed: {failed_uid}"
+				unit.finished_at = _now_iso()
+				await self.db.locked_call("update_work_unit", unit)
+				completed[uid] = False
+				pending.discard(uid)
+				# Continue cascade
+				queue.extend(dependents_of.get(uid, set()))
+
+		# Main dispatch loop
+		active_tasks: set[asyncio.Task[None]] = set()
+
+		while pending or running:
+			# Find ready units
+			ready = [uid for uid in pending if uid not in running and _is_ready(uid)]
+
+			for uid in ready:
+				unit = unit_map[uid]
+				running.add(uid)
+				task = asyncio.create_task(_run_unit(unit))
+				active_tasks.add(task)
+				task.add_done_callback(active_tasks.discard)
+
+			if not running and not ready and pending:
+				# All pending units are blocked but nothing is running
+				# This shouldn't happen after cycle detection, but guard anyway
+				logger.error("Deadlock: %d units stuck with unmet deps", len(pending))
+				for uid in list(pending):
+					unit = unit_map[uid]
+					unit.status = "failed"
+					unit.output_summary = "Deadlock: unmet dependencies"
+					unit.finished_at = _now_iso()
+					await self.db.locked_call("update_work_unit", unit)
+					pending.discard(uid)
+				break
+
+			if running:
+				done_event.clear()
+				await done_event.wait()
+
+		# Wait for any stragglers
+		if active_tasks:
+			await asyncio.gather(*active_tasks, return_exceptions=True)
 
 	async def _execute_single_unit(
 		self,
