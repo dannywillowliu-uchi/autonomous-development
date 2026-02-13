@@ -2,17 +2,17 @@
 name = "autonomous-dev-scheduler"
 path = "/Users/dannyliu/personal_projects/autonomous-dev-scheduler"
 branch = "main"
-objective = "Improve test coverage and code quality: add missing edge-case tests for the feedback module, improve error handling in round_controller.py, and ensure all public functions have type annotations"
+objective = "Implement improvements from BACKLOG.md in priority order (P0 through P9). Read BACKLOG.md first to understand the full backlog. Each round should tackle one backlog item completely: implement the feature, add tests, ensure all existing tests pass. Do NOT skip items -- work through them sequentially. Current priorities: P0 (replace LLM evaluator with deterministic objective scoring), P1 (N-of-M candidate selection for fixup), P2 (per-component model config), P3 (structured schedule output for planner parsing)."
 
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
-timeout = 120
+timeout = 180
 
 [scheduler]
-session_timeout = 600
+session_timeout = 900
 cooldown = 10
-max_sessions_per_run = 5
-model = "sonnet"
+max_sessions_per_run = 20
+model = "opus"
 monitor_interval = 5
 output_summary_max_chars = 2000
 
@@ -21,8 +21,8 @@ strategy = "branch-per-session"
 auto_merge = false
 
 [scheduler.budget]
-max_per_session_usd = 3.0
-max_per_run_usd = 20.0
+max_per_session_usd = 5.0
+max_per_run_usd = 100.0
 
 [scheduler.parallel]
 num_workers = 2
@@ -30,9 +30,9 @@ pool_dir = "/Users/dannyliu/personal_projects/.mc-pool-ads"
 warm_clones = 1
 
 [rounds]
-max_rounds = 2
-stall_threshold = 3
-cooldown_between_rounds = 5
+max_rounds = 20
+stall_threshold = 5
+cooldown_between_rounds = 10
 max_discovery_chars = 4000
 max_discoveries_per_round = 10
 max_summary_items = 5
@@ -41,13 +41,15 @@ stall_score_epsilon = 0.01
 
 [planner]
 max_depth = 2
-max_children_per_node = 3
-budget_per_call_usd = 0.50
+max_children_per_node = 4
+budget_per_call_usd = 1.0
 
 [green_branch]
 working_branch = "mc/working"
 green_branch = "mc/green"
 fixup_max_attempts = 3
+auto_push = true
+push_branch = "main"
 
 [backend]
 type = "local"
