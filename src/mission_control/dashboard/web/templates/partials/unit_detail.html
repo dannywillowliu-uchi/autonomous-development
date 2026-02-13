@@ -25,6 +25,14 @@
 		<code>{{ unit.commit_hash[:8] }}</code>
 	</div>
 	{% endif %}
+	{% if dep_units %}
+	<div class="unit-deps">
+		<span class="label">Depends On</span>
+		{% for dep_id, dep_title in dep_units %}
+		<span class="dep-tag"><code>{{ dep_id }}</code> {{ dep_title }}</span>
+		{% endfor %}
+	</div>
+	{% endif %}
 </div>
 {% else %}
 <p class="muted">Unit not found</p>

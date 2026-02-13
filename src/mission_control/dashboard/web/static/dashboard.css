@@ -128,6 +128,7 @@ body {
 .badge-stalled { background: var(--warning); color: #000; }
 .badge-stopped { background: var(--text-muted); color: #000; }
 .badge-pending { background: var(--border); color: var(--text); }
+.badge-blocked { background: var(--warning); color: #000; }
 
 .delta.positive { color: var(--success); font-size: 12px; }
 .delta.negative { color: var(--error); font-size: 12px; }
@@ -217,6 +218,7 @@ body {
 .count.running { color: var(--accent); }
 .count.completed { color: var(--success); }
 .count.failed { color: var(--error); }
+.count.blocked { color: var(--warning); }
 
 /* Merge queue */
 .merge-queue {
@@ -261,6 +263,7 @@ body {
 .event-merged .event-msg { color: var(--accent); }
 .event-claimed .event-msg { color: var(--text); }
 .event-failed .event-msg { color: var(--error); }
+.event-blocked .event-msg { color: var(--warning); }
 
 /* Charts */
 canvas {
@@ -507,6 +510,25 @@ canvas {
 	text-transform: uppercase;
 	display: block;
 	margin-top: 4px;
+}
+
+.unit-deps {
+	margin-top: 4px;
+}
+
+.dep-tag {
+	display: inline-block;
+	background: rgba(255,167,38,0.12);
+	border: 1px solid rgba(255,167,38,0.3);
+	border-radius: 3px;
+	padding: 1px 6px;
+	margin: 2px 4px 2px 0;
+	font-size: 11px;
+}
+
+.dep-tag code {
+	color: var(--warning);
+	margin-right: 4px;
 }
 
 .unit-detail pre {

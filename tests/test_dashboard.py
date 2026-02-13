@@ -144,6 +144,10 @@ def _populated_db() -> Database:
 	_insert_work_unit(db, "wu3", "plan2", status="running", claimed_at="2025-06-01T12:00:00", title="Write tests")
 	_insert_work_unit(db, "wu4", "plan2", status="pending", title="Deploy")
 	_insert_work_unit(db, "wu5", "plan2", status="failed", finished_at="2025-06-01T09:30:00", title="Broken lint")
+	_insert_work_unit(
+		db, "wu6", "plan2", status="blocked",
+		finished_at="2025-06-01T09:45:00", title="Blocked task", depends_on="wu3",
+	)
 
 	# Merge requests for plan2's units
 	_insert_merge_request(
@@ -202,11 +206,12 @@ class TestSnapshotWithMission:
 		assert len(snap.workers) == 3
 
 		# Work units (from plan2)
-		assert snap.units_total == 5
+		assert snap.units_total == 6
 		assert snap.units_completed == 2  # wu1, wu2
 		assert snap.units_running == 1    # wu3
 		assert snap.units_pending == 1    # wu4 (pending only, not claimed)
 		assert snap.units_failed == 1     # wu5
+		assert snap.units_blocked == 1    # wu6
 
 		# Merge queue
 		assert snap.merge_queue_depth == 2  # mr2 + mr3 pending
@@ -404,3 +409,45 @@ class TestRefreshUpdatesSnapshot:
 		assert cached.mission is not None
 		assert cached.mission.id == "m1"
 		assert cached.timestamp == snap2.timestamp
+
+
+class TestBlockedUnits:
+	def test_units_blocked_counted(self) -> None:
+		"""Blocked units are counted in units_blocked."""
+		db = _populated_db()
+		provider = _make_provider(db)
+		snap = provider.refresh()
+		assert snap.units_blocked == 1
+
+	def test_blocked_event_generated(self) -> None:
+		"""A blocked unit with finished_at produces a 'blocked' event."""
+		db = _make_db()
+		_insert_mission(db, "m1")
+		_insert_plan(db, "plan1")
+		_insert_round(db, "m1", "r1", number=1, plan_id="plan1", status="executing")
+		_insert_work_unit(
+			db, "wu1", "plan1", status="blocked",
+			finished_at="2025-06-01T10:00:00", title="Waiting on deps",
+		)
+
+		provider = _make_provider(db)
+		snap = provider.refresh()
+
+		blocked_events = [e for e in snap.recent_events if e.event_type == "blocked"]
+		assert len(blocked_events) == 1
+		assert 'Blocked "Waiting on deps"' in blocked_events[0].message
+
+	def test_blocked_not_counted_as_pending(self) -> None:
+		"""Blocked units don't inflate the pending count."""
+		db = _make_db()
+		_insert_mission(db, "m1")
+		_insert_plan(db, "plan1")
+		_insert_round(db, "m1", "r1", number=1, plan_id="plan1", status="executing")
+		_insert_work_unit(db, "wu1", "plan1", status="pending", title="Legit pending")
+		_insert_work_unit(db, "wu2", "plan1", status="blocked", title="Blocked task")
+
+		provider = _make_provider(db)
+		snap = provider.refresh()
+
+		assert snap.units_pending == 1
+		assert snap.units_blocked == 1

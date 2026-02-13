@@ -77,6 +77,7 @@ _TOOLTIPS: dict[str, str] = {
 	"units_running": "Tasks currently being worked on",
 	"units_completed": "Tasks that finished successfully",
 	"units_failed": "Tasks that encountered errors",
+	"units_blocked": "Tasks waiting on a dependency to complete",
 	# Round statuses
 	"planning": "AI is decomposing the objective into actionable tasks",
 	"executing": "Workers are actively executing planned tasks",
@@ -398,9 +399,21 @@ def create_app(db_path: str | None = None, registry: ProjectRegistry | None = No
 	async def project_unit_detail(request: Request, name: str, unit_id: str):
 		assert _state is not None
 		unit = _get_work_unit(name, unit_id)
+		dep_units: list[tuple[str, str]] = []
+		if unit and unit.depends_on:
+			db = _get_db_for_project(name)
+			if db:
+				try:
+					for dep_id in unit.depends_on.split(","):
+						dep_id = dep_id.strip()
+						if dep_id:
+							dep = db.get_work_unit(dep_id)
+							dep_units.append((dep_id[:8], dep.title if dep else "unknown"))
+				finally:
+					db.close()
 		return templates.TemplateResponse(
 			"partials/unit_detail.html",
-			{"request": request, "unit": unit, "project_name": name},
+			{"request": request, "unit": unit, "project_name": name, "dep_units": dep_units},
 		)
 
 	# -- Per-project JSON APIs --
