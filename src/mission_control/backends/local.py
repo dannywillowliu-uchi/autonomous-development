@@ -43,6 +43,16 @@ class LocalBackend(WorkerBackend):
 		if workspace is None:
 			raise RuntimeError(f"No workspace available for worker {worker_id}")
 
+		# Fetch latest refs so that branches created after the clone (e.g.
+		# mc/green from GreenBranchManager.initialize()) are visible.
+		fetch_proc = await asyncio.create_subprocess_exec(
+			"git", "fetch", "origin",
+			cwd=str(workspace),
+			stdout=asyncio.subprocess.PIPE,
+			stderr=asyncio.subprocess.STDOUT,
+		)
+		await fetch_proc.communicate()
+
 		# Checkout the target base branch before creating the feature branch.
 		# Without this, the feature branch starts from whatever HEAD the clone
 		# was reset to (origin/main), ignoring the caller's base_branch.
