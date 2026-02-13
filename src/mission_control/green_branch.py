@@ -175,27 +175,37 @@ class GreenBranchManager:
 		await self._run_git("clean", "-fd")
 
 	async def push_green_to_main(self) -> bool:
-		"""Merge mc/green into the push branch and push to origin."""
+		"""Merge mc/green into the push branch and push to origin.
+
+		Runs in the SOURCE repo (config.target.path), not the workspace clone,
+		because the clone's origin points back to the source repo, not GitHub.
+		"""
 		gb = self.config.green_branch
 		if not gb.auto_push:
 			return False
 
+		source_repo = self.config.target.path
 		push_branch = gb.push_branch
-		await self._run_git("checkout", push_branch)
-		ok, output = await self._run_git("merge", "--ff-only", gb.green_branch)
+
+		# Fetch latest mc/green from workspace into source repo
+		await self._run_git_in(source_repo, "fetch", self.workspace, gb.green_branch)
+
+		await self._run_git_in(source_repo, "checkout", push_branch)
+
+		# Pull remote first to avoid non-fast-forward
+		await self._run_git_in(source_repo, "pull", "--rebase", "origin", push_branch)
+
+		ok, output = await self._run_git_in(source_repo, "merge", "--ff-only", "FETCH_HEAD")
 		if not ok:
-			logger.error("Failed to ff-merge %s into %s: %s", gb.green_branch, push_branch, output)
-			await self._run_git("checkout", gb.green_branch)
+			logger.error("Failed to ff-merge mc/green into %s: %s", push_branch, output)
 			return False
 
-		ok, output = await self._run_git("push", "origin", push_branch)
+		ok, output = await self._run_git_in(source_repo, "push", "origin", push_branch)
 		if not ok:
 			logger.error("Failed to push %s: %s", push_branch, output)
-			await self._run_git("checkout", gb.green_branch)
 			return False
 
-		logger.info("Pushed %s to origin/%s", gb.green_branch, push_branch)
-		await self._run_git("checkout", gb.green_branch)
+		logger.info("Pushed mc/green to origin/%s", push_branch)
 		return True
 
 	async def get_green_hash(self) -> str:
@@ -205,6 +215,18 @@ class GreenBranchManager:
 		if not ok:
 			return ""
 		return output.strip()
+
+	async def _run_git_in(self, cwd: str, *args: str) -> tuple[bool, str]:
+		"""Run a git command in an arbitrary directory."""
+		proc = await asyncio.create_subprocess_exec(
+			"git", *args,
+			cwd=cwd,
+			stdout=asyncio.subprocess.PIPE,
+			stderr=asyncio.subprocess.STDOUT,
+		)
+		stdout, _ = await proc.communicate()
+		output = stdout.decode() if stdout else ""
+		return (proc.returncode == 0, output)
 
 	async def _run_git(self, *args: str) -> tuple[bool, str]:
 		"""Run a git command in self.workspace."""
