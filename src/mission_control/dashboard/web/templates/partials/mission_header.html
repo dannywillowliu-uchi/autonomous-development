@@ -1,0 +1,45 @@
+{% if snap and snap.mission %}
+<div class="mission-header">
+	<div class="mission-objective">
+		<span class="label">Objective</span>
+		<span class="value">{{ snap.mission.objective }}</span>
+	</div>
+	<div class="mission-stats">
+		<div class="stat">
+			<span class="label">Status</span>
+			<span class="value badge badge-{{ snap.mission.status }}">{{ snap.mission.status }}</span>
+		</div>
+		<div class="stat">
+			<span class="label">Phase</span>
+			<span class="value">{{ snap.phase }}</span>
+		</div>
+		<div class="stat">
+			<span class="label">Round</span>
+			<span class="value">{{ snap.current_round.number if snap.current_round else '-' }}</span>
+		</div>
+		<div class="stat">
+			<span class="label">Score</span>
+			<span class="value">
+				{{ '%.1f'|format(snap.score_history[-1][1]) if snap.score_history else '-' }}
+				{% if snap.score_delta > 0 %}
+					<span class="delta positive">+{{ '%.1f'|format(snap.score_delta) }}</span>
+				{% elif snap.score_delta < 0 %}
+					<span class="delta negative">{{ '%.1f'|format(snap.score_delta) }}</span>
+				{% endif %}
+			</span>
+		</div>
+		<div class="stat">
+			<span class="label">Round Cost</span>
+			<span class="value">${{ '%.2f'|format(snap.round_cost) }}</span>
+		</div>
+		<div class="stat">
+			<span class="label">Total Cost</span>
+			<span class="value">${{ '%.2f'|format(snap.total_cost) }}</span>
+		</div>
+	</div>
+</div>
+{% else %}
+<div class="mission-header">
+	<span class="muted">No active mission</span>
+</div>
+{% endif %}
