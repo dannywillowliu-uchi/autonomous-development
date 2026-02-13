@@ -463,7 +463,7 @@ class RoundController:
 			budget = self.config.scheduler.budget.max_per_session_usd
 			cmd = [
 				"claude", "-p",
-				"--output-format", "stream-json",
+				"--output-format", "text",
 				"--permission-mode", "bypassPermissions",
 				"--model", self.config.scheduler.model,
 				"--max-budget-usd", str(budget),
