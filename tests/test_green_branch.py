@@ -163,6 +163,7 @@ class TestRunFixup:
 		mgr = _manager()
 		mgr._run_git = AsyncMock(return_value=(True, ""))
 		mgr._run_command = AsyncMock(return_value=(True, "10 passed"))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
 		result = await mgr.run_fixup()
 
@@ -191,6 +192,7 @@ class TestRunFixup:
 			(True, "10 passed"),              # re-verification
 		])
 		mgr._run_claude = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
 		result = await mgr.run_fixup()
 
@@ -226,6 +228,7 @@ class TestRunFixup:
 			(True, "10 passed"),   # re-verification attempt 2 passes
 		])
 		mgr._run_claude = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
 		result = await mgr.run_fixup()
 
@@ -245,6 +248,7 @@ class TestRunFixup:
 			RuntimeError("Claude crashed"),  # fixup agent crash attempt 1
 			(True, ""),                        # fixup attempt 2 succeeds
 		])
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
 		result = await mgr.run_fixup()
 
@@ -279,6 +283,7 @@ class TestRunFixup:
 			(True, "10 passed"),        # re-verification passes
 		])
 		mgr._run_claude = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
 		result = await mgr.run_fixup()
 
@@ -522,3 +527,122 @@ class TestInitializeResetOnInit:
 		# Workspace: should also create branches from origin
 		ws_branch_calls = [c for c in workspace_calls if c[0] == "branch"]
 		assert len(ws_branch_calls) == 2
+
+
+class TestSyncToSource:
+	"""Tests for _sync_to_source: pushing refs from workspace clone back to source repo."""
+
+	async def test_syncs_both_branches(self) -> None:
+		"""_sync_to_source fetches both mc/green and mc/working into source repo."""
+		mgr = _manager()
+		calls: list[tuple[str, tuple[str, ...]]] = []
+
+		async def mock_run_git_in(cwd: str, *args: str) -> tuple[bool, str]:
+			calls.append((cwd, args))
+			return (True, "")
+
+		mgr._run_git_in = mock_run_git_in  # type: ignore[assignment]
+
+		await mgr._sync_to_source()
+
+		assert len(calls) == 2
+		# First call: fetch mc/green
+		assert calls[0][0] == "/tmp/test"  # source repo path
+		assert calls[0][1] == ("fetch", "/tmp/test-workspace", "mc/green:mc/green")
+		# Second call: fetch mc/working
+		assert calls[1][0] == "/tmp/test"
+		assert calls[1][1] == ("fetch", "/tmp/test-workspace", "mc/working:mc/working")
+
+	async def test_warns_on_failure_but_does_not_raise(self) -> None:
+		"""Failed sync logs a warning but doesn't propagate the error."""
+		mgr = _manager()
+
+		async def mock_run_git_in(cwd: str, *args: str) -> tuple[bool, str]:
+			return (False, "fetch failed")
+
+		mgr._run_git_in = mock_run_git_in  # type: ignore[assignment]
+
+		# Should not raise
+		await mgr._sync_to_source()
+
+	async def test_partial_failure_continues(self) -> None:
+		"""If first branch sync fails, second is still attempted."""
+		mgr = _manager()
+		calls: list[tuple[str, tuple[str, ...]]] = []
+
+		async def mock_run_git_in(cwd: str, *args: str) -> tuple[bool, str]:
+			calls.append((cwd, args))
+			if "mc/green:mc/green" in args:
+				return (False, "failed")
+			return (True, "")
+
+		mgr._run_git_in = mock_run_git_in  # type: ignore[assignment]
+
+		await mgr._sync_to_source()
+
+		# Both branches attempted despite first failure
+		assert len(calls) == 2
+
+
+class TestSyncCalledOnPromotion:
+	"""Verify _sync_to_source is called at all 3 promotion sites."""
+
+	async def test_clean_pass_syncs(self) -> None:
+		"""Verification passes immediately: _sync_to_source called."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(True, "10 passed"))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.run_fixup()
+
+		assert result.promoted is True
+		mgr._sync_to_source.assert_awaited_once()
+
+	async def test_fixup_success_syncs(self) -> None:
+		"""Verification fails then fixup succeeds: _sync_to_source called."""
+		mgr = _manager()
+		git_results = [
+			(True, ""),              # checkout mc/working
+			(True, "abc123\n"),      # rev-parse HEAD
+			(True, ""),              # checkout mc/green
+			(True, ""),              # merge --ff-only
+		]
+		mgr._run_git = AsyncMock(side_effect=git_results)
+		mgr._run_command = AsyncMock(side_effect=[
+			(False, "2 failed"),
+			(True, "10 passed"),
+		])
+		mgr._run_claude = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.run_fixup()
+
+		assert result.promoted is True
+		mgr._sync_to_source.assert_awaited_once()
+
+	async def test_verify_and_merge_unit_syncs(self) -> None:
+		"""verify_and_merge_unit: _sync_to_source called after successful merge."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(True, "10 passed"))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.verify_and_merge_unit("/tmp/worker", "feat/branch")
+
+		assert result.merged is True
+		mgr._sync_to_source.assert_awaited_once()
+
+	async def test_failed_promotion_does_not_sync(self) -> None:
+		"""When all fixups fail, _sync_to_source is NOT called."""
+		mgr = _manager()
+		mgr.config.green_branch.fixup_max_attempts = 1
+		mgr._run_git = AsyncMock(return_value=(True, "abc123\n"))
+		mgr._run_command = AsyncMock(return_value=(False, "2 failed"))
+		mgr._run_claude = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.run_fixup()
+
+		assert result.promoted is False
+		mgr._sync_to_source.assert_not_awaited()
