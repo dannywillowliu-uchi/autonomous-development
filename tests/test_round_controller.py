@@ -6,8 +6,7 @@ import pytest
 
 from mission_control.config import MissionConfig, RoundsConfig
 from mission_control.db import Database
-from mission_control.green_branch import FixupResult
-from mission_control.models import Handoff, Mission, Plan, PlanNode, Round, WorkUnit
+from mission_control.models import Mission, Plan, PlanNode, Round, WorkUnit
 from mission_control.round_controller import (
 	MissionResult,
 	RoundController,
@@ -198,65 +197,6 @@ class TestStop:
 		assert controller.running is True
 		controller.stop()
 		assert controller.running is False
-
-
-# -- _build_round_summary --
-
-
-class TestBuildRoundSummary:
-	def test_basic_summary(self, controller: RoundController) -> None:
-		plan = Plan(total_units=3)
-		handoffs = [
-			Handoff(status="completed", summary="Implemented auth"),
-			Handoff(status="completed", summary="Added tests"),
-			Handoff(status="failed", summary="Lint fix failed"),
-		]
-		fixup = FixupResult(promoted=True, fixup_attempts=2)
-
-		result = controller._build_round_summary(plan, handoffs, fixup)
-
-		assert "3 units planned" in result
-		assert "2 completed, 1 failed" in result
-		assert "Implemented auth" in result
-		assert "Added tests" in result
-		assert "Lint fix failed" in result
-		assert "verification passed after 2 attempt(s)" in result
-
-	def test_fixup_failing(self, controller: RoundController) -> None:
-		plan = Plan(total_units=1)
-		handoffs = [Handoff(status="completed", summary="Did work")]
-		fixup = FixupResult(promoted=False, fixup_attempts=3)
-
-		result = controller._build_round_summary(plan, handoffs, fixup)
-
-		assert "verification still failing" in result
-
-	def test_no_handoffs(self, controller: RoundController) -> None:
-		plan = Plan(total_units=0)
-		fixup = FixupResult(promoted=False, fixup_attempts=0)
-
-		result = controller._build_round_summary(plan, [], fixup)
-
-		assert "0 units planned" in result
-		assert "0 completed, 0 failed" in result
-
-	def test_handoffs_without_summaries(self, controller: RoundController) -> None:
-		"""Handoffs with empty summary are excluded from work done section."""
-		plan = Plan(total_units=2)
-		handoffs = [
-			Handoff(status="completed", summary=""),
-			Handoff(status="completed", summary="Real work"),
-		]
-		fixup = FixupResult(promoted=True, fixup_attempts=1)
-
-		result = controller._build_round_summary(plan, handoffs, fixup)
-
-		assert "Work done:" in result
-		assert "Real work" in result
-		# The empty-summary handoff should not add a blank bullet
-		lines = result.split("\n")
-		work_bullets = [line for line in lines if line.startswith("- ")]
-		assert len(work_bullets) == 1
 
 
 # -- _persist_plan_tree --

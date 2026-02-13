@@ -23,8 +23,20 @@ class PlannerResult:
 
 
 def _parse_planner_output(output: str) -> PlannerResult:
-	"""Extract JSON from planner LLM output, with fallback for malformed responses."""
-	data = extract_json_from_text(output)
+	"""Extract JSON from PLAN_RESULT marker in planner output, with fallbacks."""
+	data = None
+
+	# 1. Try PLAN_RESULT: marker (preferred -- matches session.py MC_RESULT pattern)
+	marker = "PLAN_RESULT:"
+	idx = output.rfind(marker)
+	if idx != -1:
+		remainder = output[idx + len(marker):]
+		data = extract_json_from_text(remainder)
+
+	# 2. Fallback: try parsing the whole output (backward compatibility)
+	if not isinstance(data, dict):
+		data = extract_json_from_text(output)
+
 	if not isinstance(data, dict):
 		log.warning("Failed to parse planner output, falling back to single leaf")
 		fallback = {"title": "Execute scope", "description": output[:500], "files_hint": "", "priority": 1}
@@ -172,12 +184,15 @@ class RecursivePlanner:
 - Max {max_children} children per subdivision
 
 ## Output Format
-Return JSON:
+You may explain your reasoning, but you MUST end your response with a PLAN_RESULT line.
+
 For subdivision:
-{{"type": "subdivide", "children": [{{"scope": "description of sub-scope"}}, ...]}}
+PLAN_RESULT:{{"type": "subdivide", "children": [{{"scope": "description of sub-scope"}}, ...]}}
 
 For leaf tasks:
-{{"type": "leaves", "units": [{{"title": "...", "description": "...", "files_hint": "...", "priority": 1}}, ...]}}"""
+PLAN_RESULT:{{"type":"leaves","units":[{{"title":"...","description":"...","files_hint":"...","priority":1}}]}}
+
+IMPORTANT: The PLAN_RESULT line must be the LAST line of your output. Put all reasoning BEFORE it."""
 
 		log.info("Invoking planner LLM at depth %d for scope: %s", node.depth, node.scope[:80])
 

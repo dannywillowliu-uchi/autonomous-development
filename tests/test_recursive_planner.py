@@ -121,6 +121,41 @@ class TestParsePlannerOutput:
 		assert result.type == "leaves"
 		assert result.units[0]["title"] == "Embedded"
 
+	def test_plan_result_marker(self) -> None:
+		"""PLAN_RESULT: marker is the preferred parse method."""
+		obj = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Via marker", "description": "extracted", "files_hint": "x.py", "priority": 1}],
+		})
+		raw = f"Let me analyze the scope and decompose it.\n\nPLAN_RESULT:{obj}"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "Via marker"
+
+	def test_plan_result_marker_with_subdivide(self) -> None:
+		"""PLAN_RESULT: marker works with subdivide type."""
+		obj = json.dumps({
+			"type": "subdivide",
+			"children": [{"scope": "Backend"}, {"scope": "Frontend"}],
+		})
+		raw = f"This scope spans multiple subsystems.\n\nPLAN_RESULT:{obj}"
+		result = _parse_planner_output(raw)
+		assert result.type == "subdivide"
+		assert len(result.children) == 2
+		assert result.children[0]["scope"] == "Backend"
+
+	def test_plan_result_marker_takes_precedence(self) -> None:
+		"""When both marker and bare JSON exist, marker wins."""
+		bad_json = json.dumps({"type": "subdivide", "children": [{"scope": "Wrong"}]})
+		good_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Right", "description": "correct", "files_hint": "", "priority": 1}],
+		})
+		raw = f"Analysis: {bad_json}\n\nPLAN_RESULT:{good_json}"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "Right"
+
 
 # -- _force_create_leaf tests --
 

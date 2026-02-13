@@ -14,7 +14,7 @@ from mission_control.config import MissionConfig
 from mission_control.db import Database
 from mission_control.evaluator import evaluate_objective
 from mission_control.feedback import get_planner_context, get_worker_context, record_round_outcome
-from mission_control.green_branch import FixupResult, GreenBranchManager
+from mission_control.green_branch import GreenBranchManager
 from mission_control.models import (
 	Handoff,
 	Mission,
@@ -313,18 +313,7 @@ class RoundController:
 			if pushed:
 				logger.info("Auto-pushed mc/green to origin/%s", self.config.green_branch.push_branch)
 
-		# 5. Evaluate objective on mc/green
-		round_summary = self._build_round_summary(plan, handoffs, fixup_result)
-		evaluation = await evaluate_objective(
-			config=self.config,
-			snapshot_hash=await self._green_branch.get_green_hash(),
-			round_summary=round_summary,
-			objective=mission.objective,
-		)
-
-		# 6. Record feedback
-		rnd.objective_score = evaluation.score
-		rnd.objective_met = evaluation.met
+		# 5. Evaluate objective deterministically
 		try:
 			snapshot_after = self.db.get_latest_snapshot()
 		except Exception as exc:
@@ -341,6 +330,29 @@ class RoundController:
 			if pr.id != rnd.id:
 				prev_score = pr.objective_score
 				break
+
+		# Count completed/failed units
+		try:
+			units = self.db.get_work_units_for_plan(plan.id)
+			completed_count = sum(1 for u in units if u.status == "completed")
+			failed_count = sum(1 for u in units if u.status == "failed")
+		except Exception as exc:
+			logger.error("Failed to get work units for eval: %s", exc, exc_info=True)
+			completed_count = 0
+			failed_count = 0
+
+		evaluation = evaluate_objective(
+			snapshot_before=snapshot_before,
+			snapshot_after=snapshot_after,
+			completed_units=completed_count,
+			total_units=plan.total_units,
+			fixup_promoted=fixup_result.promoted,
+			prev_score=prev_score,
+		)
+
+		# 6. Record feedback
+		rnd.objective_score = evaluation.score
+		rnd.objective_met = evaluation.met
 		try:
 			reward = record_round_outcome(
 				db=self.db,
@@ -363,15 +375,8 @@ class RoundController:
 		rnd.status = "completed"
 		rnd.finished_at = _now_iso()
 
-		# Count completed/failed from plan
-		try:
-			units = self.db.get_work_units_for_plan(plan.id)
-			rnd.completed_units = sum(1 for u in units if u.status == "completed")
-			rnd.failed_units = sum(1 for u in units if u.status == "failed")
-		except Exception as exc:
-			logger.error("Failed to get work units for plan: %s", exc, exc_info=True)
-			rnd.completed_units = 0
-			rnd.failed_units = 0
+		rnd.completed_units = completed_count
+		rnd.failed_units = failed_count
 		try:
 			self.db.update_round(rnd)
 		except Exception as exc:
@@ -628,33 +633,6 @@ class RoundController:
 				return "stalled"
 
 		return ""
-
-	def _build_round_summary(
-		self,
-		plan: Plan,
-		handoffs: list[Handoff],
-		fixup_result: FixupResult,
-	) -> str:
-		"""Build a summary string for the evaluator."""
-		parts = [f"Plan: {plan.total_units} units planned"]
-
-		completed = sum(1 for h in handoffs if h.status == "completed")
-		failed = sum(1 for h in handoffs if h.status == "failed")
-		parts.append(f"Execution: {completed} completed, {failed} failed")
-
-		max_items = self.config.rounds.max_summary_items
-		summaries = [h.summary for h in handoffs if h.summary]
-		if summaries:
-			parts.append("Work done:\n" + "\n".join(f"- {s}" for s in summaries[:max_items]))
-
-		if fixup_result.promoted:
-			parts.append(
-				f"Fixup: verification passed after {fixup_result.fixup_attempts} attempt(s)"
-			)
-		else:
-			parts.append("Fixup: verification still failing")
-
-		return "\n\n".join(parts)
 
 	def stop(self) -> None:
 		self.running = False
