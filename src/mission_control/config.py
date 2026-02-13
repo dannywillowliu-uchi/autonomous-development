@@ -105,6 +105,19 @@ class PlannerConfig:
 
 
 @dataclass
+class ContinuousConfig:
+	"""Continuous (event-driven) mission mode settings."""
+
+	max_wall_time_seconds: int = 7200  # 2 hour default
+	stall_threshold_units: int = 10  # N units with no improvement -> stop
+	stall_score_epsilon: float = 0.01
+	replan_interval_units: int = 5  # replan after N completions
+	verify_before_merge: bool = True
+	backlog_min_size: int = 2  # replan when backlog drops below this
+	cooldown_between_units: int = 0
+
+
+@dataclass
 class GreenBranchConfig:
 	"""Green branch pattern settings."""
 
@@ -140,6 +153,7 @@ class MissionConfig:
 	target: TargetConfig = field(default_factory=TargetConfig)
 	scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
 	rounds: RoundsConfig = field(default_factory=RoundsConfig)
+	continuous: ContinuousConfig = field(default_factory=ContinuousConfig)
 	planner: PlannerConfig = field(default_factory=PlannerConfig)
 	green_branch: GreenBranchConfig = field(default_factory=GreenBranchConfig)
 	backend: BackendConfig = field(default_factory=BackendConfig)
@@ -236,6 +250,22 @@ def _build_planner_config(data: dict[str, Any]) -> PlannerConfig:
 	return pc
 
 
+def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
+	cc = ContinuousConfig()
+	int_keys = (
+		"max_wall_time_seconds", "stall_threshold_units",
+		"replan_interval_units", "backlog_min_size", "cooldown_between_units",
+	)
+	for key in int_keys:
+		if key in data:
+			setattr(cc, key, int(data[key]))
+	if "stall_score_epsilon" in data:
+		cc.stall_score_epsilon = float(data["stall_score_epsilon"])
+	if "verify_before_merge" in data:
+		cc.verify_before_merge = bool(data["verify_before_merge"])
+	return cc
+
+
 def _build_green_branch(data: dict[str, Any]) -> GreenBranchConfig:
 	gc = GreenBranchConfig()
 	for key in ("working_branch", "green_branch"):
@@ -310,6 +340,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.scheduler = _build_scheduler(data["scheduler"])
 	if "rounds" in data:
 		mc.rounds = _build_rounds(data["rounds"])
+	if "continuous" in data:
+		mc.continuous = _build_continuous(data["continuous"])
 	if "planner" in data:
 		mc.planner = _build_planner_config(data["planner"])
 	if "green_branch" in data:

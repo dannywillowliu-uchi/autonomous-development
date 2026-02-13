@@ -146,6 +146,7 @@ class WorkUnit:
 	max_attempts: int = 3
 	timeout: int | None = None  # per-unit timeout override (seconds)
 	verification_command: str | None = None  # per-unit verification override
+	epoch_id: str | None = None  # continuous mode epoch
 
 
 @dataclass
@@ -252,6 +253,7 @@ class Handoff:
 	discoveries: str = ""  # JSON array of discovery strings
 	concerns: str = ""  # JSON array of concern strings
 	files_changed: str = ""  # JSON array of file paths
+	epoch_id: str | None = None  # continuous mode epoch
 
 
 # -- Feedback models --
@@ -288,6 +290,8 @@ class Reflection:
 	merge_conflicts: int = 0
 	# Discoveries
 	discoveries_count: int = 0
+	# Continuous mode
+	epoch_id: str | None = None
 
 
 @dataclass
@@ -305,6 +309,8 @@ class Reward:
 	score_progress: float = 0.0  # objective score delta
 	fixup_efficiency: float = 0.0  # promoted on first attempt?
 	no_regression: float = 0.0  # no tests broken, no security added
+	# Continuous mode
+	epoch_id: str | None = None
 
 
 @dataclass
@@ -341,3 +347,38 @@ class Experience:
 	concerns: str = ""  # JSON array
 	# Reward
 	reward: float = 0.0
+	# Continuous mode
+	epoch_id: str | None = None
+
+
+# -- Continuous mode models --
+
+
+@dataclass
+class Epoch:
+	"""A grouping of consecutive units between planner invocations."""
+
+	id: str = field(default_factory=_new_id)
+	mission_id: str = ""
+	number: int = 0
+	started_at: str = field(default_factory=_now_iso)
+	finished_at: str | None = None
+	units_planned: int = 0
+	units_completed: int = 0
+	units_failed: int = 0
+	score_at_start: float = 0.0
+	score_at_end: float = 0.0
+
+
+@dataclass
+class UnitEvent:
+	"""A timeline event for a single unit in continuous mode."""
+
+	id: str = field(default_factory=_new_id)
+	mission_id: str = ""
+	epoch_id: str = ""
+	work_unit_id: str = ""
+	event_type: str = ""  # dispatched/completed/failed/merged/rejected
+	timestamp: str = field(default_factory=_now_iso)
+	score_after: float = 0.0
+	details: str = ""  # JSON blob for extra info

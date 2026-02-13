@@ -9,6 +9,7 @@ from typing import Any, Sequence
 
 from mission_control.models import (
 	Decision,
+	Epoch,
 	Experience,
 	Handoff,
 	MergeRequest,
@@ -22,6 +23,7 @@ from mission_control.models import (
 	Signal,
 	Snapshot,
 	TaskRecord,
+	UnitEvent,
 	Worker,
 	WorkUnit,
 )
@@ -296,6 +298,39 @@ CREATE TABLE IF NOT EXISTS signals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_signals_mission ON signals(mission_id, status);
+
+CREATE TABLE IF NOT EXISTS epochs (
+	id TEXT PRIMARY KEY,
+	mission_id TEXT NOT NULL,
+	number INTEGER NOT NULL DEFAULT 0,
+	started_at TEXT NOT NULL,
+	finished_at TEXT,
+	units_planned INTEGER NOT NULL DEFAULT 0,
+	units_completed INTEGER NOT NULL DEFAULT 0,
+	units_failed INTEGER NOT NULL DEFAULT 0,
+	score_at_start REAL NOT NULL DEFAULT 0.0,
+	score_at_end REAL NOT NULL DEFAULT 0.0,
+	FOREIGN KEY (mission_id) REFERENCES missions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_epochs_mission ON epochs(mission_id, number);
+
+CREATE TABLE IF NOT EXISTS unit_events (
+	id TEXT PRIMARY KEY,
+	mission_id TEXT NOT NULL,
+	epoch_id TEXT NOT NULL,
+	work_unit_id TEXT NOT NULL,
+	event_type TEXT NOT NULL DEFAULT '',
+	timestamp TEXT NOT NULL,
+	score_after REAL NOT NULL DEFAULT 0.0,
+	details TEXT NOT NULL DEFAULT '',
+	FOREIGN KEY (mission_id) REFERENCES missions(id),
+	FOREIGN KEY (epoch_id) REFERENCES epochs(id),
+	FOREIGN KEY (work_unit_id) REFERENCES work_units(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_unit_events_mission ON unit_events(mission_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_unit_events_epoch ON unit_events(epoch_id);
 """
 
 
@@ -314,6 +349,22 @@ class Database:
 
 	def _create_tables(self) -> None:
 		self.conn.executescript(SCHEMA_SQL)
+		self._migrate_epoch_columns()
+
+	def _migrate_epoch_columns(self) -> None:
+		"""Add epoch_id columns to existing tables (idempotent)."""
+		migrations = [
+			("work_units", "epoch_id", "TEXT"),
+			("handoffs", "epoch_id", "TEXT"),
+			("reflections", "epoch_id", "TEXT"),
+			("rewards", "epoch_id", "TEXT"),
+			("experiences", "epoch_id", "TEXT"),
+		]
+		for table, column, col_type in migrations:
+			try:
+				self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")  # noqa: S608
+			except sqlite3.OperationalError:
+				pass  # Column already exists
 
 	def close(self) -> None:
 		self.conn.close()
@@ -1413,4 +1464,109 @@ class Database:
 			status=row["status"],
 			created_at=row["created_at"],
 			acknowledged_at=row["acknowledged_at"],
+		)
+
+	# -- Epochs --
+
+	def insert_epoch(self, epoch: Epoch) -> None:
+		self.conn.execute(
+			"""INSERT INTO epochs
+			(id, mission_id, number, started_at, finished_at,
+			 units_planned, units_completed, units_failed,
+			 score_at_start, score_at_end)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				epoch.id, epoch.mission_id, epoch.number,
+				epoch.started_at, epoch.finished_at,
+				epoch.units_planned, epoch.units_completed,
+				epoch.units_failed, epoch.score_at_start, epoch.score_at_end,
+			),
+		)
+		self.conn.commit()
+
+	def update_epoch(self, epoch: Epoch) -> None:
+		self.conn.execute(
+			"""UPDATE epochs SET
+			mission_id=?, number=?, started_at=?, finished_at=?,
+			units_planned=?, units_completed=?, units_failed=?,
+			score_at_start=?, score_at_end=?
+			WHERE id=?""",
+			(
+				epoch.mission_id, epoch.number, epoch.started_at,
+				epoch.finished_at, epoch.units_planned, epoch.units_completed,
+				epoch.units_failed, epoch.score_at_start, epoch.score_at_end,
+				epoch.id,
+			),
+		)
+		self.conn.commit()
+
+	def get_epoch(self, epoch_id: str) -> Epoch | None:
+		row = self.conn.execute("SELECT * FROM epochs WHERE id=?", (epoch_id,)).fetchone()
+		if row is None:
+			return None
+		return self._row_to_epoch(row)
+
+	def get_epochs_for_mission(self, mission_id: str) -> list[Epoch]:
+		rows = self.conn.execute(
+			"SELECT * FROM epochs WHERE mission_id=? ORDER BY number ASC",
+			(mission_id,),
+		).fetchall()
+		return [self._row_to_epoch(r) for r in rows]
+
+	@staticmethod
+	def _row_to_epoch(row: sqlite3.Row) -> Epoch:
+		return Epoch(
+			id=row["id"],
+			mission_id=row["mission_id"],
+			number=row["number"],
+			started_at=row["started_at"],
+			finished_at=row["finished_at"],
+			units_planned=row["units_planned"],
+			units_completed=row["units_completed"],
+			units_failed=row["units_failed"],
+			score_at_start=row["score_at_start"],
+			score_at_end=row["score_at_end"],
+		)
+
+	# -- Unit Events --
+
+	def insert_unit_event(self, event: UnitEvent) -> None:
+		self.conn.execute(
+			"""INSERT INTO unit_events
+			(id, mission_id, epoch_id, work_unit_id, event_type,
+			 timestamp, score_after, details)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				event.id, event.mission_id, event.epoch_id,
+				event.work_unit_id, event.event_type,
+				event.timestamp, event.score_after, event.details,
+			),
+		)
+		self.conn.commit()
+
+	def get_unit_events_for_mission(self, mission_id: str, limit: int = 100) -> list[UnitEvent]:
+		rows = self.conn.execute(
+			"SELECT * FROM unit_events WHERE mission_id=? ORDER BY timestamp ASC LIMIT ?",
+			(mission_id, limit),
+		).fetchall()
+		return [self._row_to_unit_event(r) for r in rows]
+
+	def get_unit_events_for_epoch(self, epoch_id: str) -> list[UnitEvent]:
+		rows = self.conn.execute(
+			"SELECT * FROM unit_events WHERE epoch_id=? ORDER BY timestamp ASC",
+			(epoch_id,),
+		).fetchall()
+		return [self._row_to_unit_event(r) for r in rows]
+
+	@staticmethod
+	def _row_to_unit_event(row: sqlite3.Row) -> UnitEvent:
+		return UnitEvent(
+			id=row["id"],
+			mission_id=row["mission_id"],
+			epoch_id=row["epoch_id"],
+			work_unit_id=row["work_unit_id"],
+			event_type=row["event_type"],
+			timestamp=row["timestamp"],
+			score_after=row["score_after"],
+			details=row["details"],
 		)

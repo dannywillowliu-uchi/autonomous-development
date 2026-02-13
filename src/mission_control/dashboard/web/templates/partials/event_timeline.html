@@ -1,0 +1,19 @@
+{% if events %}
+<ul class="event-timeline">
+	{% for e in events %}
+	<li class="event-item event-{{ e.event_type }}">
+		<span class="event-time">{{ e.timestamp[:19] }}</span>
+		<span class="badge badge-{{ e.event_type }}">{{ e.event_type }}</span>
+		<span class="event-unit">{{ e.work_unit_id[:8] }}</span>
+		{% if e.score_after > 0 %}
+		<span class="event-score">{{ '%.2f'|format(e.score_after) }}</span>
+		{% endif %}
+		{% if e.details %}
+		<span class="event-details muted">{{ e.details[:80] }}</span>
+		{% endif %}
+	</li>
+	{% endfor %}
+</ul>
+{% else %}
+<p class="muted">No events yet</p>
+{% endif %}

@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
 	mission.add_argument("--max-rounds", type=int, default=None, help="Max rounds to run")
 	mission.add_argument("--workers", type=int, default=None, help="Number of workers")
 	mission.add_argument("--dry-run", action="store_true", help="Show mission plan without executing")
+	mission.add_argument("--mode", choices=["rounds", "continuous"], default="rounds", help="Execution mode")
 
 	# mc init
 	init_cmd = sub.add_parser("init", help="Initialize a mission-control config")
@@ -223,8 +224,6 @@ def cmd_parallel(args: argparse.Namespace) -> int:
 
 def cmd_mission(args: argparse.Namespace) -> int:
 	"""Run the continuous mission mode (outer loop)."""
-	from mission_control.round_controller import RoundController
-
 	config = load_config(args.config)
 	db_path = _get_db_path(args.config)
 
@@ -233,13 +232,23 @@ def cmd_mission(args: argparse.Namespace) -> int:
 	if args.workers is not None:
 		config.scheduler.parallel.num_workers = args.workers
 
+	mode = args.mode
+
 	if args.dry_run:
 		print(f"Target: {config.target.name} ({config.target.resolved_path})")
 		print(f"Objective: {config.target.objective}")
+		print(f"Mode: {mode}")
 		print(f"Model: {config.scheduler.model}")
 		print(f"Workers: {config.scheduler.parallel.num_workers}")
-		print(f"Max rounds: {config.rounds.max_rounds}")
-		print(f"Stall threshold: {config.rounds.stall_threshold} rounds")
+		if mode == "rounds":
+			print(f"Max rounds: {config.rounds.max_rounds}")
+			print(f"Stall threshold: {config.rounds.stall_threshold} rounds")
+		else:
+			cont = config.continuous
+			print(f"Max wall time: {cont.max_wall_time_seconds}s")
+			print(f"Stall threshold: {cont.stall_threshold_units} units")
+			print(f"Backlog min size: {cont.backlog_min_size}")
+			print(f"Verify before merge: {cont.verify_before_merge}")
 		print(f"Planner max depth: {config.planner.max_depth}")
 		print(f"Green branch: {config.green_branch.working_branch} / {config.green_branch.green_branch}")
 		print(f"Backend: {config.backend.type}")
@@ -256,17 +265,36 @@ def cmd_mission(args: argparse.Namespace) -> int:
 
 	db = Database(db_path)
 	try:
-		controller = RoundController(config, db)
-		result = asyncio.run(controller.run())
-		print(f"Mission: {result.mission_id}")
-		print(f"Objective met: {result.objective_met}")
-		print(f"Final score: {result.final_score:.2f}")
-		print(f"Rounds: {result.total_rounds}")
-		if result.round_scores:
-			print(f"Score progression: {' -> '.join(f'{s:.2f}' for s in result.round_scores)}")
-		print(f"Wall time: {result.wall_time_seconds:.1f}s")
-		print(f"Stopped: {result.stopped_reason}")
-		return 0 if result.objective_met else 1
+		if mode == "continuous":
+			from mission_control.continuous_controller import ContinuousController
+			controller = ContinuousController(config, db)
+			result = asyncio.run(controller.run())
+			print(f"Mission: {result.mission_id}")
+			print(f"Objective met: {result.objective_met}")
+			print(f"Final score: {result.final_score:.2f}")
+			disp = result.total_units_dispatched
+			merged = result.total_units_merged
+			failed = result.total_units_failed
+			print(f"Units: {disp} dispatched, {merged} merged, {failed} failed")
+			if result.unit_scores:
+				recent = result.unit_scores[-10:]
+				print(f"Recent scores: {' -> '.join(f'{s:.2f}' for s in recent)}")
+			print(f"Wall time: {result.wall_time_seconds:.1f}s")
+			print(f"Stopped: {result.stopped_reason}")
+			return 0 if result.objective_met else 1
+		else:
+			from mission_control.round_controller import RoundController
+			round_ctrl = RoundController(config, db)
+			rr = asyncio.run(round_ctrl.run())
+			print(f"Mission: {rr.mission_id}")
+			print(f"Objective met: {rr.objective_met}")
+			print(f"Final score: {rr.final_score:.2f}")
+			print(f"Rounds: {rr.total_rounds}")
+			if rr.round_scores:
+				print(f"Score progression: {' -> '.join(f'{s:.2f}' for s in rr.round_scores)}")
+			print(f"Wall time: {rr.wall_time_seconds:.1f}s")
+			print(f"Stopped: {rr.stopped_reason}")
+			return 0 if rr.objective_met else 1
 	finally:
 		db.close()
 
@@ -312,6 +340,12 @@ max_children_per_node = 5
 working_branch = "mc/working"
 green_branch = "mc/green"
 fixup_max_attempts = 3
+
+[continuous]
+max_wall_time_seconds = 7200
+stall_threshold_units = 10
+backlog_min_size = 2
+verify_before_merge = true
 
 [backend]
 type = "local"

@@ -1,4 +1,4 @@
-<main class="grid" data-project="{{ project_name }}">
+<main class="grid" data-project="{{ project_name }}" data-mode="{{ mode|default('rounds') }}">
 	<!-- Mission header -->
 	<section class="card span-full"
 		hx-get="/project/{{ project_name }}/partials/mission-header"
@@ -13,16 +13,16 @@
 		hx-swap="innerHTML">
 	</section>
 
-	<!-- Worker pool -->
+	{% if mode == 'continuous' %}
+	<!-- Continuous mode: status + event timeline -->
 	<section class="card span-2">
-		<h2>Workers</h2>
-		<div hx-get="/project/{{ project_name }}/partials/worker-pool"
+		<h2>Continuous Status</h2>
+		<div hx-get="/project/{{ project_name }}/partials/continuous-status"
 			hx-trigger="load, every 2s"
 			hx-swap="innerHTML">
 		</div>
 	</section>
 
-	<!-- Work units -->
 	<section class="card">
 		<h2>Work Units</h2>
 		<div hx-get="/project/{{ project_name }}/partials/work-units"
@@ -31,7 +31,31 @@
 		</div>
 	</section>
 
-	<!-- Merge queue -->
+	<section class="card span-full">
+		<h2>Event Timeline</h2>
+		<div hx-get="/project/{{ project_name }}/partials/event-timeline"
+			hx-trigger="load, every 3s"
+			hx-swap="innerHTML">
+		</div>
+	</section>
+	{% else %}
+	<!-- Rounds mode: workers + units + merge queue -->
+	<section class="card span-2">
+		<h2>Workers</h2>
+		<div hx-get="/project/{{ project_name }}/partials/worker-pool"
+			hx-trigger="load, every 2s"
+			hx-swap="innerHTML">
+		</div>
+	</section>
+
+	<section class="card">
+		<h2>Work Units</h2>
+		<div hx-get="/project/{{ project_name }}/partials/work-units"
+			hx-trigger="load, every 2s"
+			hx-swap="innerHTML">
+		</div>
+	</section>
+
 	<section class="card">
 		<h2>Merge Queue</h2>
 		<div hx-get="/project/{{ project_name }}/partials/merge-queue"
@@ -40,7 +64,6 @@
 		</div>
 	</section>
 
-	<!-- Round timeline + Discoveries feed -->
 	<section class="card span-2">
 		<h2>Round Timeline</h2>
 		<div hx-get="/project/{{ project_name }}/partials/round-timeline"
@@ -48,6 +71,7 @@
 			hx-swap="innerHTML">
 		</div>
 	</section>
+	{% endif %}
 
 	<section class="card">
 		<h2>Discoveries</h2>

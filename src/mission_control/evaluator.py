@@ -139,3 +139,44 @@ def evaluate_objective(
 		reasoning=reasoning,
 		remaining=remaining,
 	)
+
+
+def compute_running_score(
+	snapshot_before: Snapshot | None,
+	snapshot_after: Snapshot | None,
+	prev_score: float = 0.0,
+	unit_merged: bool = False,
+) -> ObjectiveEvaluation:
+	"""Compute cumulative score for continuous mode (per-unit granularity).
+
+	Simpler than evaluate_objective -- no round-level aggregation.
+	Score components:
+	  0.60 * verification delta
+	  0.25 * merge success (unit was verified + merged)
+	  0.15 * momentum from previous score
+	"""
+	delta_score, remaining = _compute_delta_score(snapshot_before, snapshot_after)
+
+	merge_score = 1.0 if unit_merged else 0.0
+
+	raw_score = 0.60 * delta_score + 0.25 * merge_score + 0.15 * prev_score
+	raw_score = max(0.0, min(1.0, raw_score))
+
+	met = raw_score >= 0.9
+
+	parts = [
+		f"delta={delta_score:.2f}",
+		f"merge={'yes' if unit_merged else 'no'}",
+		f"prev={prev_score:.2f}",
+		f"score={raw_score:.2f}",
+	]
+	reasoning = ", ".join(parts)
+
+	log.info("Running score: %.2f (%s)", raw_score, reasoning)
+
+	return ObjectiveEvaluation(
+		score=raw_score,
+		met=met,
+		reasoning=reasoning,
+		remaining=remaining,
+	)

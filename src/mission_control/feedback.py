@@ -9,6 +9,7 @@ import re
 from mission_control.db import Database
 from mission_control.green_branch import FixupResult
 from mission_control.models import (
+	Epoch,
 	Experience,
 	Handoff,
 	Plan,
@@ -16,6 +17,7 @@ from mission_control.models import (
 	Reward,
 	Round,
 	Snapshot,
+	UnitEvent,
 	WorkUnit,
 )
 
@@ -350,5 +352,187 @@ def get_worker_context(
 					pass
 		else:
 			lines.append(f"- [{exp.title}] FAILED: {exp.summary}")
+
+	return "\n".join(lines)
+
+
+def _ensure_continuous_round(
+	db: Database,
+	mission_id: str,
+	epoch: Epoch,
+) -> str:
+	"""Ensure a virtual round exists for the epoch (FK bridge).
+
+	Continuous mode doesn't use rounds, but reflections/rewards have a
+	NOT NULL FK to rounds. We create one lightweight sentinel round per
+	epoch to satisfy the constraint.
+	"""
+	virtual_id = f"continuous-{epoch.id}"
+	existing = db.get_round(virtual_id)
+	if existing:
+		return virtual_id
+
+	from mission_control.models import Round
+	rnd = Round(
+		id=virtual_id,
+		mission_id=mission_id,
+		number=epoch.number,
+		status="continuous",
+	)
+	db.insert_round(rnd)
+	return virtual_id
+
+
+def record_unit_outcome(
+	db: Database,
+	mission_id: str,
+	epoch: Epoch,
+	unit: WorkUnit,
+	handoff: Handoff | None,
+	snapshot_before: Snapshot | None,
+	snapshot_after: Snapshot | None,
+	prev_score: float,
+	current_score: float,
+) -> tuple[Reflection, Reward, Experience | None]:
+	"""Record per-unit feedback for continuous mode.
+
+	Creates a Reflection, computes a Reward, creates an Experience entry,
+	and logs a UnitEvent. Operates at unit granularity instead of round.
+	"""
+	# Ensure FK-compatible round exists for this epoch
+	round_id = _ensure_continuous_round(db, mission_id, epoch)
+
+	# Verification deltas
+	vi_result = _compute_verification_improvement(snapshot_before, snapshot_after)
+	_, tests_before, tests_after, tests_delta, lint_delta, type_delta = vi_result
+
+	# Count discoveries
+	disc_count = 0
+	if handoff and handoff.discoveries:
+		try:
+			disc_count = len(json.loads(handoff.discoveries))
+		except (json.JSONDecodeError, TypeError):
+			pass
+
+	completion_rate = 1.0 if unit.status == "completed" else 0.0
+
+	reflection = Reflection(
+		mission_id=mission_id,
+		round_id=round_id,
+		round_number=epoch.number,
+		epoch_id=epoch.id,
+		tests_before=tests_before,
+		tests_after=tests_after,
+		tests_delta=tests_delta,
+		lint_delta=lint_delta,
+		type_delta=type_delta,
+		objective_score=current_score,
+		score_delta=current_score - prev_score,
+		units_planned=1,
+		units_completed=1 if unit.status == "completed" else 0,
+		units_failed=1 if unit.status == "failed" else 0,
+		completion_rate=completion_rate,
+		# No fixup in continuous mode
+		fixup_promoted=False,
+		fixup_attempts=0,
+		merge_conflicts=0,
+		discoveries_count=disc_count,
+	)
+	db.insert_reflection(reflection)
+
+	# Compute reward using existing function
+	reward = compute_reward(reflection, prev_score, snapshot_before, snapshot_after)
+	reward.epoch_id = epoch.id
+	db.insert_reward(reward)
+
+	# Create experience if we have a handoff
+	experience = None
+	if handoff:
+		experience = Experience(
+			round_id=round_id,
+			work_unit_id=unit.id,
+			epoch_id=epoch.id,
+			title=unit.title,
+			scope=unit.description,
+			files_hint=unit.files_hint,
+			status=handoff.status,
+			summary=handoff.summary,
+			files_changed=handoff.files_changed,
+			discoveries=handoff.discoveries,
+			concerns=handoff.concerns,
+			reward=reward.reward,
+		)
+		db.insert_experience(experience)
+
+	# Log unit event
+	event = UnitEvent(
+		mission_id=mission_id,
+		epoch_id=epoch.id,
+		work_unit_id=unit.id,
+		event_type="completed" if unit.status == "completed" else "failed",
+		score_after=current_score,
+	)
+	db.insert_unit_event(event)
+
+	log.info(
+		"Unit %s outcome: reward=%.3f score=%.2f->%.2f",
+		unit.id, reward.reward, prev_score, current_score,
+	)
+
+	return reflection, reward, experience
+
+
+def get_continuous_planner_context(
+	db: Database,
+	mission_id: str,
+	limit: int = 10,
+) -> str:
+	"""Build context for the continuous planner from recent unit events.
+
+	Similar to get_planner_context() but uses per-unit granularity
+	instead of per-round.
+	"""
+	events = db.get_unit_events_for_mission(mission_id, limit=limit)
+	if not events:
+		return ""
+
+	lines: list[str] = []
+
+	# Score trajectory from events
+	score_points = [(e.timestamp, e.score_after) for e in events if e.score_after > 0]
+	if score_points:
+		recent = score_points[-5:]
+		trajectory = ", ".join(f"{s:.2f}" for _, s in recent)
+		lines.append(f"Recent scores: {trajectory}")
+
+	# Event type distribution
+	type_counts: dict[str, int] = {}
+	for e in events:
+		type_counts[e.event_type] = type_counts.get(e.event_type, 0) + 1
+	if type_counts:
+		dist = ", ".join(f"{t}={c}" for t, c in sorted(type_counts.items()))
+		lines.append(f"Event distribution: {dist}")
+
+	# High-value discoveries from successful experiences
+	top_experiences = db.get_top_experiences(limit=5)
+	discoveries: list[str] = []
+	for exp in top_experiences:
+		if exp.discoveries and exp.epoch_id:
+			try:
+				disc_list = json.loads(exp.discoveries)
+				for d in disc_list:
+					if d not in discoveries:
+						discoveries.append(d)
+						if len(discoveries) >= 3:
+							break
+			except (json.JSONDecodeError, TypeError):
+				pass
+		if len(discoveries) >= 3:
+			break
+
+	if discoveries:
+		lines.append("\nKey insights:")
+		for d in discoveries:
+			lines.append(f"- {d}")
 
 	return "\n".join(lines)

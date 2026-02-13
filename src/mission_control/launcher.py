@@ -46,6 +46,8 @@ class MissionLauncher:
 
 		# Apply config overrides as CLI args
 		if config_overrides:
+			if "mode" in config_overrides:
+				cmd.extend(["--mode", str(config_overrides["mode"])])
 			if "max_rounds" in config_overrides:
 				cmd.extend(["--max-rounds", str(config_overrides["max_rounds"])])
 			if "workers" in config_overrides:

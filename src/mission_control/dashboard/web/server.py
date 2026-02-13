@@ -152,9 +152,10 @@ def create_app(db_path: str | None = None, registry: ProjectRegistry | None = No
 
 	@app.get("/project/{name}/dashboard", response_class=HTMLResponse)
 	async def project_dashboard(request: Request, name: str):
+		mode = _detect_mission_mode(name)
 		return templates.TemplateResponse(
 			"project_dashboard.html",
-			{"request": request, "project_name": name},
+			{"request": request, "project_name": name, "mode": mode},
 		)
 
 	# -- Per-project HTMX partials --
@@ -257,6 +258,43 @@ def create_app(db_path: str | None = None, registry: ProjectRegistry | None = No
 			"partials/discoveries_feed.html",
 			{"request": request, "items": items},
 		)
+
+	# -- Continuous mode partials --
+
+	@app.get("/project/{name}/partials/event-timeline", response_class=HTMLResponse)
+	async def project_event_timeline(request: Request, name: str):
+		assert _state is not None
+		events = _get_unit_events(name)
+		return templates.TemplateResponse(
+			"partials/event_timeline.html",
+			{"request": request, "events": events},
+		)
+
+	@app.get("/project/{name}/partials/continuous-status", response_class=HTMLResponse)
+	async def project_continuous_status(request: Request, name: str):
+		assert _state is not None
+		status = _get_continuous_status(name)
+		return templates.TemplateResponse(
+			"partials/continuous_status.html",
+			{"request": request, "status": status},
+		)
+
+	@app.get("/project/{name}/api/mission-mode")
+	async def project_mission_mode(name: str):
+		"""Detect whether the current mission uses rounds or continuous mode."""
+		assert _state is not None
+		mode = _detect_mission_mode(name)
+		return JSONResponse({"mode": mode})
+
+	@app.get("/project/{name}/api/continuous-score-history")
+	async def project_continuous_score_history(name: str):
+		"""Score history from unit events (wall-clock timestamps)."""
+		assert _state is not None
+		events = _get_unit_events(name)
+		scored = [e for e in events if e.score_after > 0]
+		labels = [e.timestamp[:19] for e in scored]
+		data = [e.score_after for e in scored]
+		return JSONResponse({"labels": labels, "data": data})
 
 	@app.get("/project/{name}/partials/log-tail", response_class=HTMLResponse)
 	async def project_log_tail(request: Request, name: str):
@@ -725,6 +763,86 @@ def _get_all_discoveries(project_name: str):
 		# Newest first (higher round number first), capped at 50
 		items.reverse()
 		return items[:50]
+	finally:
+		db.close()
+
+
+def _get_unit_events(project_name: str, limit: int = 50):
+	"""Get recent unit events for the latest mission."""
+	db = _get_db_for_project(project_name)
+	if not db:
+		return []
+	try:
+		mission = db.get_latest_mission()
+		if not mission:
+			return []
+		events = db.get_unit_events_for_mission(mission.id, limit=limit)
+		events.reverse()  # newest first
+		return events
+	except Exception:
+		return []
+	finally:
+		db.close()
+
+
+def _detect_mission_mode(project_name: str) -> str:
+	"""Detect if current mission is rounds or continuous mode."""
+	db = _get_db_for_project(project_name)
+	if not db:
+		return "rounds"
+	try:
+		mission = db.get_latest_mission()
+		if not mission:
+			return "rounds"
+		# If unit_events exist for this mission, it's continuous
+		events = db.get_unit_events_for_mission(mission.id, limit=1)
+		if events:
+			return "continuous"
+		return "rounds"
+	except Exception:
+		return "rounds"
+	finally:
+		db.close()
+
+
+def _get_continuous_status(project_name: str):
+	"""Get continuous mode status summary."""
+	db = _get_db_for_project(project_name)
+	if not db:
+		return None
+	try:
+		mission = db.get_latest_mission()
+		if not mission:
+			return None
+
+		events = db.get_unit_events_for_mission(mission.id, limit=100)
+		if not events:
+			return None
+
+		dispatched = sum(1 for e in events if e.event_type == "dispatched")
+		merged = sum(1 for e in events if e.event_type == "merged")
+		completed = sum(1 for e in events if e.event_type == "completed")
+		failed = sum(1 for e in events if e.event_type == "failed")
+		rejected = sum(1 for e in events if e.event_type == "rejected")
+
+		# Get current score from most recent scored event
+		scored = [e for e in events if e.score_after > 0]
+		score = scored[-1].score_after if scored else 0.0
+
+		# Get current epoch
+		epochs = db.get_epochs_for_mission(mission.id)
+		current_epoch = epochs[-1].number if epochs else 0
+
+		return {
+			"score": score,
+			"dispatched": dispatched,
+			"merged": merged + completed,
+			"failed": failed + rejected,
+			"current_epoch": current_epoch,
+			"backlog_depth": max(0, dispatched - merged - completed - failed - rejected),
+		}
+	except Exception:
+		return None
 	finally:
 		db.close()
 

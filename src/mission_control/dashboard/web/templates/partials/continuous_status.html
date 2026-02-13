@@ -1,0 +1,32 @@
+{% if status %}
+<div class="continuous-status">
+	<div class="status-row">
+		<span class="status-label">Running Score</span>
+		<span class="status-value score-{{ 'high' if status.score >= 0.7 else ('mid' if status.score >= 0.4 else 'low') }}">
+			{{ '%.2f'|format(status.score) }}
+		</span>
+	</div>
+	<div class="status-row">
+		<span class="status-label">Units Dispatched</span>
+		<span class="status-value">{{ status.dispatched }}</span>
+	</div>
+	<div class="status-row">
+		<span class="status-label">Units Merged</span>
+		<span class="status-value">{{ status.merged }}</span>
+	</div>
+	<div class="status-row">
+		<span class="status-label">Units Failed</span>
+		<span class="status-value">{{ status.failed }}</span>
+	</div>
+	<div class="status-row">
+		<span class="status-label">Current Epoch</span>
+		<span class="status-value">{{ status.current_epoch }}</span>
+	</div>
+	<div class="status-row">
+		<span class="status-label">Backlog Depth</span>
+		<span class="status-value">{{ status.backlog_depth }}</span>
+	</div>
+</div>
+{% else %}
+<p class="muted">No continuous status available</p>
+{% endif %}
