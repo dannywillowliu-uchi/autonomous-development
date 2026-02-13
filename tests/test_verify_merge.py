@@ -53,6 +53,7 @@ class TestVerifyAndMergeUnit:
 		mgr = _manager()
 		mgr._run_git = AsyncMock(return_value=(True, ""))
 		mgr._run_command = AsyncMock(return_value=(True, "all tests passed"))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
 		result = await mgr.verify_and_merge_unit("/tmp/worker", "mc/unit-abc")
 
@@ -140,6 +141,7 @@ class TestVerifyAndMergeUnit:
 
 		mgr._run_git = AsyncMock(side_effect=slow_git)
 		mgr._run_command = AsyncMock(return_value=(True, "ok"))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
 		# Launch two concurrent merges
 		import asyncio

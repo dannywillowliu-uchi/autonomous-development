@@ -188,6 +188,8 @@ class GreenBranchManager:
 
 				logger.info("Merged %s directly into %s", branch_name, gb.green_branch)
 
+				await self._sync_to_source()
+
 				# Auto-push if configured
 				if gb.auto_push:
 					await self.push_green_to_main()
@@ -227,6 +229,7 @@ class GreenBranchManager:
 				)
 				return FixupResult(promoted=False, failure_output="ff-only merge failed")
 			logger.info("Promoted %s to %s (clean pass)", gb.working_branch, gb.green_branch)
+			await self._sync_to_source()
 			return FixupResult(promoted=True)
 
 		# Verification failed -- spawn fixup agent
@@ -276,6 +279,7 @@ class GreenBranchManager:
 					"Promoted %s to %s after %d fixup attempt(s)",
 					gb.working_branch, gb.green_branch, attempt,
 				)
+				await self._sync_to_source()
 				return FixupResult(promoted=True, fixup_attempts=attempt)
 
 			# Verification still failing -- restore to pre-fixup state
@@ -292,6 +296,22 @@ class GreenBranchManager:
 		"""Restore working branch to a specific commit, discarding changes."""
 		await self._run_git("reset", "--hard", commit_hash)
 		await self._run_git("clean", "-fd")
+
+	async def _sync_to_source(self) -> None:
+		"""Sync mc/green and mc/working refs from workspace clone to source repo.
+
+		After promotion in the workspace clone, the source repo's refs are stale.
+		Workers provision from the source repo, so they'd start from the old base
+		unless we push the updated refs back.
+		"""
+		source_repo = self.config.target.path
+		gb = self.config.green_branch
+		for branch in (gb.green_branch, gb.working_branch):
+			ok, output = await self._run_git_in(
+				source_repo, "fetch", self.workspace, f"{branch}:{branch}",
+			)
+			if not ok:
+				logger.warning("Failed to sync %s to source repo: %s", branch, output)
 
 	async def push_green_to_main(self) -> bool:
 		"""Merge mc/green into the push branch and push to origin.
