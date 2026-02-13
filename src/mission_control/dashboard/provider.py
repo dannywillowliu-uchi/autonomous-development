@@ -225,8 +225,13 @@ class DashboardProvider:
 			snap.workers_idle = sum(1 for w in all_workers if w.status == "idle")
 			snap.workers_dead = sum(1 for w in all_workers if w.status == "dead")
 		else:
-			# Derive "workers" from running work units (continuous mode)
-			snap.workers, snap.workers_active = _derive_workers_from_units(db, mission.id)
+			# No Worker rows -- derive from running/claimed work units directly.
+			# round_controller never inserts Worker records, so this is the
+			# primary path for rounds mode. Falls back to epoch-based derive
+			# for continuous mode if no plan-based units are found.
+			snap.workers, snap.workers_active = _derive_workers_from_plan(db, snap.current_round)
+			if not snap.workers:
+				snap.workers, snap.workers_active = _derive_workers_from_units(db, mission.id)
 			snap.workers_idle = 0
 			snap.workers_dead = 0
 
@@ -279,6 +284,36 @@ def _round_status_to_phase(status: str) -> str:
 		"failed": "idle",
 	}
 	return mapping.get(status, "idle")
+
+
+def _derive_workers_from_plan(
+	db: Database, current_round: Round | None,
+) -> tuple[list[WorkerInfo], int]:
+	"""Derive worker entries from running/claimed work units in the current plan.
+
+	Used when round_controller dispatches units without creating Worker rows.
+	Returns (worker_infos, active_count).
+	"""
+	if not current_round or not current_round.plan_id:
+		return [], 0
+	try:
+		units = db.get_work_units_for_plan(current_round.plan_id)
+		running = [u for u in units if u.status in ("running", "claimed")]
+	except Exception:
+		return [], 0
+
+	infos = [
+		WorkerInfo(
+			id=u.id[:12],
+			status="working",
+			current_unit_title=u.title,
+			total_cost_usd=u.cost_usd,
+			input_tokens=u.input_tokens,
+			output_tokens=u.output_tokens,
+		)
+		for u in running
+	]
+	return infos, len(infos)
 
 
 def _derive_workers_from_units(db: Database, mission_id: str) -> tuple[list[WorkerInfo], int]:

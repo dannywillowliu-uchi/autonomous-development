@@ -8,6 +8,7 @@ from mission_control.dashboard.provider import (
 	DashboardProvider,
 	DashboardSnapshot,
 	_build_events,
+	_derive_workers_from_plan,
 )
 from mission_control.db import Database
 from mission_control.models import (
@@ -451,3 +452,44 @@ class TestBlockedUnits:
 
 		assert snap.units_pending == 1
 		assert snap.units_blocked == 1
+
+
+class TestDeriveWorkersFromPlan:
+	def test_running_units_become_workers(self) -> None:
+		"""Running work units are shown as workers when no Worker rows exist."""
+		db = _make_db()
+		_insert_mission(db, "m1")
+		_insert_plan(db, "plan1")
+		rnd = _insert_round(db, "m1", "r1", number=1, plan_id="plan1", status="executing")
+		_insert_work_unit(db, "wu1", "plan1", status="running", title="Active task")
+		_insert_work_unit(db, "wu2", "plan1", status="pending", title="Waiting")
+
+		infos, active = _derive_workers_from_plan(db, rnd)
+		assert active == 1
+		assert len(infos) == 1
+		assert infos[0].current_unit_title == "Active task"
+		assert infos[0].status == "working"
+
+	def test_no_round_returns_empty(self) -> None:
+		"""No current round returns empty workers."""
+		db = _make_db()
+		infos, active = _derive_workers_from_plan(db, None)
+		assert infos == []
+		assert active == 0
+
+	def test_snapshot_uses_plan_derive_without_worker_rows(self) -> None:
+		"""Full snapshot derives workers from plan when no Worker DB rows exist."""
+		db = _make_db()
+		_insert_mission(db, "m1")
+		_insert_plan(db, "plan1")
+		_insert_round(db, "m1", "r1", number=1, plan_id="plan1", status="executing")
+		_insert_work_unit(db, "wu1", "plan1", status="running", title="Building API")
+		_insert_work_unit(db, "wu2", "plan1", status="claimed", title="Writing tests")
+
+		provider = _make_provider(db)
+		snap = provider.refresh()
+
+		assert snap.workers_active == 2
+		assert len(snap.workers) == 2
+		titles = {w.current_unit_title for w in snap.workers}
+		assert titles == {"Building API", "Writing tests"}
