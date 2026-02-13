@@ -134,6 +134,10 @@ class ContinuousPlanner:
 		# Extract work units from the plan tree
 		units = self._extract_units_from_tree(root_node)
 
+		# Post-planning: detect file overlaps and inject dependency edges
+		from mission_control.overlap import resolve_file_overlaps
+		units = resolve_file_overlaps(units)
+
 		plan.status = "active"
 		plan.total_units = len(units)
 
