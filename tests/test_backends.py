@@ -142,12 +142,15 @@ class TestLocalBackend:
 
 		assert result == "/pool/clone-1"
 		backend._pool.acquire.assert_awaited_once()
-		# Two subprocess calls: checkout base_branch, then checkout -B feature branch
-		assert mock_exec.await_count == 2
-		base_call = mock_exec.call_args_list[0]
+		# Three subprocess calls: fetch, checkout base_branch, checkout -B feature branch
+		assert mock_exec.await_count == 3
+		fetch_call = mock_exec.call_args_list[0]
+		assert fetch_call[0] == ("git", "fetch", "origin")
+		assert fetch_call[1]["cwd"] == "/pool/clone-1"
+		base_call = mock_exec.call_args_list[1]
 		assert base_call[0] == ("git", "checkout", "main")
 		assert base_call[1]["cwd"] == "/pool/clone-1"
-		branch_call = mock_exec.call_args_list[1]
+		branch_call = mock_exec.call_args_list[2]
 		assert branch_call[0] == ("git", "checkout", "-B", "mc/unit-w1")
 		assert branch_call[1]["cwd"] == "/pool/clone-1"
 
@@ -165,8 +168,8 @@ class TestLocalBackend:
 
 		await backend.provision_workspace("w1", "/repo", "main")
 
-		# Second call (feature branch) should use -B (force create) not -b
-		args = mock_exec.call_args_list[1][0]
+		# call 0 = fetch, call 1 = base checkout, call 2 = feature branch
+		args = mock_exec.call_args_list[2][0]
 		assert args == ("git", "checkout", "-B", "mc/unit-w1")
 
 	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")
@@ -176,14 +179,18 @@ class TestLocalBackend:
 		"""provision_workspace raises and releases workspace if feature branch checkout fails."""
 		backend._pool.acquire.return_value = Path("/pool/clone-1")
 
-		# First call (base checkout) succeeds, second (feature branch) fails
+		# call 0 = fetch (succeeds), call 1 = base checkout (succeeds),
+		# call 2 = feature branch (fails)
+		mock_fetch_proc = AsyncMock()
+		mock_fetch_proc.returncode = 0
+		mock_fetch_proc.communicate = AsyncMock(return_value=(b"", None))
 		mock_base_proc = AsyncMock()
 		mock_base_proc.returncode = 0
 		mock_base_proc.communicate = AsyncMock(return_value=(b"", None))
 		mock_branch_proc = AsyncMock()
 		mock_branch_proc.communicate = AsyncMock(return_value=(b"fatal: error", None))
 		mock_branch_proc.returncode = 1
-		mock_exec.side_effect = [mock_base_proc, mock_branch_proc]
+		mock_exec.side_effect = [mock_fetch_proc, mock_base_proc, mock_branch_proc]
 
 		with pytest.raises(RuntimeError, match="Failed to create branch"):
 			await backend.provision_workspace("w1", "/repo", "main")
@@ -198,10 +205,14 @@ class TestLocalBackend:
 		"""provision_workspace raises and releases workspace if base branch checkout fails."""
 		backend._pool.acquire.return_value = Path("/pool/clone-1")
 
-		mock_proc = AsyncMock()
-		mock_proc.communicate = AsyncMock(return_value=(b"error: pathspec", None))
-		mock_proc.returncode = 1
-		mock_exec.return_value = mock_proc
+		# Fetch succeeds, base checkout fails
+		mock_fetch_proc = AsyncMock()
+		mock_fetch_proc.returncode = 0
+		mock_fetch_proc.communicate = AsyncMock(return_value=(b"", None))
+		mock_fail_proc = AsyncMock()
+		mock_fail_proc.communicate = AsyncMock(return_value=(b"error: pathspec", None))
+		mock_fail_proc.returncode = 1
+		mock_exec.side_effect = [mock_fetch_proc, mock_fail_proc]
 
 		with pytest.raises(RuntimeError, match="Failed to checkout base branch"):
 			await backend.provision_workspace("w1", "/repo", "mc/green")
@@ -232,8 +243,8 @@ class TestLocalBackend:
 
 		await backend.provision_workspace("w1", "/repo", "mc/green")
 
-		# First call should checkout mc/green (not main)
-		base_call = mock_exec.call_args_list[0]
+		# call 0 = fetch, call 1 = base checkout (should be mc/green, not main)
+		base_call = mock_exec.call_args_list[1]
 		assert base_call[0] == ("git", "checkout", "mc/green")
 
 	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")

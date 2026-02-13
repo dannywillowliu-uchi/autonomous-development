@@ -596,3 +596,117 @@ class TestSSHBackendMissionModeRejection:
 
 		with pytest.raises(NotImplementedError, match="SSH backend is not yet supported"):
 			await controller._init_components()  # noqa: SLF001
+
+
+class TestAllUnitsFailed:
+	"""Auto-pause: detect when all units in a round fail."""
+
+	def test_all_failed(self) -> None:
+		r = RoundResult(total_units=3, completed_units=0, failed_units=3)
+		assert RoundController._all_units_failed(r) is True
+
+	def test_some_completed(self) -> None:
+		r = RoundResult(total_units=3, completed_units=1, failed_units=2)
+		assert RoundController._all_units_failed(r) is False
+
+	def test_zero_units(self) -> None:
+		r = RoundResult(total_units=0, completed_units=0, failed_units=0)
+		assert RoundController._all_units_failed(r) is False
+
+	def test_all_completed(self) -> None:
+		r = RoundResult(total_units=2, completed_units=2, failed_units=0)
+		assert RoundController._all_units_failed(r) is False
+
+
+class TestHandleAllFailPause:
+	"""Auto-pause: pause and retry when all units fail."""
+
+	async def test_pause_triggers_retry_on_all_fail(self, db: Database) -> None:
+		"""When all units fail and retry succeeds, returns the improved result."""
+		from unittest.mock import AsyncMock
+
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(
+			pause_on_all_fail=True, pause_interval=0, max_pause_retries=2,
+		)
+		ctrl = RoundController(cfg, db)
+		mission = Mission(objective="test", status="running")
+
+		fail_result = RoundResult(total_units=2, completed_units=0, failed_units=2)
+		ok_result = RoundResult(total_units=2, completed_units=1, failed_units=1, score=0.5)
+
+		ctrl._run_round = AsyncMock(return_value=ok_result)
+
+		result = await ctrl._handle_all_fail_pause(mission, 1, [], fail_result)
+
+		assert result is not None
+		assert result.score == 0.5
+		ctrl._run_round.assert_called_once()
+
+	async def test_pause_disabled_returns_none(self, db: Database) -> None:
+		"""When pause_on_all_fail is False, returns None immediately."""
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(pause_on_all_fail=False)
+		ctrl = RoundController(cfg, db)
+		mission = Mission(objective="test", status="running")
+
+		fail_result = RoundResult(total_units=2, completed_units=0, failed_units=2)
+		result = await ctrl._handle_all_fail_pause(mission, 1, [], fail_result)
+
+		assert result is None
+
+	async def test_max_retries_exhausted_returns_none(self, db: Database) -> None:
+		"""When all retries still fail, returns None."""
+		from unittest.mock import AsyncMock
+
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(
+			pause_on_all_fail=True, pause_interval=0, max_pause_retries=2,
+		)
+		ctrl = RoundController(cfg, db)
+		mission = Mission(objective="test", status="running")
+
+		always_fail = RoundResult(total_units=2, completed_units=0, failed_units=2)
+		ctrl._run_round = AsyncMock(return_value=always_fail)
+
+		result = await ctrl._handle_all_fail_pause(mission, 1, [], always_fail)
+
+		assert result is None
+		assert ctrl._run_round.call_count == 2  # max_pause_retries=2
+
+	async def test_recovery_after_second_retry(self, db: Database) -> None:
+		"""First retry fails, second succeeds."""
+		from unittest.mock import AsyncMock
+
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(
+			pause_on_all_fail=True, pause_interval=0, max_pause_retries=3,
+		)
+		ctrl = RoundController(cfg, db)
+		mission = Mission(objective="test", status="running")
+
+		fail_result = RoundResult(total_units=2, completed_units=0, failed_units=2)
+		ok_result = RoundResult(total_units=2, completed_units=2, failed_units=0, score=0.8)
+
+		ctrl._run_round = AsyncMock(side_effect=[fail_result, ok_result])
+
+		result = await ctrl._handle_all_fail_pause(mission, 1, [], fail_result)
+
+		assert result is not None
+		assert result.score == 0.8
+		assert ctrl._run_round.call_count == 2
+
+	async def test_user_stop_during_pause(self, db: Database) -> None:
+		"""If user stops during pause, returns None without retrying."""
+		cfg = MissionConfig()
+		cfg.rounds = RoundsConfig(
+			pause_on_all_fail=True, pause_interval=0, max_pause_retries=3,
+		)
+		ctrl = RoundController(cfg, db)
+		ctrl.running = False
+		mission = Mission(objective="test", status="running")
+
+		fail_result = RoundResult(total_units=2, completed_units=0, failed_units=2)
+		result = await ctrl._handle_all_fail_pause(mission, 1, [], fail_result)
+
+		assert result is None
