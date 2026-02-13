@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import sys
 from pathlib import Path
 
@@ -321,6 +322,11 @@ COMMANDS = {
 
 
 def main(argv: list[str] | None = None) -> int:
+	logging.basicConfig(
+		level=logging.INFO,
+		format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+		datefmt="%H:%M:%S",
+	)
 	parser = build_parser()
 	args = parser.parse_args(argv)
 
