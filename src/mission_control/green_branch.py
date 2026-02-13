@@ -174,6 +174,30 @@ class GreenBranchManager:
 		await self._run_git("reset", "--hard", commit_hash)
 		await self._run_git("clean", "-fd")
 
+	async def push_green_to_main(self) -> bool:
+		"""Merge mc/green into the push branch and push to origin."""
+		gb = self.config.green_branch
+		if not gb.auto_push:
+			return False
+
+		push_branch = gb.push_branch
+		await self._run_git("checkout", push_branch)
+		ok, output = await self._run_git("merge", "--ff-only", gb.green_branch)
+		if not ok:
+			logger.error("Failed to ff-merge %s into %s: %s", gb.green_branch, push_branch, output)
+			await self._run_git("checkout", gb.green_branch)
+			return False
+
+		ok, output = await self._run_git("push", "origin", push_branch)
+		if not ok:
+			logger.error("Failed to push %s: %s", push_branch, output)
+			await self._run_git("checkout", gb.green_branch)
+			return False
+
+		logger.info("Pushed %s to origin/%s", gb.green_branch, push_branch)
+		await self._run_git("checkout", gb.green_branch)
+		return True
+
 	async def get_green_hash(self) -> str:
 		"""Return the current commit hash of mc/green."""
 		gb = self.config.green_branch
@@ -200,6 +224,7 @@ class GreenBranchManager:
 		proc = await asyncio.create_subprocess_exec(
 			"claude", "-p",
 			"--permission-mode", "bypassPermissions",
+			"--model", self.config.scheduler.model,
 			"--max-budget-usd", str(budget),
 			cwd=self.workspace,
 			stdin=asyncio.subprocess.PIPE,

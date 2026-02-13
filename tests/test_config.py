@@ -75,7 +75,7 @@ def test_load_minimal_config(minimal_config: Path) -> None:
 	# Defaults
 	assert cfg.target.branch == "main"
 	assert cfg.scheduler.session_timeout == 2700
-	assert cfg.scheduler.model == "sonnet"
+	assert cfg.scheduler.model == "opus"
 	assert cfg.scheduler.git.strategy == "branch-per-session"
 	assert cfg.scheduler.budget.max_per_session_usd == 5.0
 

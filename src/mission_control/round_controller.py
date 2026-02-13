@@ -307,6 +307,12 @@ class RoundController:
 			fixup_result.promoted, fixup_result.fixup_attempts,
 		)
 
+		# 4b. Auto-push mc/green to main if promoted
+		if fixup_result.promoted:
+			pushed = await self._green_branch.push_green_to_main()
+			if pushed:
+				logger.info("Auto-pushed mc/green to origin/%s", self.config.green_branch.push_branch)
+
 		# 5. Evaluate objective on mc/green
 		round_summary = self._build_round_summary(plan, handoffs, fixup_result)
 		evaluation = await evaluate_objective(

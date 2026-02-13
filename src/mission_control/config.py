@@ -68,7 +68,7 @@ class SchedulerConfig:
 	session_timeout: int = 2700
 	cooldown: int = 60
 	max_sessions_per_run: int = 10
-	model: str = "sonnet"
+	model: str = "opus"
 	monitor_interval: int = 5
 	output_summary_max_chars: int = 500
 	polling_interval: int = 5  # seconds between status checks during execution
@@ -112,6 +112,8 @@ class GreenBranchConfig:
 	green_branch: str = "mc/green"
 	fixup_max_attempts: int = 3
 	reset_on_init: bool = True
+	auto_push: bool = False
+	push_branch: str = "main"
 
 
 @dataclass
@@ -243,6 +245,10 @@ def _build_green_branch(data: dict[str, Any]) -> GreenBranchConfig:
 		gc.fixup_max_attempts = int(data["fixup_max_attempts"])
 	if "reset_on_init" in data:
 		gc.reset_on_init = bool(data["reset_on_init"])
+	if "auto_push" in data:
+		gc.auto_push = bool(data["auto_push"])
+	if "push_branch" in data:
+		gc.push_branch = str(data["push_branch"])
 	return gc
 
 
