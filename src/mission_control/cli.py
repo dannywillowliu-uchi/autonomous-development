@@ -363,12 +363,26 @@ def cmd_web(args: argparse.Namespace) -> int:
 		print("Dashboard dependencies not installed. Run: pip install -e '.[dashboard]'")
 		return 1
 
-	db_path = _get_db_path(args.config)
-	if not db_path.exists():
-		print("No database found. Run 'mc start' or 'mc mission' first.")
-		return 1
+	from mission_control.registry import ProjectRegistry
 
-	app = create_app(str(db_path))
+	registry = ProjectRegistry()
+
+	# Auto-register current project if config exists and not already registered
+	config_path = Path(args.config).resolve()
+	if config_path.exists():
+		try:
+			config = load_config(str(config_path))
+			name = config.target.name
+			db_path = str(config_path.parent / DEFAULT_DB)
+			try:
+				registry.register(name=name, config_path=str(config_path), db_path=db_path)
+				print(f"Auto-registered project '{name}'")
+			except ValueError:
+				pass  # Already registered
+		except Exception:
+			pass
+
+	app = create_app(registry=registry)
 	print(f"Starting web dashboard at http://localhost:{args.port}")
 	uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
 	return 0

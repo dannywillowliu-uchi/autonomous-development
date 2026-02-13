@@ -1,3 +1,10 @@
 <div class="toast toast-{{ level }}" role="alert">
 	{{ message }}
 </div>
+<script>
+	// Auto-dismiss toast after 4 seconds
+	setTimeout(function() {
+		var container = document.getElementById('toast-container');
+		if (container) container.innerHTML = '';
+	}, 4000);
+</script>

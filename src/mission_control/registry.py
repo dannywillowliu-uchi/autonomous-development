@@ -60,7 +60,7 @@ class ProjectRegistry:
 			db_path = DEFAULT_REGISTRY_DB
 		self._db_path = Path(db_path)
 		self._db_path.parent.mkdir(parents=True, exist_ok=True)
-		self.conn = sqlite3.connect(str(self._db_path))
+		self.conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
 		self.conn.row_factory = sqlite3.Row
 		self.conn.execute("PRAGMA journal_mode=WAL")
 		self.conn.execute("PRAGMA foreign_keys=ON")

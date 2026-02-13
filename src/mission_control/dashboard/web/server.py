@@ -43,15 +43,30 @@ class DashboardState:
 		if not db_path.exists():
 			return None
 
-		provider = DashboardProvider(str(db_path))
-		provider.start_polling(interval=2.0)
-		self._providers[project_name] = provider
-		return provider
+		try:
+			provider = DashboardProvider(str(db_path))
+			provider.start_polling(interval=2.0)
+			self._providers[project_name] = provider
+			return provider
+		except Exception:
+			logger.warning("Could not create provider for %s (DB may be locked)", project_name)
+			return None
+
+	def cleanup_stale_pids(self) -> None:
+		"""Clean up stale PIDs for projects whose processes are no longer alive."""
+		for p in self.registry.list_projects():
+			if p.active_pid is not None:
+				if not self.launcher.is_running(p.name):
+					# is_running already cleans up stale PIDs
+					pass
 
 	def stop_all(self) -> None:
 		"""Stop all providers."""
 		for p in self._providers.values():
-			p.stop()
+			try:
+				p.stop()
+			except Exception:
+				pass  # May fail if DB was created in a different thread
 		self._providers.clear()
 
 
@@ -70,6 +85,7 @@ def create_app(db_path: str | None = None, registry: ProjectRegistry | None = No
 		global _state
 		if registry is not None:
 			_state = DashboardState(registry)
+			_state.cleanup_stale_pids()
 		else:
 			# Legacy single-project mode: create temporary registry
 			reg = ProjectRegistry()
@@ -82,6 +98,7 @@ def create_app(db_path: str | None = None, registry: ProjectRegistry | None = No
 				except ValueError:
 					pass  # Already registered
 			_state = DashboardState(reg)
+		_state.cleanup_stale_pids()
 		yield
 		if _state:
 			_state.stop_all()

@@ -101,6 +101,13 @@ class RoundController:
 			while self.running:
 				round_number += 1
 				mission.total_rounds = round_number
+
+				# Expire stale signals (unacknowledged >10 min)
+				try:
+					self.db.expire_stale_signals(timeout_minutes=10)
+				except Exception:
+					pass
+
 				reason = self._should_stop(mission, result.round_scores)
 				if reason:
 					result.stopped_reason = reason
