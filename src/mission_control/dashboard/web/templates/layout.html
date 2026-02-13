@@ -18,14 +18,14 @@
 	<nav class="tab-bar"
 		hx-get="/partials/tab-bar"
 		hx-trigger="load"
-		hx-swap="morph:innerHTML">
+		hx-swap="innerHTML">
 	</nav>
 
-	<!-- Tab content -->
+	<!-- Tab content -- plain innerHTML for tab switches (completely different content) -->
 	<div id="tab-content"
 		hx-get="/overview"
 		hx-trigger="load"
-		hx-swap="morph:innerHTML">
+		hx-swap="innerHTML">
 	</div>
 
 	<!-- Toast container for feedback -->
