@@ -1,0 +1,31 @@
+{% if unit %}
+<div class="unit-detail">
+	<div class="unit-detail-header">
+		<span class="unit-title">{{ unit.title }}</span>
+		<span class="badge badge-{{ unit.status }}">{{ unit.status }}</span>
+	</div>
+	{% if unit.description %}
+	<div class="unit-description">{{ unit.description[:300] }}</div>
+	{% endif %}
+	{% if unit.output_summary %}
+	<div class="unit-output">
+		<span class="label">Output</span>
+		<pre>{{ unit.output_summary[:500] }}</pre>
+	</div>
+	{% endif %}
+	{% if unit.files_hint %}
+	<div class="unit-files">
+		<span class="label">Files</span>
+		<span>{{ unit.files_hint }}</span>
+	</div>
+	{% endif %}
+	{% if unit.commit_hash %}
+	<div class="unit-commit">
+		<span class="label">Commit</span>
+		<code>{{ unit.commit_hash[:8] }}</code>
+	</div>
+	{% endif %}
+</div>
+{% else %}
+<p class="muted">Unit not found</p>
+{% endif %}

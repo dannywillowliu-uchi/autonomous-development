@@ -1,0 +1,25 @@
+<div class="tabs">
+	<button class="tab {% if active_tab == 'overview' %}tab-active{% endif %}"
+		hx-get="/overview"
+		hx-target="#tab-content"
+		hx-swap="innerHTML"
+		hx-push-url="/">
+		Overview
+	</button>
+	{% for name in project_names %}
+	<button class="tab {% if active_tab == name %}tab-active{% endif %}"
+		hx-get="/project/{{ name }}/dashboard"
+		hx-target="#tab-content"
+		hx-swap="innerHTML"
+		hx-push-url="/project/{{ name }}">
+		{{ name }}
+	</button>
+	{% endfor %}
+	<button class="tab tab-launch"
+		hx-get="/launch/step/1"
+		hx-target="#tab-content"
+		hx-swap="innerHTML"
+		hx-push-url="/launch">
+		+ Launch
+	</button>
+</div>

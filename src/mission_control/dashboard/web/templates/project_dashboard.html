@@ -1,0 +1,67 @@
+<main class="grid" data-project="{{ project_name }}">
+	<!-- Mission header -->
+	<section class="card span-full"
+		hx-get="/project/{{ project_name }}/partials/mission-header"
+		hx-trigger="load, every 2s"
+		hx-swap="innerHTML">
+	</section>
+
+	<!-- Worker pool -->
+	<section class="card span-2">
+		<h2>Workers</h2>
+		<div hx-get="/project/{{ project_name }}/partials/worker-pool"
+			hx-trigger="load, every 2s"
+			hx-swap="innerHTML">
+		</div>
+	</section>
+
+	<!-- Work units -->
+	<section class="card">
+		<h2>Work Units</h2>
+		<div hx-get="/project/{{ project_name }}/partials/work-units"
+			hx-trigger="load, every 2s"
+			hx-swap="innerHTML">
+		</div>
+	</section>
+
+	<!-- Merge queue -->
+	<section class="card">
+		<h2>Merge Queue</h2>
+		<div hx-get="/project/{{ project_name }}/partials/merge-queue"
+			hx-trigger="load, every 2s"
+			hx-swap="innerHTML">
+		</div>
+	</section>
+
+	<!-- Charts row -->
+	<section class="card">
+		<h2>Score History</h2>
+		<canvas id="chart-score-{{ project_name }}"></canvas>
+	</section>
+
+	<section class="card">
+		<h2>Test Trend</h2>
+		<canvas id="chart-tests-{{ project_name }}"></canvas>
+	</section>
+
+	<section class="card">
+		<h2>Cost / Round</h2>
+		<canvas id="chart-cost-{{ project_name }}"></canvas>
+	</section>
+
+	<!-- Activity log -->
+	<section class="card span-full">
+		<h2>Activity Log</h2>
+		<div hx-get="/project/{{ project_name }}/partials/activity-log"
+			hx-trigger="load, every 2s"
+			hx-swap="innerHTML">
+		</div>
+	</section>
+</main>
+
+<script>
+	// Initialize charts for this project
+	(function() {
+		initProjectCharts("{{ project_name }}");
+	})();
+</script>

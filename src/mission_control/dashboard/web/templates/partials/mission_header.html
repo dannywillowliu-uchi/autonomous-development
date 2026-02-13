@@ -36,6 +36,17 @@
 			<span class="label">Total Cost</span>
 			<span class="value">${{ '%.2f'|format(snap.total_cost) }}</span>
 		</div>
+		{% if snap.mission.status == 'running' and project_name %}
+		<div class="stat">
+			<button class="btn btn-danger"
+				hx-post="/project/{{ project_name }}/stop"
+				hx-confirm="Stop the running mission?"
+				hx-target="#toast-container"
+				hx-swap="innerHTML">
+				Stop Mission
+			</button>
+		</div>
+		{% endif %}
 	</div>
 </div>
 {% else %}
