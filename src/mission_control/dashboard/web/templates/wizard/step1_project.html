@@ -1,0 +1,22 @@
+<div class="wizard card">
+	<h2>Launch Mission - Step 1: Pick Project</h2>
+	<div class="wizard-projects">
+		{% for p in projects %}
+		<div class="wizard-project-card"
+			hx-get="/launch/step/2?project={{ p.name }}"
+			hx-target="#tab-content"
+			hx-swap="innerHTML">
+			<div class="project-name">{{ p.name }}</div>
+			{% if p.description %}
+			<div class="project-objective">{{ p.description[:60] }}</div>
+			{% endif %}
+		</div>
+		{% endfor %}
+	</div>
+	{% if not projects %}
+	<div class="empty-state">
+		<p>No projects registered.</p>
+		<p class="muted">Run <code>mc register --config path/to/mission-control.toml</code> first.</p>
+	</div>
+	{% endif %}
+</div>

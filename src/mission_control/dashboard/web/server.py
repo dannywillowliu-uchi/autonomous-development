@@ -298,6 +298,103 @@ def create_app(db_path: str | None = None, registry: ProjectRegistry | None = No
 		data = [c for _, c in snap.cost_per_round]
 		return JSONResponse({"labels": labels, "data": data})
 
+	# -- Launch wizard --
+
+	@app.get("/launch/step/1", response_class=HTMLResponse)
+	async def launch_step1(request: Request):
+		assert _state is not None
+		projects = _state.registry.list_projects()
+		return templates.TemplateResponse(
+			"wizard/step1_project.html",
+			{"request": request, "projects": projects},
+		)
+
+	@app.get("/launch/step/2", response_class=HTMLResponse)
+	async def launch_step2(request: Request, project: str = ""):
+		assert _state is not None
+		default_objective = ""
+		proj = _state.registry.get_project(project)
+		if proj:
+			# Try to load objective from config
+			try:
+				from mission_control.config import load_config
+				config = load_config(proj.config_path)
+				default_objective = config.target.objective
+			except Exception:
+				pass
+		return templates.TemplateResponse(
+			"wizard/step2_objective.html",
+			{"request": request, "project_name": project, "default_objective": default_objective},
+		)
+
+	@app.get("/launch/step/3", response_class=HTMLResponse)
+	async def launch_step3(request: Request, project: str = "", objective: str = ""):
+		assert _state is not None
+		defaults = {"model": "sonnet", "workers": 4, "max_rounds": 20, "budget": 5.0}
+		proj = _state.registry.get_project(project)
+		if proj:
+			try:
+				from mission_control.config import load_config
+				config = load_config(proj.config_path)
+				defaults["model"] = config.scheduler.model
+				defaults["workers"] = config.scheduler.parallel.num_workers
+				defaults["max_rounds"] = config.rounds.max_rounds
+				defaults["budget"] = config.scheduler.budget.max_per_session_usd
+			except Exception:
+				pass
+		return templates.TemplateResponse(
+			"wizard/step3_configure.html",
+			{"request": request, "project_name": project, "objective": objective, "defaults": defaults},
+		)
+
+	@app.get("/launch/step/4", response_class=HTMLResponse)
+	async def launch_step4(
+		request: Request,
+		project: str = "",
+		objective: str = "",
+		model: str = "sonnet",
+		workers: int = 4,
+		max_rounds: int = 20,
+		budget: float = 5.0,
+	):
+		return templates.TemplateResponse(
+			"wizard/step4_review.html",
+			{
+				"request": request,
+				"project_name": project,
+				"objective": objective,
+				"model": model,
+				"workers": workers,
+				"max_rounds": max_rounds,
+				"budget": budget,
+			},
+		)
+
+	@app.post("/launch/execute", response_class=HTMLResponse)
+	async def launch_execute(request: Request):
+		assert _state is not None
+		form = await request.form()
+		project_name = str(form.get("project", ""))
+		overrides: dict[str, str] = {}
+		if form.get("max_rounds"):
+			overrides["max_rounds"] = str(form["max_rounds"])
+		if form.get("workers"):
+			overrides["workers"] = str(form["workers"])
+
+		try:
+			_state.launcher.launch(project_name, config_overrides=overrides)
+			# Redirect to project dashboard
+			return templates.TemplateResponse(
+				"project_dashboard.html",
+				{"request": request, "project_name": project_name},
+				headers={"HX-Push-Url": f"/project/{project_name}"},
+			)
+		except Exception as e:
+			return templates.TemplateResponse(
+				"partials/toast.html",
+				{"request": request, "message": f"Launch failed: {e}", "level": "error"},
+			)
+
 	# -- Control endpoints --
 
 	@app.post("/project/{name}/stop", response_class=HTMLResponse)
