@@ -12,6 +12,33 @@
 	<span class="count completed">{{ snap.units_completed }} done</span>
 	<span class="count failed">{{ snap.units_failed }} failed</span>
 </div>
+{% if units %}
+<ul class="unit-list">
+	{% for u in units %}
+	<li class="unit-item unit-{{ u.status }}">
+		<span class="unit-item-title"
+			{% if project_name %}
+			hx-get="/project/{{ project_name }}/partials/unit/{{ u.id }}"
+			hx-target="next .unit-expand"
+			hx-swap="innerHTML"
+			{% endif %}
+			style="cursor:pointer">
+			{{ u.title[:60] }}
+		</span>
+		<span class="badge badge-{{ u.status }}">{{ u.status }}</span>
+		{% if u.status == 'failed' and project_name %}
+		<button class="btn btn-small btn-retry"
+			hx-post="/project/{{ project_name }}/retry/{{ u.id }}"
+			hx-target="#toast-container"
+			hx-swap="innerHTML">
+			Retry
+		</button>
+		{% endif %}
+		<div class="unit-expand"></div>
+	</li>
+	{% endfor %}
+</ul>
+{% endif %}
 {% else %}
 <p class="muted">No work units</p>
 {% endif %}
