@@ -6,6 +6,13 @@
 		hx-swap="innerHTML">
 	</section>
 
+	<!-- Live status banner -->
+	<section class="card span-full"
+		hx-get="/project/{{ project_name }}/partials/live-status"
+		hx-trigger="load, every 2s"
+		hx-swap="innerHTML">
+	</section>
+
 	<!-- Worker pool -->
 	<section class="card span-2">
 		<h2>Workers</h2>
@@ -33,6 +40,23 @@
 		</div>
 	</section>
 
+	<!-- Round timeline + Discoveries feed -->
+	<section class="card span-2">
+		<h2>Round Timeline</h2>
+		<div hx-get="/project/{{ project_name }}/partials/round-timeline"
+			hx-trigger="load, every 5s"
+			hx-swap="innerHTML">
+		</div>
+	</section>
+
+	<section class="card">
+		<h2>Discoveries</h2>
+		<div hx-get="/project/{{ project_name }}/partials/discoveries-feed"
+			hx-trigger="load, every 5s"
+			hx-swap="innerHTML">
+		</div>
+	</section>
+
 	<!-- Charts row -->
 	<section class="card">
 		<h2>Score History</h2>
@@ -47,6 +71,15 @@
 	<section class="card">
 		<h2>Cost / Round</h2>
 		<canvas id="chart-cost-{{ project_name }}"></canvas>
+	</section>
+
+	<!-- Live log tail -->
+	<section class="card span-full">
+		<h2>Live Log</h2>
+		<div hx-get="/project/{{ project_name }}/partials/log-tail"
+			hx-trigger="load, every 3s"
+			hx-swap="innerHTML">
+		</div>
 	</section>
 
 	<!-- Activity log -->

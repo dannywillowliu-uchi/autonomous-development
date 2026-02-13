@@ -600,6 +600,243 @@ canvas {
 	margin-left: 0;
 }
 
+/* Live status banner */
+.live-status {
+	display: flex;
+	align-items: center;
+	gap: 20px;
+	flex-wrap: wrap;
+}
+
+.live-status .status-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 13px;
+}
+
+.live-status .status-label {
+	color: var(--text-muted);
+	font-size: 11px;
+	text-transform: uppercase;
+}
+
+.live-status .status-value {
+	font-weight: 600;
+}
+
+.live-status .mini-progress {
+	width: 80px;
+	height: 6px;
+	background: var(--border);
+	border-radius: 3px;
+	overflow: hidden;
+}
+
+.live-status .mini-progress-fill {
+	height: 100%;
+	background: var(--accent);
+	border-radius: 3px;
+	transition: width 0.3s ease;
+}
+
+.live-status .latest-discovery {
+	flex: 1;
+	min-width: 200px;
+	font-size: 12px;
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.live-status .latest-discovery strong {
+	color: var(--accent);
+	font-weight: 600;
+}
+
+/* Round timeline */
+.round-timeline {
+	list-style: none;
+	max-height: 400px;
+	overflow-y: auto;
+}
+
+.round-item {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 6px 0;
+	font-size: 13px;
+	border-bottom: 1px solid rgba(255,255,255,0.04);
+	cursor: pointer;
+}
+
+.round-item:hover {
+	background: rgba(255,255,255,0.03);
+}
+
+.round-number {
+	font-weight: 700;
+	color: var(--accent);
+	min-width: 32px;
+}
+
+.round-score {
+	min-width: 48px;
+	text-align: right;
+}
+
+.round-cost {
+	min-width: 56px;
+	text-align: right;
+	color: var(--text-muted);
+	font-size: 12px;
+}
+
+.round-units {
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+/* Round detail (expanded) */
+.round-detail-panel {
+	padding: 10px;
+	margin: 4px 0;
+	background: rgba(0,0,0,0.2);
+	border-radius: 4px;
+	font-size: 12px;
+}
+
+.round-detail-panel h4 {
+	color: var(--text-muted);
+	font-size: 11px;
+	text-transform: uppercase;
+	margin: 8px 0 4px;
+	letter-spacing: 0.5px;
+}
+
+.round-detail-panel h4:first-child {
+	margin-top: 0;
+}
+
+.metrics-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+	gap: 6px;
+}
+
+.metric {
+	display: flex;
+	flex-direction: column;
+}
+
+.metric .metric-label {
+	color: var(--text-muted);
+	font-size: 10px;
+	text-transform: uppercase;
+}
+
+.metric .metric-value {
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.plan-tree {
+	list-style: none;
+	font-size: 12px;
+}
+
+.plan-tree li {
+	padding: 2px 0;
+}
+
+.plan-tree .node-scope {
+	color: var(--text);
+}
+
+.plan-tree .node-strategy {
+	color: var(--text-muted);
+	font-size: 11px;
+}
+
+.handoff-list {
+	list-style: none;
+}
+
+.handoff-item {
+	padding: 4px 0;
+	border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.handoff-summary {
+	color: var(--text);
+}
+
+.handoff-discoveries,
+.handoff-concerns {
+	font-size: 11px;
+	margin-top: 2px;
+	padding-left: 12px;
+}
+
+.handoff-discoveries li {
+	color: var(--accent);
+	list-style: disc;
+}
+
+.handoff-concerns li {
+	color: var(--warning);
+	list-style: disc;
+}
+
+/* Discoveries feed */
+.discoveries-feed {
+	list-style: none;
+	max-height: 400px;
+	overflow-y: auto;
+}
+
+.discovery-item {
+	display: flex;
+	gap: 8px;
+	padding: 4px 0;
+	font-size: 12px;
+	border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+
+.discovery-round {
+	color: var(--text-muted);
+	font-size: 11px;
+	min-width: 28px;
+}
+
+.discovery-text {
+	flex: 1;
+}
+
+.discovery-item.type-discovery .discovery-text {
+	color: var(--accent);
+}
+
+.discovery-item.type-concern .discovery-text {
+	color: var(--warning);
+}
+
+/* Log tail */
+.log-tail {
+	background: rgba(0,0,0,0.3);
+	border-radius: 4px;
+	padding: 8px;
+	max-height: 300px;
+	overflow-y: auto;
+	font-size: 11px;
+	line-height: 1.4;
+	white-space: pre-wrap;
+	word-break: break-all;
+	color: var(--text-muted);
+}
+
 /* Responsive */
 @media (max-width: 900px) {
 	.grid {

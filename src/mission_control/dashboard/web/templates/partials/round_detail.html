@@ -1,0 +1,88 @@
+{% if reflection %}
+<div class="round-detail-panel">
+	<h4>Reflection Metrics</h4>
+	<div class="metrics-grid">
+		<div class="metric">
+			<span class="metric-label">Tests Before</span>
+			<span class="metric-value">{{ reflection.tests_before }}</span>
+		</div>
+		<div class="metric">
+			<span class="metric-label">Tests After</span>
+			<span class="metric-value">{{ reflection.tests_after }}</span>
+		</div>
+		<div class="metric">
+			<span class="metric-label">Tests Delta</span>
+			<span class="metric-value {% if reflection.tests_delta > 0 %}delta positive{% elif reflection.tests_delta < 0 %}delta negative{% endif %}">
+				{{ '+' if reflection.tests_delta > 0 else '' }}{{ reflection.tests_delta }}
+			</span>
+		</div>
+		<div class="metric">
+			<span class="metric-label">Lint Delta</span>
+			<span class="metric-value {% if reflection.lint_delta < 0 %}delta positive{% elif reflection.lint_delta > 0 %}delta negative{% endif %}">
+				{{ '+' if reflection.lint_delta > 0 else '' }}{{ reflection.lint_delta }}
+			</span>
+		</div>
+		<div class="metric">
+			<span class="metric-label">Score</span>
+			<span class="metric-value">{{ '%.1f'|format(reflection.objective_score) }}</span>
+		</div>
+		<div class="metric">
+			<span class="metric-label">Score Delta</span>
+			<span class="metric-value {% if reflection.score_delta > 0 %}delta positive{% elif reflection.score_delta < 0 %}delta negative{% endif %}">
+				{{ '+' if reflection.score_delta > 0 else '' }}{{ '%.1f'|format(reflection.score_delta) }}
+			</span>
+		</div>
+		<div class="metric">
+			<span class="metric-label">Plan Depth</span>
+			<span class="metric-value">{{ reflection.plan_depth }}</span>
+		</div>
+		<div class="metric">
+			<span class="metric-label">Fixup</span>
+			<span class="metric-value">{{ 'promoted' if reflection.fixup_promoted else reflection.fixup_attempts ~ ' attempts' }}</span>
+		</div>
+	</div>
+
+	{% if plan_nodes %}
+	<h4>Plan Structure</h4>
+	<ul class="plan-tree">
+		{% for node in plan_nodes %}
+		<li style="padding-left: {{ node.depth * 16 }}px">
+			<span class="node-scope">{{ node.scope[:80] }}</span>
+			{% if node.strategy %}
+			<span class="node-strategy">[{{ node.strategy }}]</span>
+			{% endif %}
+		</li>
+		{% endfor %}
+	</ul>
+	{% endif %}
+
+	{% if handoffs %}
+	<h4>Worker Handoffs</h4>
+	<ul class="handoff-list">
+		{% for h in handoffs %}
+		<li class="handoff-item">
+			<div class="handoff-summary">{{ h.summary[:200] if h.summary else 'No summary' }}</div>
+			{% if h._discoveries %}
+			<ul class="handoff-discoveries">
+				{% for d in h._discoveries %}
+				<li>{{ d }}</li>
+				{% endfor %}
+			</ul>
+			{% endif %}
+			{% if h._concerns %}
+			<ul class="handoff-concerns">
+				{% for c in h._concerns %}
+				<li>{{ c }}</li>
+				{% endfor %}
+			</ul>
+			{% endif %}
+		</li>
+		{% endfor %}
+	</ul>
+	{% endif %}
+</div>
+{% else %}
+<div class="round-detail-panel">
+	<span class="muted">No reflection data for this round</span>
+</div>
+{% endif %}

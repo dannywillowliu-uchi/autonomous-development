@@ -1,0 +1,11 @@
+{% if log_lines %}
+<pre class="log-tail" id="log-tail-content">{{ log_lines }}</pre>
+<script>
+(function() {
+	var el = document.getElementById('log-tail-content');
+	if (el) el.scrollTop = el.scrollHeight;
+})();
+</script>
+{% else %}
+<p class="muted">No log file found</p>
+{% endif %}

@@ -1,0 +1,12 @@
+{% if items %}
+<ul class="discoveries-feed">
+	{% for item in items %}
+	<li class="discovery-item type-{{ item.type }}">
+		<span class="discovery-round">R{{ item.round_number }}</span>
+		<span class="discovery-text">{{ item.text }}</span>
+	</li>
+	{% endfor %}
+</ul>
+{% else %}
+<p class="muted">No discoveries yet</p>
+{% endif %}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -207,6 +208,63 @@ def create_app(db_path: str | None = None, registry: ProjectRegistry | None = No
 		return templates.TemplateResponse(
 			"partials/activity_log.html",
 			{"request": request, "snap": snap},
+		)
+
+	# -- Observability partials --
+
+	@app.get("/project/{name}/partials/live-status", response_class=HTMLResponse)
+	async def project_live_status(request: Request, name: str):
+		assert _state is not None
+		provider = _state.get_provider(name)
+		snap = provider.get_snapshot() if provider else None
+		latest_discovery = ""
+		if snap and snap.current_round:
+			latest_discovery = _get_latest_discovery(name, snap.current_round.id)
+		return templates.TemplateResponse(
+			"partials/live_status.html",
+			{"request": request, "snap": snap, "latest_discovery": latest_discovery},
+		)
+
+	@app.get("/project/{name}/partials/round-timeline", response_class=HTMLResponse)
+	async def project_round_timeline(request: Request, name: str):
+		assert _state is not None
+		rounds = _get_all_rounds(name)
+		rounds.reverse()  # newest first
+		return templates.TemplateResponse(
+			"partials/round_timeline.html",
+			{"request": request, "rounds": rounds, "project_name": name},
+		)
+
+	@app.get("/project/{name}/partials/round-detail/{round_id}", response_class=HTMLResponse)
+	async def project_round_detail(request: Request, name: str, round_id: str):
+		assert _state is not None
+		reflection, plan_nodes, handoffs = _get_round_detail(name, round_id)
+		return templates.TemplateResponse(
+			"partials/round_detail.html",
+			{
+				"request": request,
+				"reflection": reflection,
+				"plan_nodes": plan_nodes,
+				"handoffs": handoffs,
+			},
+		)
+
+	@app.get("/project/{name}/partials/discoveries-feed", response_class=HTMLResponse)
+	async def project_discoveries_feed(request: Request, name: str):
+		assert _state is not None
+		items = _get_all_discoveries(name)
+		return templates.TemplateResponse(
+			"partials/discoveries_feed.html",
+			{"request": request, "items": items},
+		)
+
+	@app.get("/project/{name}/partials/log-tail", response_class=HTMLResponse)
+	async def project_log_tail(request: Request, name: str):
+		assert _state is not None
+		log_lines = _get_log_tail(name)
+		return templates.TemplateResponse(
+			"partials/log_tail.html",
+			{"request": request, "log_lines": log_lines},
 		)
 
 	@app.get("/project/{name}/partials/unit/{unit_id}", response_class=HTMLResponse)
@@ -532,3 +590,162 @@ def _get_work_unit(project_name: str, unit_id: str):
 			db.close()
 	except Exception:
 		return None
+
+
+def _get_db_for_project(project_name: str):
+	"""Open a Database connection for the given project. Caller must close it."""
+	if not _state:
+		return None
+	project = _state.registry.get_project(project_name)
+	if not project:
+		return None
+	db_path = Path(project.db_path)
+	if not db_path.exists():
+		return None
+	try:
+		from mission_control.db import Database
+		return Database(db_path)
+	except Exception:
+		return None
+
+
+def _get_latest_discovery(project_name: str, round_id: str) -> str:
+	"""Get the most recent discovery text from handoffs in a round."""
+	db = _get_db_for_project(project_name)
+	if not db:
+		return ""
+	try:
+		handoffs = db.get_handoffs_for_round(round_id)
+		for h in reversed(handoffs):
+			if h.discoveries:
+				try:
+					discoveries = json.loads(h.discoveries)
+					if discoveries:
+						return str(discoveries[-1])
+				except (json.JSONDecodeError, IndexError):
+					pass
+		return ""
+	finally:
+		db.close()
+
+
+def _get_all_rounds(project_name: str):
+	"""Get all rounds for the latest mission."""
+	db = _get_db_for_project(project_name)
+	if not db:
+		return []
+	try:
+		mission = db.get_latest_mission()
+		if not mission:
+			return []
+		return db.get_rounds_for_mission(mission.id)
+	finally:
+		db.close()
+
+
+def _get_round_detail(project_name: str, round_id: str):
+	"""Get reflection, plan nodes, and handoffs for a round."""
+	db = _get_db_for_project(project_name)
+	if not db:
+		return None, [], []
+	try:
+		# Get the round to find mission_id and plan_id
+		rnd = db.get_round(round_id)
+		if not rnd:
+			return None, [], []
+
+		# Reflection: find the one matching this round
+		reflections = db.get_recent_reflections(rnd.mission_id, limit=50)
+		reflection = None
+		for ref in reflections:
+			if ref.round_id == round_id:
+				reflection = ref
+				break
+
+		# Plan nodes
+		plan_nodes = []
+		if rnd.plan_id:
+			plan_nodes = db.get_plan_nodes_for_plan(rnd.plan_id)
+
+		# Handoffs with parsed discoveries/concerns
+		handoffs = db.get_handoffs_for_round(round_id)
+		for h in handoffs:
+			h._discoveries = []
+			h._concerns = []
+			if h.discoveries:
+				try:
+					h._discoveries = json.loads(h.discoveries)
+				except json.JSONDecodeError:
+					pass
+			if h.concerns:
+				try:
+					h._concerns = json.loads(h.concerns)
+				except json.JSONDecodeError:
+					pass
+
+		return reflection, plan_nodes, handoffs
+	finally:
+		db.close()
+
+
+def _get_all_discoveries(project_name: str):
+	"""Get all discoveries and concerns across all rounds, newest first."""
+	db = _get_db_for_project(project_name)
+	if not db:
+		return []
+	try:
+		mission = db.get_latest_mission()
+		if not mission:
+			return []
+		rounds = db.get_rounds_for_mission(mission.id)
+		items = []
+		for rnd in rounds:
+			handoffs = db.get_handoffs_for_round(rnd.id)
+			for h in handoffs:
+				if h.discoveries:
+					try:
+						for d in json.loads(h.discoveries):
+							items.append({
+								"round_number": rnd.number,
+								"type": "discovery",
+								"text": str(d),
+							})
+					except json.JSONDecodeError:
+						pass
+				if h.concerns:
+					try:
+						for c in json.loads(h.concerns):
+							items.append({
+								"round_number": rnd.number,
+								"type": "concern",
+								"text": str(c),
+							})
+					except json.JSONDecodeError:
+						pass
+		# Newest first (higher round number first), capped at 50
+		items.reverse()
+		return items[:50]
+	finally:
+		db.close()
+
+
+def _get_log_tail(project_name: str, max_lines: int = 100) -> str:
+	"""Read the last N lines of the most recent mission log file."""
+	if not _state:
+		return ""
+	project = _state.registry.get_project(project_name)
+	if not project:
+		return ""
+	try:
+		logs_dir = Path(project.config_path).parent / "logs"
+		if not logs_dir.exists():
+			return ""
+		log_files = sorted(logs_dir.glob("mission-*.log"), reverse=True)
+		if not log_files:
+			return ""
+		log_file = log_files[0]
+		lines = log_file.read_text(errors="replace").splitlines()
+		tail = lines[-max_lines:] if len(lines) > max_lines else lines
+		return "\n".join(tail)
+	except Exception:
+		return ""
