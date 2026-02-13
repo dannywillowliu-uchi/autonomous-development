@@ -121,6 +121,7 @@ class RecursivePlanner:
 		else:
 			node.strategy = "leaves"
 			node.node_type = "branch"
+			leaf_pairs: list[tuple[PlanNode, WorkUnit]] = []
 			for unit_data in result.units:
 				wu = WorkUnit(
 					plan_id=plan.id,
@@ -140,10 +141,24 @@ class RecursivePlanner:
 					work_unit_id=wu.id,
 				)
 				leaf.status = "expanded"
-				# Store leaf reference (collected during persist)
-				if not hasattr(node, "_child_leaves"):
-					node._child_leaves = []  # type: ignore[attr-defined]
-				node._child_leaves.append((leaf, wu))  # type: ignore[attr-defined]
+				leaf_pairs.append((leaf, wu))
+
+			# Resolve depends_on_indices to actual WorkUnit IDs
+			wu_ids = [wu.id for _, wu in leaf_pairs]
+			for i, unit_data in enumerate(result.units):
+				if i >= len(leaf_pairs):
+					break
+				dep_indices = unit_data.get("depends_on_indices", [])
+				if isinstance(dep_indices, list):
+					dep_ids: list[str] = []
+					for idx in dep_indices:
+						if isinstance(idx, int) and 0 <= idx < len(wu_ids) and idx != i:
+							dep_ids.append(wu_ids[idx])
+					if dep_ids:
+						leaf_pairs[i][1].depends_on = ",".join(dep_ids)
+
+			# Store leaf references (collected during persist)
+			node._child_leaves = leaf_pairs  # type: ignore[attr-defined]
 
 		node.status = "expanded"
 
@@ -182,6 +197,7 @@ class RecursivePlanner:
 - SUBDIVIDE when: scope spans multiple unrelated subsystems, >5 files across different directories
 - PRODUCE LEAVES when: scope is focused, 1-3 concrete tasks can handle it
 - Max {max_children} children per subdivision
+- NEVER let sibling leaves touch the same file. Merge them or add depends_on_indices.
 
 ## Output Format
 You may explain your reasoning, but you MUST end your response with a PLAN_RESULT line.
@@ -190,7 +206,7 @@ For subdivision:
 PLAN_RESULT:{{"type": "subdivide", "children": [{{"scope": "description of sub-scope"}}, ...]}}
 
 For leaf tasks:
-PLAN_RESULT:{{"type":"leaves","units":[{{"title":"...","description":"...","files_hint":"...","priority":1}}]}}
+PLAN_RESULT:{{"type":"leaves","units":[{{"title":"...","description":"...","files_hint":"...","priority":1,"depends_on_indices":[]}}]}}
 
 IMPORTANT: The PLAN_RESULT line must be the LAST line of your output. Put all reasoning BEFORE it."""
 

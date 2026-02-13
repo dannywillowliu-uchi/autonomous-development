@@ -54,6 +54,9 @@ Rules:
 - Priority 1 = most important, higher = less important
 - Be specific about which files to modify
 - Include verification criteria for each unit
+- CRITICAL: No two units should create or modify the same file. If multiple
+  tasks need the same file, consolidate into one unit or use depends_on_indices
+  so the later unit builds on the earlier one's changes.
 """
 
 async def create_plan(config: MissionConfig, snapshot: Snapshot, db: Database) -> Plan:
