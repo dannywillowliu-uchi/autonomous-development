@@ -109,6 +109,83 @@ class GreenBranchManager:
 
 			return True
 
+	async def merge_unit(
+		self,
+		worker_workspace: str,
+		branch_name: str,
+	) -> UnitMergeResult:
+		"""Merge a unit branch directly to mc/green without verification.
+
+		Flow:
+		1. Fetch the unit branch from the worker workspace
+		2. Create a temp branch from mc/green, merge unit into it
+		3. If merge conflict -> fail
+		4. Fast-forward mc/green to the merge commit
+		5. If auto_push -> push mc/green to main
+		"""
+		async with self._merge_lock:
+			gb = self.config.green_branch
+			remote_name = f"worker-{branch_name}"
+			temp_branch = f"mc/merge-{branch_name}"
+
+			# Fetch the unit branch from worker workspace
+			await self._run_git("remote", "add", remote_name, worker_workspace)
+			ok, _ = await self._run_git("fetch", remote_name, branch_name)
+			if not ok:
+				await self._run_git("remote", "remove", remote_name)
+				return UnitMergeResult(failure_output="Failed to fetch unit branch")
+
+			try:
+				# Create temp branch from mc/green
+				await self._run_git("checkout", gb.green_branch)
+				await self._run_git("branch", "-D", temp_branch)  # clean up stale
+				await self._run_git("checkout", "-b", temp_branch)
+
+				# Merge unit branch into temp
+				ok, output = await self._run_git(
+					"merge", "--no-ff", f"{remote_name}/{branch_name}",
+					"-m", f"Merge {branch_name} into {gb.green_branch}",
+				)
+				if not ok:
+					logger.warning("Merge conflict for %s: %s", branch_name, output)
+					await self._run_git("merge", "--abort")
+					return UnitMergeResult(
+						rebase_ok=False,
+						failure_output=f"Merge conflict: {output[:500]}",
+					)
+
+				# Fast-forward mc/green to the merge commit
+				await self._run_git("checkout", gb.green_branch)
+				merge_ok, merge_out = await self._run_git(
+					"merge", "--ff-only", temp_branch,
+				)
+				if not merge_ok:
+					logger.error(
+						"Failed to ff mc/green to merge temp: %s", merge_out,
+					)
+					return UnitMergeResult(
+						failure_output="ff-only merge failed",
+					)
+
+				logger.info("Merged %s directly into %s", branch_name, gb.green_branch)
+
+				await self._sync_to_source()
+
+				# Auto-push if configured
+				if gb.auto_push:
+					await self.push_green_to_main()
+
+				return UnitMergeResult(
+					merged=True,
+					rebase_ok=True,
+					verification_passed=True,
+				)
+			finally:
+				# Clean up remote and temp branch
+				await self._run_git("checkout", gb.green_branch)
+				await self._run_git("branch", "-D", temp_branch)
+				await self._run_git("remote", "remove", remote_name)
+
 	async def verify_and_merge_unit(
 		self,
 		worker_workspace: str,

@@ -529,6 +529,86 @@ class TestInitializeResetOnInit:
 		assert len(ws_branch_calls) == 2
 
 
+class TestMergeUnit:
+	"""Tests for merge_unit() -- merge-only path without verification."""
+
+	async def test_successful_merge(self) -> None:
+		"""Successful merge: merged=True, no verification run."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
+
+		assert result.merged is True
+		assert result.rebase_ok is True
+		# Verify no _run_command was called (no verification)
+		assert not hasattr(mgr, "_run_command") or not getattr(mgr._run_command, "called", False)
+		mgr._sync_to_source.assert_awaited_once()
+
+	async def test_merge_conflict(self) -> None:
+		"""Merge conflict returns rebase_ok=False with failure output."""
+		mgr = _manager()
+
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "merge" and args[1] == "--no-ff":
+				return (False, "CONFLICT (content): Merge conflict in file.py")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=side_effect)
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
+
+		assert result.merged is False
+		assert result.rebase_ok is False
+		assert "Merge conflict" in result.failure_output
+
+	async def test_fetch_failure(self) -> None:
+		"""Fetch failure returns failure output."""
+		mgr = _manager()
+
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "fetch":
+				return (False, "fatal: couldn't find remote ref")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=side_effect)
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/broken")
+
+		assert result.merged is False
+		assert result.failure_output == "Failed to fetch unit branch"
+
+	async def test_auto_push(self) -> None:
+		"""When auto_push is configured, push_green_to_main is called."""
+		mgr = _manager()
+		mgr.config.green_branch.auto_push = True
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+		mgr.push_green_to_main = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
+
+		assert result.merged is True
+		mgr.push_green_to_main.assert_awaited_once()
+
+	async def test_ff_only_failure(self) -> None:
+		"""When ff-only merge fails, returns failure."""
+		mgr = _manager()
+
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "merge" and "--ff-only" in args:
+				return (False, "fatal: Not possible to fast-forward")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=side_effect)
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
+
+		assert result.merged is False
+		assert result.failure_output == "ff-only merge failed"
+
+
 class TestSyncToSource:
 	"""Tests for _sync_to_source: pushing refs from workspace clone back to source repo."""
 

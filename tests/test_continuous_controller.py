@@ -165,7 +165,7 @@ class TestProcessCompletions:
 
 		# Mock green branch manager
 		mock_gbm = MagicMock()
-		mock_gbm.verify_and_merge_unit = AsyncMock(
+		mock_gbm.merge_unit = AsyncMock(
 			return_value=UnitMergeResult(
 				merged=True, rebase_ok=True, verification_passed=True,
 			),
@@ -207,7 +207,7 @@ class TestProcessCompletions:
 
 		assert len(result.unit_scores) == 1
 		assert ctrl._total_merged == 1
-		mock_gbm.verify_and_merge_unit.assert_called_once()
+		mock_gbm.merge_unit.assert_called_once()
 
 	@pytest.mark.asyncio
 	async def test_failed_merge_counts_as_failure(self) -> None:
@@ -219,7 +219,7 @@ class TestProcessCompletions:
 		result = ContinuousMissionResult(mission_id="m1")
 
 		mock_gbm = MagicMock()
-		mock_gbm.verify_and_merge_unit = AsyncMock(
+		mock_gbm.merge_unit = AsyncMock(
 			return_value=UnitMergeResult(
 				merged=False, rebase_ok=False,
 				failure_output="Merge conflict",
@@ -354,7 +354,7 @@ class TestProcessCompletions:
 		result = ContinuousMissionResult(mission_id="m1")
 
 		mock_gbm = MagicMock()
-		mock_gbm.verify_and_merge_unit = AsyncMock(
+		mock_gbm.merge_unit = AsyncMock(
 			return_value=UnitMergeResult(
 				merged=True, rebase_ok=True, verification_passed=True,
 			),
@@ -515,7 +515,7 @@ class TestEndToEnd:
 		mock_planner.backlog_size = 0
 
 		mock_gbm = MagicMock()
-		mock_gbm.verify_and_merge_unit = AsyncMock()
+		mock_gbm.merge_unit = AsyncMock()
 
 		async def mock_init() -> None:
 			ctrl._planner = mock_planner

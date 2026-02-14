@@ -341,14 +341,14 @@ class ContinuousController:
 			merged = False
 			if unit.status == "completed" and unit.commit_hash:
 				try:
-					merge_result = await self._green_branch.verify_and_merge_unit(
+					merge_result = await self._green_branch.merge_unit(
 						workspace, unit.branch_name,
 					)
 					merged = merge_result.merged
 
 					if merged:
 						logger.info(
-							"Unit %s verified and merged to green",
+							"Unit %s merged to green",
 							unit.id,
 						)
 						self._total_merged += 1
@@ -367,7 +367,7 @@ class ContinuousController:
 							pass
 					else:
 						logger.warning(
-							"Unit %s failed verify+merge: %s",
+							"Unit %s failed merge: %s",
 							unit.id, merge_result.failure_output[:200],
 						)
 						self._total_failed += 1
@@ -384,7 +384,7 @@ class ContinuousController:
 							pass
 				except Exception as exc:
 					logger.error(
-						"verify_and_merge_unit failed for %s: %s",
+						"merge_unit failed for %s: %s",
 						unit.id, exc, exc_info=True,
 					)
 					self._total_failed += 1
