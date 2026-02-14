@@ -379,6 +379,16 @@ class TestLocalBackend:
 
 		mock_proc.kill.assert_not_called()
 
+	async def test_initialize_delegates_to_pool(self, backend: LocalBackend) -> None:
+		"""initialize delegates to pool.initialize with warm_count."""
+		await backend.initialize(warm_count=3)
+		backend._pool.initialize.assert_awaited_once_with(warm_count=3)
+
+	async def test_initialize_default_warm_count(self, backend: LocalBackend) -> None:
+		"""initialize passes default warm_count=0."""
+		await backend.initialize()
+		backend._pool.initialize.assert_awaited_once_with(warm_count=0)
+
 	async def test_release_workspace(self, backend: LocalBackend) -> None:
 		"""release_workspace delegates to pool.release with a Path."""
 		await backend.release_workspace("/pool/clone-1")
