@@ -2,14 +2,26 @@
 name = "autonomous-dev-scheduler"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = ""
+objective = """Improve mission-control's capabilities for fully orchestrating the building and maintenance of software projects. Focus areas (in priority order):
+
+1. ERROR RECOVERY: Add auto-retry for failed work units with exponential backoff. When a unit fails, the continuous controller should re-queue it with attempt count tracking (respect max_attempts). Add configurable retry delay. Add a post-failure analysis that appends failure context to the retry unit's description so the next attempt avoids the same mistake.
+
+2. WORKER INTELLIGENCE: Improve worker prompts in worker.py -- the render_mission_worker_prompt() function should inject MISSION_STATE.md content directly into the prompt so workers know what's already been done. Add file-level locking hints: when the planner assigns units, warn workers about files that other in-flight units are targeting (from overlap.py data).
+
+3. OBSERVABILITY: Add a structured mission summary report that gets written to a JSON file at mission end (mission_report.json in the target repo). Include: objective, outcome, units dispatched/merged/failed, wall time, cost, list of files changed, verification result, and a timeline of key events from unit_events table.
+
+4. PLANNER RELIABILITY: The recursive planner sometimes fails to parse (falls back to single leaf). Add retry logic in _invoke_planner_llm: if parsing fails, retry once with a simplified prompt that emphasizes the PLAN_RESULT format requirement.
+
+5. RESEARCH CAPABILITY: Add a new 'research' unit type that workers can use for exploration tasks. Research units don't produce commits -- they only produce discoveries and concerns in the handoff. The completion processor should skip merge for research units but still ingest the handoff. Mark with a unit.type field.
+
+Each unit: make changes, add tests, ensure all existing tests pass. Read MISSION_STATE.md for completed work. Do NOT re-modify files already listed there."""
 
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
 timeout = 300
 
 [scheduler]
-session_timeout = 1800
+session_timeout = 2700
 cooldown = 5
 max_sessions_per_run = 50
 model = "opus"
@@ -25,9 +37,9 @@ max_per_session_usd = 10.0
 max_per_run_usd = 500.0
 
 [scheduler.parallel]
-num_workers = 2
+num_workers = 1
 pool_dir = "/Users/dannyliu/personal_projects/.mc-pool-ads"
-warm_clones = 2
+warm_clones = 1
 
 [rounds]
 max_rounds = 20
@@ -40,13 +52,13 @@ timeout_multiplier = 1.5
 stall_score_epsilon = 0.01
 
 [planner]
-max_depth = 3
+max_depth = 2
 max_children_per_node = 5
 budget_per_call_usd = 2.0
 
 [continuous]
-max_wall_time_seconds = 7200
-backlog_min_size = 2
+max_wall_time_seconds = 14400
+backlog_min_size = 1
 timeout_multiplier = 1.5
 
 [green_branch]
