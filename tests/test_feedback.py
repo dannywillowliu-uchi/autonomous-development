@@ -15,7 +15,6 @@ from mission_control.feedback import (
 	get_worker_context,
 	record_round_outcome,
 )
-from mission_control.green_branch import FixupResult
 from mission_control.models import (
 	Experience,
 	Handoff,
@@ -208,7 +207,8 @@ class TestRecordRoundOutcome:
 		db.insert_handoff(h1)
 		db.insert_handoff(h2)
 
-		fixup = FixupResult(promoted=True, fixup_attempts=1)
+		from types import SimpleNamespace
+		fixup = SimpleNamespace(promoted=True, fixup_attempts=1)
 		before, after = _make_snapshots()
 
 		reward = record_round_outcome(

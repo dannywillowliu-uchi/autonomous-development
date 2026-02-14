@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Any
 
 from mission_control.db import Database
-from mission_control.green_branch import FixupResult
 from mission_control.models import (
 	Epoch,
 	Experience,
@@ -157,7 +157,7 @@ def record_round_outcome(
 	rnd: Round,
 	plan: Plan,
 	handoffs: list[Handoff],
-	fixup_result: FixupResult,
+	fixup_result: Any,
 	snapshot_before: Snapshot | None,
 	snapshot_after: Snapshot | None,
 	prev_score: float,

@@ -591,7 +591,7 @@ class ContinuousController:
 					output[-max_chars:] if output else "No output"
 				)
 
-			# Set final status (NO merge_to_working -- completion processor handles merge)
+			# Set final status (completion processor handles merge)
 			if unit_status in ("completed", "blocked"):
 				unit.status = unit_status
 			else:
