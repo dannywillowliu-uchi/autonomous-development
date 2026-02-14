@@ -15,6 +15,7 @@ from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
 from mission_control.feedback import get_worker_context
 from mission_control.green_branch import GreenBranchManager
+from mission_control.heartbeat import Heartbeat
 from mission_control.models import (
 	Epoch,
 	Handoff,
@@ -26,6 +27,7 @@ from mission_control.models import (
 	WorkUnit,
 	_now_iso,
 )
+from mission_control.notifier import TelegramNotifier
 from mission_control.session import parse_mc_result
 from mission_control.token_parser import compute_token_cost, parse_stream_json
 from mission_control.worker import render_mission_worker_prompt
@@ -75,6 +77,8 @@ class ContinuousController:
 		self._backend: WorkerBackend | None = None
 		self._green_branch: GreenBranchManager | None = None
 		self._planner: ContinuousPlanner | None = None
+		self._notifier: TelegramNotifier | None = None
+		self._heartbeat: Heartbeat | None = None
 		self._completion_queue: asyncio.Queue[WorkerCompletion] = asyncio.Queue()
 		self._active_tasks: set[asyncio.Task[None]] = set()
 		self._start_time: float = 0.0
@@ -101,6 +105,12 @@ class ContinuousController:
 
 		try:
 			await self._init_components()
+
+			if self._notifier:
+				await self._notifier.send_mission_start(
+					self.config.target.objective,
+					self.config.scheduler.parallel.num_workers,
+				)
 
 			# Two concurrent tasks
 			dispatch_task = asyncio.create_task(
@@ -183,6 +193,16 @@ class ContinuousController:
 			result.total_units_merged = self._total_merged
 			result.total_units_failed = self._total_failed
 
+			if self._notifier:
+				await self._notifier.send_mission_end(
+					objective_met=result.objective_met,
+					merged=result.total_units_merged,
+					failed=result.total_units_failed,
+					wall_time=result.wall_time_seconds,
+					stopped_reason=result.stopped_reason,
+					verification_passed=result.final_verification_passed,
+				)
+
 		return result
 
 	async def _init_components(self) -> None:
@@ -225,6 +245,19 @@ class ContinuousController:
 		# Continuous planner (wraps RecursivePlanner)
 		self._planner = ContinuousPlanner(self.config, self.db)
 
+		# Telegram notifier (optional)
+		tg = self.config.notifications.telegram
+		if tg.bot_token and tg.chat_id:
+			self._notifier = TelegramNotifier(tg.bot_token, tg.chat_id)
+
+		# Heartbeat monitor
+		hb = self.config.heartbeat
+		self._heartbeat = Heartbeat(
+			interval=hb.interval,
+			idle_threshold=hb.idle_threshold,
+			notifier=self._notifier,
+		)
+
 	async def _dispatch_loop(
 		self,
 		mission: Mission,
@@ -247,6 +280,10 @@ class ContinuousController:
 
 			# Check stopping conditions before dispatching
 			reason = self._should_stop(mission)
+			if not reason and self._heartbeat:
+				reason = await self._heartbeat.check(
+					self._total_merged, self._total_failed,
+				)
 			if reason:
 				result.stopped_reason = reason
 				self.running = False
@@ -272,6 +309,10 @@ class ContinuousController:
 				result.objective_met = True
 				result.stopped_reason = "planner_completed"
 				self.running = False
+				if self._notifier:
+					await self._notifier.send(
+						"Mission complete: planner returned no more work units.",
+					)
 				break
 
 			# Persist plan and tree
@@ -392,6 +433,12 @@ class ContinuousController:
 						except Exception:
 							pass
 
+						# Notify merge conflict via Telegram
+						if self._notifier:
+							await self._notifier.send_merge_conflict(
+								unit.title, merge_result.failure_output[:300],
+							)
+
 						# Append merge failure to handoff concerns
 						if handoff:
 							try:
@@ -418,6 +465,12 @@ class ContinuousController:
 			# Feed handoff to planner for adaptive replanning
 			if handoff and self._planner:
 				self._planner.ingest_handoff(handoff)
+
+			# Update MISSION_STATE.md in target repo
+			try:
+				self._update_mission_state(mission)
+			except Exception as exc:
+				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
 
 			# Accumulate cost
 			mission.total_cost_usd += unit.cost_usd
@@ -499,7 +552,7 @@ class ContinuousController:
 
 			# Wait for completion
 			poll_deadline = int(
-				effective_timeout * self.config.rounds.timeout_multiplier,
+				effective_timeout * self.config.continuous.timeout_multiplier,
 			)
 			monitor_interval = self.config.scheduler.monitor_interval
 			start = time.monotonic()
@@ -738,6 +791,80 @@ class ContinuousController:
 			f"(of last {len(handoffs)} units)",
 		)
 		return "\n".join(lines)
+
+	def _update_mission_state(self, mission: Mission) -> None:
+		"""Write MISSION_STATE.md in the target repo as a living checklist.
+
+		The planner reads this file to understand what's already been
+		completed, avoiding duplicate work and naturally narrowing scope.
+		"""
+		target_path = self.config.target.resolved_path
+		state_path = target_path / "MISSION_STATE.md"
+
+		try:
+			handoffs = self.db.get_recent_handoffs(mission.id, limit=50)
+		except Exception:
+			handoffs = []
+
+		lines = [
+			"# Mission State",
+			f"Objective: {mission.objective}",
+			"",
+		]
+
+		completed: list[str] = []
+		failed: list[str] = []
+		all_files: set[str] = set()
+
+		for h in reversed(handoffs):  # oldest first
+			try:
+				files = json.loads(h.files_changed) if h.files_changed else []
+			except (json.JSONDecodeError, TypeError):
+				files = []
+			file_str = ", ".join(files[:5]) if files else ""
+			for f in files:
+				all_files.add(f)
+
+			summary = h.summary[:100] if h.summary else ""
+
+			if h.status == "completed":
+				completed.append(
+					f"- [x] {h.work_unit_id[:8]} -- {summary}"
+					+ (f" (files: {file_str})" if file_str else ""),
+				)
+			else:
+				try:
+					concerns = json.loads(h.concerns) if h.concerns else []
+				except (json.JSONDecodeError, TypeError):
+					concerns = []
+				detail = concerns[-1][:100] if concerns else "unknown"
+				failed.append(f"- [ ] {h.work_unit_id[:8]} -- {detail}")
+
+		if completed:
+			lines.append("## Completed")
+			lines.extend(completed)
+			lines.append("")
+
+		if failed:
+			lines.append("## Failed")
+			lines.extend(failed)
+			lines.append("")
+
+		if all_files:
+			lines.append("## Files Modified")
+			lines.append(", ".join(sorted(all_files)))
+			lines.append("")
+
+		lines.extend([
+			"## Remaining",
+			"The planner should focus on what hasn't been done yet.",
+			"Do NOT re-target files in the 'Files Modified' list unless fixing a failure.",
+		])
+
+		try:
+			state_path.write_text("\n".join(lines) + "\n")
+		except OSError as exc:
+			logger.warning("Could not write MISSION_STATE.md: %s", exc)
 
 	def _should_stop(self, mission: Mission) -> str:
 		"""Check stopping conditions. Returns reason string or empty."""

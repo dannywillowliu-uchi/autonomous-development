@@ -49,9 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
 	par.add_argument("--dry-run", action="store_true", help="Show plan without executing")
 
 	# mc mission
-	mission = sub.add_parser("mission", help="Run continuous mission mode (outer loop)")
+	mission = sub.add_parser("mission", help="Run continuous mission mode")
 	mission.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
-	mission.add_argument("--max-rounds", type=int, default=None, help="Max rounds to run")
 	mission.add_argument("--workers", type=int, default=None, help="Number of workers")
 	mission.add_argument("--dry-run", action="store_true", help="Show mission plan without executing")
 
@@ -226,8 +225,6 @@ def cmd_mission(args: argparse.Namespace) -> int:
 	config = load_config(args.config)
 	db_path = _get_db_path(args.config)
 
-	if args.max_rounds is not None:
-		config.rounds.max_rounds = args.max_rounds
 	if args.workers is not None:
 		config.scheduler.parallel.num_workers = args.workers
 
@@ -319,9 +316,18 @@ fixup_max_attempts = 3
 
 [continuous]
 max_wall_time_seconds = 7200
-stall_threshold_units = 10
 backlog_min_size = 2
-verify_before_merge = true
+timeout_multiplier = 1.2
+
+[heartbeat]
+interval = 300
+idle_threshold = 3
+
+[notifications.telegram]
+# bot_token and chat_id read from env vars TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+on_heartbeat = true
+on_merge_fail = true
+on_mission_end = true
 
 [backend]
 type = "local"

@@ -115,6 +115,7 @@ class ContinuousConfig:
 	verify_before_merge: bool = True
 	backlog_min_size: int = 2  # replan when backlog drops below this
 	cooldown_between_units: int = 0
+	timeout_multiplier: float = 1.2  # applied to session_timeout for poll deadline
 
 
 @dataclass
@@ -157,6 +158,32 @@ class BackendConfig:
 
 
 @dataclass
+class HeartbeatConfig:
+	"""Time-based progress monitoring settings."""
+
+	interval: int = 300  # seconds between checks
+	idle_threshold: int = 3  # consecutive idle checks before stall
+
+
+@dataclass
+class TelegramConfig:
+	"""Telegram notification settings."""
+
+	bot_token: str = ""
+	chat_id: str = ""
+	on_heartbeat: bool = True
+	on_merge_fail: bool = True
+	on_mission_end: bool = True
+
+
+@dataclass
+class NotificationConfig:
+	"""Notification settings."""
+
+	telegram: TelegramConfig = field(default_factory=TelegramConfig)
+
+
+@dataclass
 class MissionConfig:
 	"""Top-level mission-control configuration."""
 
@@ -168,6 +195,8 @@ class MissionConfig:
 	green_branch: GreenBranchConfig = field(default_factory=GreenBranchConfig)
 	backend: BackendConfig = field(default_factory=BackendConfig)
 	pricing: PricingConfig = field(default_factory=PricingConfig)
+	heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
+	notifications: NotificationConfig = field(default_factory=NotificationConfig)
 
 
 def _build_verification(data: dict[str, Any]) -> VerificationConfig:
@@ -274,6 +303,8 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 		cc.stall_score_epsilon = float(data["stall_score_epsilon"])
 	if "verify_before_merge" in data:
 		cc.verify_before_merge = bool(data["verify_before_merge"])
+	if "timeout_multiplier" in data:
+		cc.timeout_multiplier = float(data["timeout_multiplier"])
 	return cc
 
 
@@ -318,6 +349,34 @@ def _build_backend(data: dict[str, Any]) -> BackendConfig:
 				host.max_workers = int(h["max_workers"])
 			bc.ssh_hosts.append(host)
 	return bc
+
+
+def _build_heartbeat(data: dict[str, Any]) -> HeartbeatConfig:
+	hc = HeartbeatConfig()
+	if "interval" in data:
+		hc.interval = int(data["interval"])
+	if "idle_threshold" in data:
+		hc.idle_threshold = int(data["idle_threshold"])
+	return hc
+
+
+def _build_notifications(data: dict[str, Any]) -> NotificationConfig:
+	nc = NotificationConfig()
+	if "telegram" in data:
+		tc = TelegramConfig()
+		tg = data["telegram"]
+		if "bot_token" in tg:
+			tc.bot_token = str(tg["bot_token"])
+		if "chat_id" in tg:
+			tc.chat_id = str(tg["chat_id"])
+		if "on_heartbeat" in tg:
+			tc.on_heartbeat = bool(tg["on_heartbeat"])
+		if "on_merge_fail" in tg:
+			tc.on_merge_fail = bool(tg["on_merge_fail"])
+		if "on_mission_end" in tg:
+			tc.on_mission_end = bool(tg["on_mission_end"])
+		nc.telegram = tc
+	return nc
 
 
 _STRIP_ENV_KEYS = {"ANTHROPIC_API_KEY", "CLAUDECODE"}
@@ -369,4 +428,14 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.backend = _build_backend(data["backend"])
 	if "pricing" in data:
 		mc.pricing = _build_pricing(data["pricing"])
+	if "heartbeat" in data:
+		mc.heartbeat = _build_heartbeat(data["heartbeat"])
+	if "notifications" in data:
+		mc.notifications = _build_notifications(data["notifications"])
+	# Allow env vars as fallback for Telegram credentials
+	tg = mc.notifications.telegram
+	if not tg.bot_token:
+		tg.bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+	if not tg.chat_id:
+		tg.chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 	return mc
