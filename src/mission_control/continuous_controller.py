@@ -55,6 +55,8 @@ class ContinuousMissionResult:
 	total_units_failed: int = 0
 	wall_time_seconds: float = 0.0
 	stopped_reason: str = ""
+	final_verification_passed: bool | None = None
+	final_verification_output: str = ""
 
 
 class ContinuousController:
@@ -146,6 +148,23 @@ class ContinuousController:
 			logger.info("Mission cancelled")
 			result.stopped_reason = "cancelled"
 		finally:
+			# Run final verification on mc/green
+			if self._green_branch and self._total_merged > 0:
+				try:
+					passed, output = await self._run_final_verification()
+					result.final_verification_passed = passed
+					result.final_verification_output = output
+					logger.info(
+						"Mission complete. Final verification: %s",
+						"PASS" if passed else "FAIL",
+					)
+				except Exception as exc:
+					logger.error(
+						"Final verification error: %s", exc, exc_info=True,
+					)
+					result.final_verification_passed = False
+					result.final_verification_output = str(exc)
+
 			mission.status = "completed" if result.objective_met else "stopped"
 			mission.finished_at = _now_iso()
 			mission.stopped_reason = result.stopped_reason
@@ -780,6 +799,22 @@ class ContinuousController:
 			self.db.acknowledge_signal(signal.id)
 		except Exception as exc:
 			logger.error("Failed to handle adjust signal: %s", exc)
+
+	async def _run_final_verification(self) -> tuple[bool, str]:
+		"""Run full verification on mc/green at mission end.
+
+		Returns (passed, output) tuple.
+		"""
+		assert self._green_branch is not None
+		verify_cmd = self.config.target.verification.command
+		gb = self.config.green_branch
+
+		# Checkout mc/green in the green branch workspace
+		await self._green_branch._run_git("checkout", gb.green_branch)
+
+		# Run verification
+		ok, output = await self._green_branch._run_command(verify_cmd)
+		return ok, output
 
 	def stop(self) -> None:
 		self.running = False
