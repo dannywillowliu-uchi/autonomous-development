@@ -13,7 +13,7 @@ from mission_control.backends import LocalBackend, SSHBackend, WorkerBackend
 from mission_control.config import MissionConfig
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
-from mission_control.feedback import get_continuous_planner_context, get_worker_context
+from mission_control.feedback import get_worker_context
 from mission_control.green_branch import GreenBranchManager
 from mission_control.models import (
 	Epoch,
@@ -230,9 +230,7 @@ class ContinuousController:
 				break
 
 			# Build feedback context for the planner
-			feedback_context = get_continuous_planner_context(
-				self.db, mission.id,
-			)
+			feedback_context = self._build_planner_context(mission.id)
 
 			# Get next batch of units from the planner
 			try:
@@ -665,6 +663,56 @@ class ContinuousController:
 		if hasattr(node, "_subdivided_children"):
 			for child in node._subdivided_children:
 				self._persist_plan_tree(child, plan)
+
+	def _build_planner_context(self, mission_id: str) -> str:
+		"""Build planner context from recent handoff summaries."""
+		try:
+			handoffs = self.db.get_recent_handoffs(mission_id, limit=15)
+		except Exception as exc:
+			logger.error("Failed to get recent handoffs: %s", exc)
+			return ""
+
+		if not handoffs:
+			return ""
+
+		lines = ["## Recent Handoff Summaries"]
+		merged_count = 0
+		failed_count = 0
+
+		for h in reversed(handoffs):  # oldest first
+			status_label = h.status or "unknown"
+			lines.append(f"\n### Unit {h.work_unit_id[:8]} ({status_label})")
+			if h.summary:
+				lines.append(f"Summary: {h.summary}")
+
+			try:
+				discoveries = json.loads(h.discoveries) if h.discoveries else []
+			except (json.JSONDecodeError, TypeError):
+				discoveries = []
+			if discoveries:
+				lines.append("Discoveries:")
+				for d in discoveries[:5]:
+					lines.append(f"  - {d}")
+
+			try:
+				concerns = json.loads(h.concerns) if h.concerns else []
+			except (json.JSONDecodeError, TypeError):
+				concerns = []
+			if concerns:
+				lines.append("Concerns:")
+				for c in concerns[:5]:
+					lines.append(f"  - {c}")
+
+			if status_label == "completed":
+				merged_count += 1
+			else:
+				failed_count += 1
+
+		lines.append(
+			f"\nMerge stats: {merged_count} merged, {failed_count} failed "
+			f"(of last {len(handoffs)} units)",
+		)
+		return "\n".join(lines)
 
 	def _should_stop(self, mission: Mission) -> str:
 		"""Check stopping conditions. Returns reason string or empty."""

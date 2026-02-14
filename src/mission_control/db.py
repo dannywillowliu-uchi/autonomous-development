@@ -1262,6 +1262,7 @@ class Database:
 
 	@staticmethod
 	def _row_to_handoff(row: sqlite3.Row) -> Handoff:
+		keys = row.keys()
 		return Handoff(
 			id=row["id"],
 			work_unit_id=row["work_unit_id"],
@@ -1272,7 +1273,20 @@ class Database:
 			discoveries=row["discoveries"],
 			concerns=row["concerns"],
 			files_changed=row["files_changed"],
+			epoch_id=row["epoch_id"] if "epoch_id" in keys else None,
 		)
+
+	def get_recent_handoffs(self, mission_id: str, limit: int = 15) -> list[Handoff]:
+		"""Get recent handoffs for a mission via epoch_id -> epochs.mission_id."""
+		rows = self.conn.execute(
+			"""SELECT h.* FROM handoffs h
+			JOIN epochs e ON h.epoch_id = e.id
+			WHERE e.mission_id = ?
+			ORDER BY h.rowid DESC
+			LIMIT ?""",
+			(mission_id, limit),
+		).fetchall()
+		return [self._row_to_handoff(r) for r in rows]
 
 	# -- Reflections --
 
