@@ -49,6 +49,16 @@ Before ANY commit, run:
 - `mc mission` (default: rounds) -- Batch round loop with fixup gate
 - `mc mission --mode continuous` -- Event-driven, no round boundaries, verify-before-merge per unit
 
+## Gotchas
+
+- recursive_planner.py subprocess MUST set `cwd=str(self.config.target.resolved_path)` -- without it the planner LLM sees the scheduler's own file tree and generates units targeting scheduler files (server.py, HTML partials) instead of the target project
+- round_controller.py never inserts Worker DB rows (unlike coordinator.py) -- dashboard must derive workers from running/claimed WorkUnits via `_derive_workers_from_plan()`
+- Cross-cutting refactors (shared utilities used by multiple views) cause ~85% merge conflict rates with parallel workers -- when planned units have high file overlap, reduce to 1-2 workers or ensure strict dependency ordering
+- mc/green must advance after each round -- if promotion fails silently, subsequent rounds start from stale baseline and hit the same merge conflicts repeatedly
+- Pool clones (`git clone --shared`) can corrupt editable installs -- reinstall with `uv pip install -e .` after pool cleanup
+- Worker output-format MUST be `text` not `stream-json` -- MC_RESULT markers are invisible inside JSON
+- Clean mission-control.db AND .db-shm/.db-wal when resetting (stale WAL causes sqlite3.OperationalError)
+
 ## Conventions
 
 - Tabs for indentation

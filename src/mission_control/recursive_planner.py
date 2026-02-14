@@ -198,8 +198,9 @@ class RecursivePlanner:
 - PRODUCE LEAVES when: scope is focused, 1-3 concrete tasks can handle it
 - Max {max_children} children per subdivision
 - NEVER let sibling leaves touch the same file. Merge them or add depends_on_indices.
+- Read MISSION_STATE.md in the project root to see what's already been completed.
 - If Past Round Performance lists already-modified files, do NOT target those files again.
-- If the objective has been fully achieved based on prior discoveries and handoff summaries, return EMPTY units:
+- If the objective has been fully achieved based on MISSION_STATE.md and past discoveries, return EMPTY units:
   PLAN_RESULT:{{"type":"leaves","units":[]}}
 
 ## Output Format

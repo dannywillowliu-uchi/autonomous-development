@@ -7,21 +7,9 @@ import logging
 import re
 
 from mission_control.db import Database
-from mission_control.models import (
-	Handoff,
-	WorkUnit,
-)
+from mission_control.models import WorkUnit
 
 log = logging.getLogger(__name__)
-
-
-def _count_merge_conflicts(handoffs: list[Handoff], units: list[WorkUnit]) -> int:
-	"""Count units that failed due to merge conflicts."""
-	count = 0
-	for u in units:
-		if u.status == "failed" and "merge conflict" in u.output_summary.lower():
-			count += 1
-	return count
 
 
 def _extract_keywords(text: str) -> list[str]:
