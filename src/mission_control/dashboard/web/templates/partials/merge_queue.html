@@ -1,8 +1,0 @@
-{% if snap %}
-<div class="merge-queue">
-	<span class="queue-depth" title="{{ tooltip('Merge Queue') }}">{{ snap.merge_queue_depth }}</span>
-	<span class="queue-label" title="{{ tooltip('pending merges') }}">{{ label('pending merges') }}</span>
-</div>
-{% else %}
-<p class="muted">-</p>
-{% endif %}

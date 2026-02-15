@@ -1,0 +1,61 @@
+20:45:39 INFO mission_control.green_branch: Resetting branch mc/working in source repo to main
+20:45:39 INFO mission_control.green_branch: Resetting branch mc/green in source repo to main
+20:45:39 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+20:46:23 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: PLANNER RELIABILITY: Add retry logic in recursive_planner.py _invoke_planner_llm
+20:46:54 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: WORKER INTELLIGENCE: Improve worker prompts in worker.py -- add MISSION_STATE.md
+20:47:32 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: ERROR RECOVERY: Add auto-retry with exponential backoff for failed work units in
+20:48:12 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: RESEARCH CAPABILITY: Add a 'research' unit type. Add unit_type field to WorkUnit
+20:48:57 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: OBSERVABILITY: Add structured mission summary report. Create a new module src/mi
+20:49:32 INFO mission_control.overlap: Overlap detected: Add MISSION_STATE.md injection and file- and Add auto-retry with exponential backoff  share files {'src/mission_control/continuous_controller.py'}; Add auto-retry with exponential backoff  now depends on Add MISSION_STATE.md injection and file-
+20:49:32 INFO mission_control.overlap: Overlap detected: Add MISSION_STATE.md injection and file- and Skip merge for research units in continu share files {'src/mission_control/continuous_controller.py'}; Skip merge for research units in continu now depends on Add MISSION_STATE.md injection and file-
+20:49:32 INFO mission_control.overlap: Overlap detected: Add MISSION_STATE.md injection and file- and Add research-aware worker prompt in work share files {'tests/test_worker.py', 'src/mission_control/worker.py'}; Add research-aware worker prompt in work now depends on Add MISSION_STATE.md injection and file-
+20:49:32 INFO mission_control.overlap: Overlap detected: Add MISSION_STATE.md injection and file- and Add mission_report.py module and integra share files {'src/mission_control/continuous_controller.py'}; Add mission_report.py module and integra now depends on Add MISSION_STATE.md injection and file-
+20:49:32 INFO mission_control.overlap: Overlap detected: Add auto-retry with exponential backoff  and Skip merge for research units in continu share files {'tests/test_continuous_controller.py', 'src/mission_control/continuous_controller.py'}; Skip merge for research units in continu now depends on Add auto-retry with exponential backoff 
+20:49:32 INFO mission_control.overlap: Overlap detected: Add auto-retry with exponential backoff  and Add mission_report.py module and integra share files {'src/mission_control/continuous_controller.py'}; Add mission_report.py module and integra now depends on Add auto-retry with exponential backoff 
+20:49:32 INFO mission_control.overlap: Overlap detected: Skip merge for research units in continu and Add mission_report.py module and integra share files {'src/mission_control/continuous_controller.py'}; Skip merge for research units in continu now depends on Add mission_report.py module and integra
+20:49:32 INFO mission_control.continuous_planner: Replanned epoch 1: 8 units (1 served, 7 backlogged)
+20:52:28 INFO mission_control.green_branch: Merged mc/unit-630f156d7582 directly into mc/green
+20:52:30 INFO mission_control.green_branch: Pushed mc/green to origin/main
+20:52:30 INFO mission_control.continuous_controller: Unit 630f156d7582 merged to green
+20:55:30 INFO mission_control.green_branch: Merged mc/unit-9e6461d8c93a directly into mc/green
+20:55:31 INFO mission_control.green_branch: Pushed mc/green to origin/main
+20:55:31 INFO mission_control.continuous_controller: Unit 9e6461d8c93a merged to green
+20:59:16 INFO mission_control.green_branch: Merged mc/unit-ff5ef9c9f675 directly into mc/green
+20:59:16 INFO mission_control.heartbeat: Heartbeat OK: 2 merged since last check. Total: 2 merged, 0 failed.
+20:59:17 INFO mission_control.green_branch: Pushed mc/green to origin/main
+20:59:17 INFO mission_control.continuous_controller: Unit ff5ef9c9f675 merged to green
+21:05:19 INFO mission_control.heartbeat: Heartbeat OK: 1 merged since last check. Total: 3 merged, 0 failed.
+21:05:19 INFO mission_control.green_branch: Merged mc/unit-dab94b56d59a directly into mc/green
+21:05:20 INFO mission_control.green_branch: Pushed mc/green to origin/main
+21:05:20 INFO mission_control.continuous_controller: Unit dab94b56d59a merged to green
+21:08:15 INFO mission_control.green_branch: Merged mc/unit-da74834dc5e9 directly into mc/green
+21:08:16 INFO mission_control.green_branch: Pushed mc/green to origin/main
+21:08:16 INFO mission_control.continuous_controller: Unit da74834dc5e9 merged to green
+21:12:32 WARNING mission_control.green_branch: Merge conflict for mc/unit-4824b90715d9: Auto-merging src/mission_control/continuous_controller.py
+Auto-merging src/mission_control/db.py
+CONFLICT (content): Merge conflict in src/mission_control/db.py
+Auto-merging src/mission_control/models.py
+Auto-merging tests/test_continuous_controller.py
+Automatic merge failed; fix conflicts and then commit the result.
+
+21:12:32 INFO mission_control.heartbeat: Heartbeat OK: 2 merged since last check. Total: 5 merged, 0 failed.
+21:12:32 WARNING mission_control.continuous_controller: Unit 4824b90715d9 failed merge: Merge conflict: Auto-merging src/mission_control/continuous_controller.py
+Auto-merging src/mission_control/db.py
+CONFLICT (content): Merge conflict in src/mission_control/db.py
+Auto-merging src/missio
+21:14:58 WARNING mission_control.green_branch: Merge conflict for mc/unit-7ce1c8317170: Auto-merging src/mission_control/worker.py
+CONFLICT (content): Merge conflict in src/mission_control/worker.py
+Auto-merging tests/test_worker.py
+CONFLICT (content): Merge conflict in tests/test_worker.py
+Automatic merge failed; fix conflicts and then commit the result.
+
+21:14:58 WARNING mission_control.continuous_controller: Unit 7ce1c8317170 failed merge: Merge conflict: Auto-merging src/mission_control/worker.py
+CONFLICT (content): Merge conflict in src/mission_control/worker.py
+Auto-merging tests/test_worker.py
+CONFLICT (content): Merge conflict in t
+21:14:58 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+21:15:55 INFO mission_control.continuous_planner: Replanned epoch 2: 2 units (1 served, 1 backlogged)
+21:18:25 INFO mission_control.green_branch: Merged mc/unit-b746b2344473 directly into mc/green
+21:18:25 WARNING mission_control.heartbeat: Heartbeat: no merges in last 300s (idle count: 1/3). Total: 5 merged, 2 failed.
+21:18:26 INFO mission_control.green_branch: Pushed mc/green to origin/main
+21:18:26 INFO mission_control.continuous_controller: Unit b746b2344473 merged to green

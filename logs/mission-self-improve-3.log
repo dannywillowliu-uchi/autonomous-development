@@ -1,0 +1,248 @@
+22:26:21 INFO mission_control.green_branch: Resetting branch mc/working in source repo to main
+--- Logging error ---
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/logging/__init__.py", line 1155, in emit
+    self.flush()
+    ~~~~~~~~~~^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 511, in <lambda>
+    handler.flush = lambda: handler.stream.flush()  # type: ignore[assignment]
+                            ^^^^^^^^^^^^^^
+AttributeError: 'function' object has no attribute 'stream'
+Call stack:
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 533, in <module>
+    sys.exit(main())
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 529, in main
+    return handler(args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 258, in cmd_mission
+    result = asyncio.run(controller.run())
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 706, in run_until_complete
+    self.run_forever()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 677, in run_forever
+    self._run_once()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 2046, in _run_once
+    handle._run()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 110, in run
+    await self._init_components()
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 247, in _init_components
+    await self._green_branch.initialize(gb_workspace)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/green_branch.py", line 59, in initialize
+    logger.info("Resetting branch %s in source repo to %s", branch, base)
+Message: 'Resetting branch %s in source repo to %s'
+Arguments: ('mc/working', 'main')
+22:26:21 INFO mission_control.green_branch: Resetting branch mc/green in source repo to main
+--- Logging error ---
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/logging/__init__.py", line 1155, in emit
+    self.flush()
+    ~~~~~~~~~~^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 511, in <lambda>
+    handler.flush = lambda: handler.stream.flush()  # type: ignore[assignment]
+                            ^^^^^^^^^^^^^^
+AttributeError: 'function' object has no attribute 'stream'
+Call stack:
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 533, in <module>
+    sys.exit(main())
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 529, in main
+    return handler(args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 258, in cmd_mission
+    result = asyncio.run(controller.run())
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 706, in run_until_complete
+    self.run_forever()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 677, in run_forever
+    self._run_once()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 2046, in _run_once
+    handle._run()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 110, in run
+    await self._init_components()
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 247, in _init_components
+    await self._green_branch.initialize(gb_workspace)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/green_branch.py", line 59, in initialize
+    logger.info("Resetting branch %s in source repo to %s", branch, base)
+Message: 'Resetting branch %s in source repo to %s'
+Arguments: ('mc/green', 'main')
+22:26:21 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+--- Logging error ---
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/logging/__init__.py", line 1155, in emit
+    self.flush()
+    ~~~~~~~~~~^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 511, in <lambda>
+    handler.flush = lambda: handler.stream.flush()  # type: ignore[assignment]
+                            ^^^^^^^^^^^^^^
+AttributeError: 'function' object has no attribute 'stream'
+Call stack:
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 533, in <module>
+    sys.exit(main())
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 529, in main
+    return handler(args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 258, in cmd_mission
+    result = asyncio.run(controller.run())
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 706, in run_until_complete
+    self.run_forever()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 677, in run_forever
+    self._run_once()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 2046, in _run_once
+    handle._run()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 307, in _dispatch_loop
+    plan, units, epoch = await self._planner.get_next_units(
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_planner.py", line 73, in get_next_units
+    plan, units, epoch = await self._replan(
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_planner.py", line 134, in _replan
+    plan, root_node = await self._inner.plan_round(
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/recursive_planner.py", line 88, in plan_round
+    await self.expand_node(root, plan, objective, snapshot_hash, prior_discoveries)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/recursive_planner.py", line 109, in expand_node
+    result = await self._invoke_planner_llm(node, objective, snapshot_hash, prior_discoveries)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/recursive_planner.py", line 246, in _invoke_planner_llm
+    result = await self._run_planner_subprocess(prompt, node)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/recursive_planner.py", line 265, in _run_planner_subprocess
+    log.info("Invoking planner LLM at depth %d for scope: %s", node.depth, node.scope[:80])
+Message: 'Invoking planner LLM at depth %d for scope: %s'
+Arguments: (0, "Improve mission-control's capabilities for fully orchestrating the building and ")
+22:26:57 INFO mission_control.continuous_planner: Replanned epoch 1: 0 units (0 served, 0 backlogged)
+--- Logging error ---
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/logging/__init__.py", line 1155, in emit
+    self.flush()
+    ~~~~~~~~~~^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 511, in <lambda>
+    handler.flush = lambda: handler.stream.flush()  # type: ignore[assignment]
+                            ^^^^^^^^^^^^^^
+AttributeError: 'function' object has no attribute 'stream'
+Call stack:
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 533, in <module>
+    sys.exit(main())
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 529, in main
+    return handler(args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 258, in cmd_mission
+    result = asyncio.run(controller.run())
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 706, in run_until_complete
+    self.run_forever()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 677, in run_forever
+    self._run_once()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 2046, in _run_once
+    handle._run()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 307, in _dispatch_loop
+    plan, units, epoch = await self._planner.get_next_units(
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_planner.py", line 73, in get_next_units
+    plan, units, epoch = await self._replan(
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_planner.py", line 159, in _replan
+    log.info(
+Message: 'Replanned epoch %d: %d units (%d served, %d backlogged)'
+Arguments: (1, 0, 0, 0)
+22:26:57 INFO mission_control.continuous_controller: Planner returned no units -- objective complete
+--- Logging error ---
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/logging/__init__.py", line 1155, in emit
+    self.flush()
+    ~~~~~~~~~~^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 511, in <lambda>
+    handler.flush = lambda: handler.stream.flush()  # type: ignore[assignment]
+                            ^^^^^^^^^^^^^^
+AttributeError: 'function' object has no attribute 'stream'
+Call stack:
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 533, in <module>
+    sys.exit(main())
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 529, in main
+    return handler(args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 258, in cmd_mission
+    result = asyncio.run(controller.run())
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 706, in run_until_complete
+    self.run_forever()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 677, in run_forever
+    self._run_once()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 2046, in _run_once
+    handle._run()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 318, in _dispatch_loop
+    logger.info("Planner returned no units -- objective complete")
+Message: 'Planner returned no units -- objective complete'
+Arguments: ()
+22:26:57 INFO mission_control.mission_report: Mission report written to /Users/dannyliu/personal_projects/autonomous-development/mission_report.json
+--- Logging error ---
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/logging/__init__.py", line 1155, in emit
+    self.flush()
+    ~~~~~~~~~~^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 511, in <lambda>
+    handler.flush = lambda: handler.stream.flush()  # type: ignore[assignment]
+                            ^^^^^^^^^^^^^^
+AttributeError: 'function' object has no attribute 'stream'
+Call stack:
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 533, in <module>
+    sys.exit(main())
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 529, in main
+    return handler(args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 258, in cmd_mission
+    result = asyncio.run(controller.run())
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 204, in run
+    return runner.run(main)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 706, in run_until_complete
+    self.run_forever()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 677, in run_forever
+    self._run_once()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/base_events.py", line 2046, in _run_once
+    handle._run()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/asyncio/events.py", line 94, in _run
+    self._context.run(self._callback, *self._args)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 201, in run
+    generate_mission_report(result, mission, self.db, self.config)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/mission_report.py", line 74, in generate_mission_report
+    logger.info("Mission report written to %s", report_path)
+Message: 'Mission report written to %s'
+Arguments: (PosixPath('/Users/dannyliu/personal_projects/autonomous-development/mission_report.json'),)
+Mission: a4ef15ef8f27
+Objective met: True
+Units: 0 dispatched, 0 merged, 0 failed
+Wall time: 36.0s
+Stopped: planner_completed
+Exception ignored in atexit callback <function shutdown at 0x107b66980>:
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/lib/python3.14/logging/__init__.py", line 2245, in shutdown
+    h.flush()
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/cli.py", line 511, in <lambda>
+    handler.flush = lambda: handler.stream.flush()  # type: ignore[assignment]
+AttributeError: 'function' object has no attribute 'stream'
