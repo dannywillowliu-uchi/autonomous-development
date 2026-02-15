@@ -1324,6 +1324,233 @@ class TestHandleAdjustSemaphoreRebuild:
 		assert ctrl._semaphore is None
 
 
+class TestConcurrentDispatchAndCompletion:
+	@pytest.mark.asyncio
+	async def test_concurrent_dispatch_and_completion(self, config: MissionConfig, db: Database) -> None:
+		"""Dispatch loop and completion processor run concurrently; counters stay consistent."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 10
+		config.continuous.cooldown_between_units = 0
+		config.discovery.enabled = False
+		ctrl = ContinuousController(config, db)
+
+		# Track execution ordering to prove concurrency
+		events: list[str] = []
+		planner_may_finish = asyncio.Event()
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			events.append(f"exec:{unit.id}")
+			# Small delay to ensure dispatch and completion overlap
+			await asyncio.sleep(0.01)
+			unit.status = "completed"
+			unit.commit_hash = "abc123"
+			unit.branch_name = f"mc/unit-{unit.id}"
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(
+					unit=unit, handoff=None,
+					workspace="/tmp/ws", epoch=epoch,
+				),
+			)
+			semaphore.release()
+
+		call_count = 0
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "",
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			plan = Plan(id=f"p{call_count}", objective="test")
+			epoch = Epoch(id=f"ep{call_count}", mission_id=mission.id, number=call_count)
+			if call_count == 1:
+				units = [
+					WorkUnit(
+						id=f"wu-{i}", plan_id=plan.id,
+						title=f"Task {i}", max_attempts=1,
+					)
+					for i in range(3)
+				]
+				return plan, units, epoch
+			# Hold off planner completion until units have been processed
+			await planner_may_finish.wait()
+			return plan, [], epoch
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock(
+			return_value=UnitMergeResult(merged=True, rebase_ok=True, verification_passed=True),
+		)
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+
+		async def monitor_and_release() -> None:
+			"""Wait until all 3 units are merged, then let planner finish."""
+			while ctrl._total_merged + ctrl._total_failed < 3:
+				await asyncio.sleep(0.01)
+			planner_may_finish.set()
+
+		async def run_all() -> ContinuousMissionResult:
+			with (
+				patch.object(ctrl, "_init_components", mock_init),
+				patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			):
+				monitor_task = asyncio.create_task(monitor_and_release())
+				try:
+					return await ctrl.run()
+				finally:
+					monitor_task.cancel()
+					try:
+						await monitor_task
+					except asyncio.CancelledError:
+						pass
+
+		result = await asyncio.wait_for(run_all(), timeout=10.0)
+
+		assert result.total_units_dispatched >= 3
+		assert ctrl._total_merged + ctrl._total_failed == 3
+		assert ctrl._total_merged == 3
+		assert ctrl._total_failed == 0
+		# Verify concurrent execution occurred (units dispatched before all completed)
+		assert len([e for e in events if e.startswith("exec:")]) == 3
+
+
+class TestAdjustWorkersDuringDispatch:
+	@pytest.mark.asyncio
+	async def test_adjust_workers_during_dispatch(self, config: MissionConfig, db: Database) -> None:
+		"""Adjust workers signal mid-dispatch resizes the semaphore without orphaning tasks."""
+		config.scheduler.parallel.num_workers = 2
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+
+		# Simulate active dispatch state: semaphore with 2 slots, 2 in-flight tasks
+		semaphore = asyncio.Semaphore(2)
+		ctrl._semaphore = semaphore
+
+		mock_task1 = MagicMock(spec=asyncio.Task)
+		mock_task1.done.return_value = False
+		mock_task2 = MagicMock(spec=asyncio.Task)
+		mock_task2.done.return_value = False
+		ctrl._active_tasks = {mock_task1, mock_task2}
+
+		# Acquire both semaphore slots (simulating 2 workers running)
+		await semaphore.acquire()
+		await semaphore.acquire()
+		assert semaphore._value == 0
+
+		# Now adjust workers from 2 -> 4 while both are in-flight
+		signal = Signal(
+			mission_id="m1",
+			signal_type="adjust",
+			payload='{"num_workers": 4}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_adjust_signal(signal)
+
+		# Verify config updated
+		assert config.scheduler.parallel.num_workers == 4
+		# Semaphore rebuilt: 4 total - 2 in-flight = 2 available
+		assert ctrl._semaphore is not None
+		assert ctrl._semaphore._value == 2
+		# Old semaphore replaced
+		assert ctrl._semaphore is not semaphore
+
+		# Verify new semaphore allows 2 more dispatches
+		acquired = ctrl._semaphore.acquire()
+		# Should succeed immediately (non-blocking)
+		done = asyncio.ensure_future(acquired)
+		await asyncio.sleep(0)
+		assert done.done()
+
+		# Verify that no tasks were cancelled (no orphans)
+		mock_task1.cancel.assert_not_called()
+		mock_task2.cancel.assert_not_called()
+
+
+class TestCancelUnitDuringMerge:
+	@pytest.mark.asyncio
+	async def test_cancel_unit_during_merge(self, config: MissionConfig, db: Database) -> None:
+		"""Cancel signal while _process_unit_completion is mid-merge cleans up properly."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		result = ContinuousMissionResult(mission_id="m1")
+
+		merge_started = asyncio.Event()
+		merge_proceed = asyncio.Event()
+
+		async def slow_merge(workspace: str, branch: str) -> UnitMergeResult:
+			merge_started.set()
+			await merge_proceed.wait()
+			return UnitMergeResult(merged=True, rebase_ok=True, verification_passed=True)
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock(side_effect=slow_merge)
+		ctrl._green_branch = mock_gbm
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task",
+			status="completed", commit_hash="abc123",
+			branch_name="mc/unit-wu1",
+		)
+		db.insert_work_unit(unit)
+
+		# Create a mock task for the unit so cancel_unit can find it
+		mock_task = MagicMock(spec=asyncio.Task)
+		mock_task.done.return_value = False
+		ctrl._unit_tasks["wu1"] = mock_task
+
+		completion = WorkerCompletion(
+			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
+		)
+		ctrl._completion_queue.put_nowait(completion)
+
+		# Run _process_completions in background
+		async def run_processor() -> None:
+			await ctrl._process_completions(Mission(id="m1"), result)
+
+		processor_task = asyncio.create_task(run_processor())
+
+		# Wait for merge to start
+		await asyncio.wait_for(merge_started.wait(), timeout=5.0)
+
+		# Send cancel signal while merge is in progress
+		cancel_signal = Signal(
+			mission_id="m1",
+			signal_type="cancel_unit",
+			payload='{"unit_id": "wu1"}',
+		)
+		db.insert_signal(cancel_signal)
+		ctrl._handle_cancel_unit(cancel_signal)
+
+		# Verify cancel was called on the task
+		mock_task.cancel.assert_called_once()
+
+		# Let merge complete (simulates the race where merge finishes despite cancel)
+		merge_proceed.set()
+		ctrl.running = False
+
+		await asyncio.wait_for(processor_task, timeout=5.0)
+
+		# The merge completed successfully, so it counts as merged
+		assert ctrl._total_merged == 1
+		mock_gbm.merge_unit.assert_called_once()
+
+
 class TestDryRun:
 	@pytest.mark.asyncio
 	async def test_dry_run_returns_early(self, config: MissionConfig, db: Database) -> None:
