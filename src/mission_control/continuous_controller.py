@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -681,7 +682,7 @@ class ContinuousController:
 			unit.finished_at = _now_iso()
 			await self.db.locked_call("update_work_unit", unit)
 			# Don't put on queue -- controller is shutting down
-		except (ValueError, KeyError, json.JSONDecodeError) as e:
+		except (ValueError, KeyError, json.JSONDecodeError, sqlite3.IntegrityError) as e:
 			logger.error("Data error executing unit %s: %s", unit.id, e)
 			unit.attempt += 1
 			unit.status = "failed"

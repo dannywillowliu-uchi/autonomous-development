@@ -209,18 +209,19 @@ CREATE INDEX IF NOT EXISTS idx_plan_nodes_plan ON plan_nodes(plan_id);
 CREATE TABLE IF NOT EXISTS handoffs (
 	id TEXT PRIMARY KEY,
 	work_unit_id TEXT NOT NULL,
-	round_id TEXT NOT NULL,
+	round_id TEXT NOT NULL DEFAULT '',
+	epoch_id TEXT,
 	status TEXT NOT NULL DEFAULT '',
 	commits TEXT NOT NULL DEFAULT '',
 	summary TEXT NOT NULL DEFAULT '',
 	discoveries TEXT NOT NULL DEFAULT '',
 	concerns TEXT NOT NULL DEFAULT '',
 	files_changed TEXT NOT NULL DEFAULT '',
-	FOREIGN KEY (work_unit_id) REFERENCES work_units(id),
-	FOREIGN KEY (round_id) REFERENCES rounds(id)
+	FOREIGN KEY (work_unit_id) REFERENCES work_units(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_handoffs_round ON handoffs(round_id);
+CREATE INDEX IF NOT EXISTS idx_handoffs_epoch ON handoffs(epoch_id);
 
 CREATE TABLE IF NOT EXISTS reflections (
 	id TEXT PRIMARY KEY,
@@ -1236,13 +1237,14 @@ class Database:
 	def insert_handoff(self, handoff: Handoff) -> None:
 		self.conn.execute(
 			"""INSERT INTO handoffs
-			(id, work_unit_id, round_id, status, commits,
+			(id, work_unit_id, round_id, epoch_id, status, commits,
 			 summary, discoveries, concerns, files_changed)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				handoff.id, handoff.work_unit_id, handoff.round_id,
-				handoff.status, handoff.commits, handoff.summary,
-				handoff.discoveries, handoff.concerns, handoff.files_changed,
+				handoff.epoch_id, handoff.status, handoff.commits,
+				handoff.summary, handoff.discoveries, handoff.concerns,
+				handoff.files_changed,
 			),
 		)
 		self.conn.commit()
