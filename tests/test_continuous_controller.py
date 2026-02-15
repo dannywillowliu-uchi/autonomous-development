@@ -136,6 +136,176 @@ class TestHandleAdjustSignal:
 		assert config.continuous.max_wall_time_seconds == 3600
 
 
+class TestPauseResumeSignals:
+	def test_pause_signal_sets_paused(self) -> None:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+		signal = Signal(mission_id="m1", signal_type="pause")
+		db.insert_signal(signal)
+
+		ctrl = ContinuousController(_config(), db)
+		assert ctrl._paused is False
+		ctrl._check_signals("m1")
+		assert ctrl._paused is True
+
+	def test_resume_signal_clears_paused(self) -> None:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+		signal = Signal(mission_id="m1", signal_type="resume")
+		db.insert_signal(signal)
+
+		ctrl = ContinuousController(_config(), db)
+		ctrl._paused = True
+		ctrl._check_signals("m1")
+		assert ctrl._paused is False
+
+	def test_pause_then_resume(self) -> None:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		ctrl = ContinuousController(_config(), db)
+
+		# Pause
+		pause_sig = Signal(mission_id="m1", signal_type="pause")
+		db.insert_signal(pause_sig)
+		ctrl._check_signals("m1")
+		assert ctrl._paused is True
+
+		# Resume
+		resume_sig = Signal(mission_id="m1", signal_type="resume")
+		db.insert_signal(resume_sig)
+		ctrl._check_signals("m1")
+		assert ctrl._paused is False
+
+
+class TestCancelUnitSignal:
+	def test_cancel_running_unit(self) -> None:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		ctrl = ContinuousController(_config(), db)
+
+		# Create a mock task
+		mock_task = MagicMock(spec=asyncio.Task)
+		mock_task.done.return_value = False
+		ctrl._unit_tasks["unit123"] = mock_task
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="cancel_unit",
+			payload='{"unit_id": "unit123"}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_cancel_unit(signal)
+
+		mock_task.cancel.assert_called_once()
+
+	def test_cancel_already_done_unit(self) -> None:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		ctrl = ContinuousController(_config(), db)
+
+		mock_task = MagicMock(spec=asyncio.Task)
+		mock_task.done.return_value = True
+		ctrl._unit_tasks["unit123"] = mock_task
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="cancel_unit",
+			payload='{"unit_id": "unit123"}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_cancel_unit(signal)
+
+		mock_task.cancel.assert_not_called()
+
+
+class TestForceRetrySignal:
+	def test_force_retry_resets_unit(self) -> None:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task",
+			status="failed", attempt=2, max_attempts=3,
+			output_summary="Some error",
+		)
+		db.insert_work_unit(unit)
+
+		ctrl = ContinuousController(_config(), db)
+		signal = Signal(
+			mission_id="m1",
+			signal_type="force_retry",
+			payload='{"unit_id": "wu1"}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_force_retry(signal)
+
+		db_unit = db.get_work_unit("wu1")
+		assert db_unit is not None
+		assert db_unit.status == "pending"
+		assert "[Force retry]" in db_unit.description
+
+	def test_force_retry_nonexistent_unit(self) -> None:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		ctrl = ContinuousController(_config(), db)
+		signal = Signal(
+			mission_id="m1",
+			signal_type="force_retry",
+			payload='{"unit_id": "nonexistent"}',
+		)
+		db.insert_signal(signal)
+		# Should not raise
+		ctrl._handle_force_retry(signal)
+
+
+class TestAddObjectiveSignal:
+	def test_add_objective_appends_to_config(self) -> None:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		config = _config()
+		config.target.objective = "Original objective"
+		ctrl = ContinuousController(config, db)
+		ctrl._planner = MagicMock()
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="add_objective",
+			payload='{"objective": "Also add logging"}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_add_objective(signal)
+
+		assert "Also add logging" in config.target.objective
+		assert "Original objective" in config.target.objective
+
+	def test_add_objective_no_planner(self) -> None:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		config = _config()
+		config.target.objective = "Original"
+		ctrl = ContinuousController(config, db)
+		# _planner is None
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="add_objective",
+			payload='{"objective": "New obj"}',
+		)
+		db.insert_signal(signal)
+		# Should not raise even without planner
+		ctrl._handle_add_objective(signal)
+		# Objective should NOT be appended since planner is None
+		assert "New obj" not in config.target.objective
+
+
 class TestProcessCompletions:
 	@pytest.mark.asyncio
 	async def test_merged_unit_updates_score(self) -> None:
