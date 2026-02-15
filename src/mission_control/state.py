@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shlex
 from typing import Any
 
 from mission_control.config import MissionConfig
@@ -72,8 +73,8 @@ def _parse_bandit(output: str) -> dict[str, int]:
 async def _run_command(cmd: str, cwd: str, timeout: int = 300) -> dict[str, Any]:
 	"""Run a shell command and capture output."""
 	try:
-		proc = await asyncio.create_subprocess_shell(
-			cmd,
+		proc = await asyncio.create_subprocess_exec(
+			*shlex.split(cmd),
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
 			cwd=cwd,

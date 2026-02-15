@@ -175,7 +175,7 @@ class TestRunCommandTimeout:
 		mock_proc.kill = MagicMock()
 		mock_proc.wait = AsyncMock()
 
-		with patch("mission_control.green_branch.asyncio.create_subprocess_shell", return_value=mock_proc):
+		with patch("mission_control.green_branch.asyncio.create_subprocess_exec", return_value=mock_proc):
 			with patch("mission_control.green_branch.asyncio.wait_for", side_effect=asyncio.TimeoutError):
 				ok, output = await mgr._run_command("pytest -q")
 
@@ -202,11 +202,11 @@ class TestInitializeSetupCommand:
 
 		with patch.object(mgr, "_run_git_in", AsyncMock(return_value=(False, ""))), \
 			patch.object(mgr, "_run_git", AsyncMock(return_value=(True, ""))), \
-			patch("mission_control.green_branch.asyncio.create_subprocess_shell", return_value=mock_proc) as mock_shell:
+			patch("mission_control.green_branch.asyncio.create_subprocess_exec", return_value=mock_proc) as mock_shell:
 			await mgr.initialize("/tmp/workspace")
 
 		mock_shell.assert_called_once()
-		assert "npm install" in mock_shell.call_args[0][0]
+		assert mock_shell.call_args[0] == ("npm", "install")
 
 	async def test_setup_command_failure_raises(self) -> None:
 		"""Setup command failure raises RuntimeError."""
@@ -221,7 +221,7 @@ class TestInitializeSetupCommand:
 
 		with patch.object(mgr, "_run_git_in", AsyncMock(return_value=(False, ""))), \
 			patch.object(mgr, "_run_git", AsyncMock(return_value=(True, ""))), \
-			patch("mission_control.green_branch.asyncio.create_subprocess_shell", return_value=mock_proc):
+			patch("mission_control.green_branch.asyncio.create_subprocess_exec", return_value=mock_proc):
 			with pytest.raises(RuntimeError, match="Workspace setup failed"):
 				await mgr.initialize("/tmp/workspace")
 
@@ -239,7 +239,7 @@ class TestInitializeSetupCommand:
 
 		with patch.object(mgr, "_run_git_in", AsyncMock(return_value=(False, ""))), \
 			patch.object(mgr, "_run_git", AsyncMock(return_value=(True, ""))), \
-			patch("mission_control.green_branch.asyncio.create_subprocess_shell", return_value=mock_proc), \
+			patch("mission_control.green_branch.asyncio.create_subprocess_exec", return_value=mock_proc), \
 			patch("mission_control.green_branch.asyncio.wait_for", side_effect=asyncio.TimeoutError):
 			with pytest.raises(RuntimeError, match="timed out"):
 				await mgr.initialize("/tmp/workspace")
@@ -253,7 +253,7 @@ class TestInitializeSetupCommand:
 
 		with patch.object(mgr, "_run_git_in", AsyncMock(return_value=(False, ""))), \
 			patch.object(mgr, "_run_git", AsyncMock(return_value=(True, ""))), \
-			patch("mission_control.green_branch.asyncio.create_subprocess_shell") as mock_shell:
+			patch("mission_control.green_branch.asyncio.create_subprocess_exec") as mock_shell:
 			await mgr.initialize("/tmp/workspace")
 
 		mock_shell.assert_not_called()
@@ -582,7 +582,7 @@ class TestRunDeploy:
 		mock_proc.communicate = AsyncMock(return_value=(b"Deployed!", None))
 
 		with patch(
-			"mission_control.green_branch.asyncio.create_subprocess_shell",
+			"mission_control.green_branch.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		):
 			ok, output = await mgr.run_deploy()
@@ -600,7 +600,7 @@ class TestRunDeploy:
 		mock_proc.communicate = AsyncMock(return_value=(b"Error: auth failed", None))
 
 		with patch(
-			"mission_control.green_branch.asyncio.create_subprocess_shell",
+			"mission_control.green_branch.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		):
 			ok, output = await mgr.run_deploy()
@@ -619,7 +619,7 @@ class TestRunDeploy:
 		mock_proc.wait = AsyncMock()
 
 		with patch(
-			"mission_control.green_branch.asyncio.create_subprocess_shell",
+			"mission_control.green_branch.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		), patch(
 			"mission_control.green_branch.asyncio.wait_for",
@@ -652,7 +652,7 @@ class TestRunDeploy:
 		mock_proc.communicate = AsyncMock(return_value=(b"ok", None))
 
 		with patch(
-			"mission_control.green_branch.asyncio.create_subprocess_shell",
+			"mission_control.green_branch.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		), patch.object(
 			mgr, "_poll_health_check", AsyncMock(return_value=True),
@@ -672,7 +672,7 @@ class TestRunDeploy:
 		mock_proc.communicate = AsyncMock(return_value=(b"ok", None))
 
 		with patch(
-			"mission_control.green_branch.asyncio.create_subprocess_shell",
+			"mission_control.green_branch.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		), patch.object(
 			mgr, "_poll_health_check", AsyncMock(return_value=False),
