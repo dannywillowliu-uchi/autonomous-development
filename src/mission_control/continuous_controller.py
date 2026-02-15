@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mission_control.backends import LocalBackend, SSHBackend, WorkerBackend
-from mission_control.config import MissionConfig
+from mission_control.config import ContinuousConfig, MissionConfig
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
 from mission_control.feedback import get_worker_context
@@ -82,6 +82,7 @@ class ContinuousController:
 		self._heartbeat: Heartbeat | None = None
 		self._completion_queue: asyncio.Queue[WorkerCompletion] = asyncio.Queue()
 		self._active_tasks: set[asyncio.Task[None]] = set()
+		self._semaphore: asyncio.Semaphore | None = None
 		self._start_time: float = 0.0
 		self._total_dispatched: int = 0
 		self._total_merged: int = 0
@@ -270,6 +271,7 @@ class ContinuousController:
 
 		num_workers = self.config.scheduler.parallel.num_workers
 		semaphore = asyncio.Semaphore(num_workers)
+		self._semaphore = semaphore
 		cooldown = self.config.continuous.cooldown_between_units
 
 		while self.running:
@@ -374,6 +376,8 @@ class ContinuousController:
 		"""Process completed units: verify, merge, record feedback."""
 		assert self._green_branch is not None
 
+		cont = self.config.continuous
+
 		while self.running or not self._completion_queue.empty():
 			try:
 				completion = await asyncio.wait_for(
@@ -421,24 +425,6 @@ class ContinuousController:
 							"Unit %s failed merge: %s",
 							unit.id, merge_result.failure_output[:200],
 						)
-						self._total_failed += 1
-						# Log rejection event
-						try:
-							self.db.insert_unit_event(UnitEvent(
-								mission_id=mission.id,
-								epoch_id=epoch.id,
-								work_unit_id=unit.id,
-								event_type="rejected",
-								details=merge_result.failure_output[:500],
-							))
-						except Exception:
-							pass
-
-						# Notify merge conflict via Telegram
-						if self._notifier:
-							await self._notifier.send_merge_conflict(
-								unit.title, merge_result.failure_output[:300],
-							)
 
 						# Append merge failure to handoff concerns
 						if handoff:
@@ -450,18 +436,52 @@ class ContinuousController:
 								f"Merge failed: {merge_result.failure_output[:200]}",
 							)
 							handoff.concerns = json.dumps(concerns)
+
+						failure_reason = merge_result.failure_output[:300]
+
+						# Check if retryable
+						if unit.attempt < unit.max_attempts:
+							self._schedule_retry(unit, epoch, mission, failure_reason, cont)
+						else:
+							self._total_failed += 1
+							# Log rejection event
+							try:
+								self.db.insert_unit_event(UnitEvent(
+									mission_id=mission.id,
+									epoch_id=epoch.id,
+									work_unit_id=unit.id,
+									event_type="rejected",
+									details=merge_result.failure_output[:500],
+								))
+							except Exception:
+								pass
+
+							# Notify merge conflict via Telegram
+							if self._notifier:
+								await self._notifier.send_merge_conflict(
+									unit.title, merge_result.failure_output[:300],
+								)
 				except Exception as exc:
 					logger.error(
 						"merge_unit failed for %s: %s",
 						unit.id, exc, exc_info=True,
 					)
-					self._total_failed += 1
+					failure_reason = str(exc)[:300]
+					if unit.attempt < unit.max_attempts:
+						self._schedule_retry(unit, epoch, mission, failure_reason, cont)
+					else:
+						self._total_failed += 1
 			elif unit.status == "completed":
 				# Completed but no commits
 				self._total_merged += 1
 				merged = True
 			else:
-				self._total_failed += 1
+				# Unit failed during execution
+				failure_reason = (unit.output_summary or "unknown error")[:300]
+				if unit.attempt < unit.max_attempts:
+					self._schedule_retry(unit, epoch, mission, failure_reason, cont)
+				else:
+					self._total_failed += 1
 
 			# Feed handoff to planner for adaptive replanning
 			if handoff and self._planner:
@@ -480,6 +500,75 @@ class ContinuousController:
 				self.db.update_mission(mission)
 			except Exception:
 				pass
+
+	def _schedule_retry(
+		self,
+		unit: WorkUnit,
+		epoch: Epoch,
+		mission: Mission,
+		failure_reason: str,
+		cont: ContinuousConfig,
+	) -> None:
+		"""Prepare a unit for retry and schedule delayed re-dispatch."""
+		delay = min(
+			cont.retry_base_delay_seconds * (2 ** (unit.attempt - 1)),
+			cont.retry_max_delay_seconds,
+		)
+
+		# Append failure context to description
+		unit.description += (
+			f"\n\n[Retry attempt {unit.attempt}] Previous failure: "
+			f"{failure_reason[:300]}. Avoid the same mistake."
+		)
+
+		# Reset unit for re-dispatch
+		unit.status = "pending"
+		unit.commit_hash = None
+		unit.branch_name = ""
+		unit.output_summary = ""
+
+		# Log retry event
+		try:
+			self.db.insert_unit_event(UnitEvent(
+				mission_id=mission.id,
+				epoch_id=epoch.id,
+				work_unit_id=unit.id,
+				event_type="retry_queued",
+				details=json.dumps({"delay": delay, "failure_reason": failure_reason[:300]}),
+			))
+		except Exception:
+			pass
+
+		logger.info(
+			"Retrying unit %s (attempt %d/%d) after %.0fs delay",
+			unit.id, unit.attempt, unit.max_attempts, delay,
+		)
+
+		# Schedule delayed re-dispatch
+		task = asyncio.create_task(
+			self._retry_unit(unit, epoch, mission, delay),
+		)
+		self._active_tasks.add(task)
+		task.add_done_callback(self._active_tasks.discard)
+
+	async def _retry_unit(
+		self,
+		unit: WorkUnit,
+		epoch: Epoch,
+		mission: Mission,
+		delay: float,
+	) -> None:
+		"""Wait for backoff delay, then re-dispatch a failed unit."""
+		await asyncio.sleep(delay)
+		if not self.running:
+			return
+		assert self._semaphore is not None
+		await self._semaphore.acquire()
+		task = asyncio.create_task(
+			self._execute_single_unit(unit, epoch, mission, self._semaphore),
+		)
+		self._active_tasks.add(task)
+		task.add_done_callback(self._active_tasks.discard)
 
 	async def _execute_single_unit(
 		self,

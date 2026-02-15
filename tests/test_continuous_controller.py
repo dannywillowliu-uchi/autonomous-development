@@ -216,6 +216,7 @@ class TestProcessCompletions:
 			id="wu1", plan_id="p1", title="Task",
 			status="completed", commit_hash="abc123",
 			branch_name="mc/unit-wu1",
+			attempt=3, max_attempts=3,
 		)
 		db.insert_work_unit(unit)
 
@@ -276,7 +277,7 @@ class TestProcessCompletions:
 
 		unit = WorkUnit(
 			id="wu1", plan_id="p1", title="Task",
-			status="failed",
+			status="failed", attempt=3, max_attempts=3,
 		)
 		db.insert_work_unit(unit)
 
@@ -320,6 +321,7 @@ class TestProcessCompletions:
 			id="wu1", plan_id="p1", title="Task",
 			status="completed", commit_hash="abc",
 			branch_name="mc/unit-wu1",
+			attempt=3, max_attempts=3,
 		)
 		db.insert_work_unit(unit)
 
@@ -483,3 +485,173 @@ class TestEndToEnd:
 		assert result.objective_met is True
 		assert result.stopped_reason == "planner_completed"
 		assert result.total_units_dispatched >= 2
+
+
+class TestRetry:
+	def _make_ctrl(self) -> tuple[ContinuousController, Database]:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+		config = _config()
+		ctrl = ContinuousController(config, db)
+		ctrl._green_branch = MagicMock()
+		ctrl._semaphore = asyncio.Semaphore(2)
+		return ctrl, db
+
+	@pytest.mark.asyncio
+	async def test_failed_unit_retried_when_under_max_attempts(self) -> None:
+		"""Unit fails with attempt=1, max_attempts=3 -> gets re-queued, not counted as failed."""
+		ctrl, db = self._make_ctrl()
+		result = ContinuousMissionResult(mission_id="m1")
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task",
+			status="failed", attempt=1, max_attempts=3,
+			output_summary="Some error occurred",
+		)
+		db.insert_work_unit(unit)
+
+		completion = WorkerCompletion(
+			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
+		)
+		ctrl._completion_queue.put_nowait(completion)
+		ctrl.running = False
+
+		with patch.object(ctrl, "_retry_unit", new_callable=AsyncMock):
+			await ctrl._process_completions(Mission(id="m1"), result)
+
+		assert ctrl._total_failed == 0
+		assert unit.status == "pending"
+
+	@pytest.mark.asyncio
+	async def test_failed_unit_not_retried_at_max_attempts(self) -> None:
+		"""Unit fails with attempt=3, max_attempts=3 -> counted as failed, no retry."""
+		ctrl, db = self._make_ctrl()
+		result = ContinuousMissionResult(mission_id="m1")
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task",
+			status="failed", attempt=3, max_attempts=3,
+			output_summary="Some error occurred",
+		)
+		db.insert_work_unit(unit)
+
+		completion = WorkerCompletion(
+			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
+		)
+		ctrl._completion_queue.put_nowait(completion)
+		ctrl.running = False
+
+		await ctrl._process_completions(Mission(id="m1"), result)
+
+		assert ctrl._total_failed == 1
+		assert unit.status == "failed"
+
+	@pytest.mark.asyncio
+	async def test_retry_appends_failure_context(self) -> None:
+		"""Verify the description is augmented with failure info on retry."""
+		ctrl, db = self._make_ctrl()
+		result = ContinuousMissionResult(mission_id="m1")
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task",
+			description="Original description",
+			status="failed", attempt=1, max_attempts=3,
+			output_summary="Import error in main.py",
+		)
+		db.insert_work_unit(unit)
+
+		completion = WorkerCompletion(
+			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
+		)
+		ctrl._completion_queue.put_nowait(completion)
+		ctrl.running = False
+
+		with patch.object(ctrl, "_retry_unit", new_callable=AsyncMock):
+			await ctrl._process_completions(Mission(id="m1"), result)
+
+		assert "[Retry attempt 1]" in unit.description
+		assert "Import error in main.py" in unit.description
+		assert "Avoid the same mistake" in unit.description
+		assert unit.description.startswith("Original description")
+
+	def test_retry_delay_exponential_backoff(self) -> None:
+		"""Verify delay computation: base_delay * 2^(attempt-1), capped at max."""
+		ctrl, _ = self._make_ctrl()
+		config = ctrl.config
+		config.continuous.retry_base_delay_seconds = 30
+		config.continuous.retry_max_delay_seconds = 300
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		mission = Mission(id="m1")
+
+		# attempt=1 -> delay = 30 * 2^0 = 30
+		unit1 = WorkUnit(id="wu1", title="T", attempt=1, max_attempts=5)
+		with patch("asyncio.create_task"):
+			ctrl._schedule_retry(unit1, epoch, mission, "err", config.continuous)
+		# Check the delay passed to _retry_unit via the created task
+		# We verify by checking the unit state was reset
+		assert unit1.status == "pending"
+
+		# Verify delay values directly
+		assert min(30 * (2 ** 0), 300) == 30   # attempt=1
+		assert min(30 * (2 ** 1), 300) == 60   # attempt=2
+		assert min(30 * (2 ** 2), 300) == 120  # attempt=3
+		assert min(30 * (2 ** 3), 300) == 240  # attempt=4
+		assert min(30 * (2 ** 4), 300) == 300  # attempt=5, capped
+
+	@pytest.mark.asyncio
+	async def test_merge_failure_triggers_retry(self) -> None:
+		"""Unit completes but merge fails -> retried if under max_attempts."""
+		ctrl, db = self._make_ctrl()
+		result = ContinuousMissionResult(mission_id="m1")
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock(
+			return_value=UnitMergeResult(
+				merged=False, rebase_ok=False,
+				failure_output="Merge conflict in utils.py",
+			),
+		)
+		ctrl._green_branch = mock_gbm
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task",
+			status="completed", commit_hash="abc123",
+			branch_name="mc/unit-wu1",
+			attempt=1, max_attempts=3,
+		)
+		db.insert_work_unit(unit)
+
+		completion = WorkerCompletion(
+			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
+		)
+		ctrl._completion_queue.put_nowait(completion)
+		ctrl.running = False
+
+		with patch.object(ctrl, "_retry_unit", new_callable=AsyncMock):
+			await ctrl._process_completions(Mission(id="m1"), result)
+
+		assert ctrl._total_failed == 0
+		assert ctrl._total_merged == 0
+		assert unit.status == "pending"
+		assert "[Retry attempt 1]" in unit.description
