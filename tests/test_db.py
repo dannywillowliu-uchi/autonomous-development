@@ -23,11 +23,6 @@ from mission_control.models import (
 )
 
 
-@pytest.fixture()
-def db() -> Database:
-	return Database(":memory:")
-
-
 class TestSessions:
 	def test_insert_and_get(self, db: Database) -> None:
 		s = Session(id="s1", target_name="proj", task_description="Fix bug")
