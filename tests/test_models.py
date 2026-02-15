@@ -101,6 +101,26 @@ class TestWorkUnitDefaults:
 		wu2 = WorkUnit()
 		assert wu1.id != wu2.id
 
+	def test_unit_type_single_field_with_correct_default(self) -> None:
+		"""unit_type must appear exactly once and default to 'implementation'."""
+		import dataclasses
+
+		fields = dataclasses.fields(WorkUnit)
+		unit_type_fields = [f for f in fields if f.name == "unit_type"]
+		assert len(unit_type_fields) == 1
+		wu = WorkUnit()
+		assert wu.unit_type == "implementation"
+
+	def test_field_order_timeout_and_verification_before_epoch(self) -> None:
+		"""timeout and verification_command must appear between unit_type and epoch_id."""
+		import dataclasses
+
+		names = [f.name for f in dataclasses.fields(WorkUnit)]
+		ut_idx = names.index("unit_type")
+		ep_idx = names.index("epoch_id")
+		assert "timeout" in names[ut_idx:ep_idx]
+		assert "verification_command" in names[ut_idx:ep_idx]
+
 	def test_per_unit_overrides(self) -> None:
 		wu = WorkUnit(timeout=600, verification_command="make test")
 		assert wu.timeout == 600
