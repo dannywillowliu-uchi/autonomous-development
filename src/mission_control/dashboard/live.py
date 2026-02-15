@@ -39,6 +39,7 @@ class LiveDashboard:
 		self.app = FastAPI(title="Mission Control Live")
 		self._connections: set[WebSocket] = set()
 		self._broadcast_task: asyncio.Task[None] | None = None
+		self._ui_mtime: float = _UI_PATH.stat().st_mtime if _UI_PATH.exists() else 0.0
 		self._setup_routes()
 
 	def _setup_routes(self) -> None:
@@ -127,6 +128,12 @@ class LiveDashboard:
 		while True:
 			if self._connections:
 				snapshot = self._build_snapshot()
+				# Check if the UI file has changed on disk (e.g. from auto-push)
+				if _UI_PATH.exists():
+					current_mtime = _UI_PATH.stat().st_mtime
+					if current_mtime != self._ui_mtime:
+						self._ui_mtime = current_mtime
+						snapshot["reload"] = True
 				for ws in list(self._connections):
 					try:
 						await ws.send_json(snapshot)

@@ -255,6 +255,37 @@ class TestSignalInsertion:
 		assert payload["unit_id"] == "wu1"
 
 
+class TestHotReload:
+	def test_snapshot_does_not_include_reload(self) -> None:
+		"""_build_snapshot() itself never sets reload -- that's done by the broadcast loop."""
+		db = _setup_db()
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+
+		snapshot = dashboard._build_snapshot()
+		assert "reload" not in snapshot
+
+	def test_ui_mtime_initialized(self, tmp_path: object) -> None:
+		"""__init__ records the UI file's mtime for change detection."""
+		import tempfile
+		from pathlib import Path
+		with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+			f.write(b"<html></html>")
+			f.flush()
+			import mission_control.dashboard.live as live_mod
+			original_path = live_mod._UI_PATH
+			try:
+				live_mod._UI_PATH = Path(f.name)
+				db = _setup_db(check_same_thread=False)
+				dashboard = LiveDashboard.__new__(LiveDashboard)
+				dashboard.db = db
+				dashboard._ui_mtime = live_mod._UI_PATH.stat().st_mtime
+				assert dashboard._ui_mtime > 0
+			finally:
+				live_mod._UI_PATH = original_path
+				Path(f.name).unlink(missing_ok=True)
+
+
 class TestDBQueries:
 	def test_get_active_mission(self) -> None:
 		db = _setup_db()
