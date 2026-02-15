@@ -24,6 +24,7 @@ class UnitMergeResult:
 	rebase_ok: bool = True
 	verification_passed: bool = False
 	failure_output: str = ""
+	failure_stage: str = ""
 
 
 class GreenBranchManager:
@@ -96,7 +97,7 @@ class GreenBranchManager:
 			ok, _ = await self._run_git("fetch", remote_name, branch_name)
 			if not ok:
 				await self._run_git("remote", "remove", remote_name)
-				return UnitMergeResult(failure_output="Failed to fetch unit branch")
+				return UnitMergeResult(failure_output="Failed to fetch unit branch", failure_stage="fetch")
 
 			try:
 				# Create temp branch from mc/green
@@ -115,6 +116,7 @@ class GreenBranchManager:
 					return UnitMergeResult(
 						rebase_ok=False,
 						failure_output=f"Merge conflict: {output[:500]}",
+						failure_stage="merge_conflict",
 					)
 
 				# Fast-forward mc/green to the merge commit
@@ -128,6 +130,7 @@ class GreenBranchManager:
 					)
 					return UnitMergeResult(
 						failure_output="ff-only merge failed",
+						failure_stage="fast_forward",
 					)
 
 				logger.info("Merged %s directly into %s", branch_name, gb.green_branch)
