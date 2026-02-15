@@ -174,7 +174,7 @@ class TestRunCommandTimeout:
 
 		import asyncio
 
-		with patch("mission_control.state.asyncio.create_subprocess_shell", return_value=mock_proc):
+		with patch("mission_control.state.asyncio.create_subprocess_exec", return_value=mock_proc):
 			with patch("mission_control.state.asyncio.wait_for", side_effect=asyncio.TimeoutError):
 				result = await _run_command("sleep 999", "/tmp", timeout=1)
 

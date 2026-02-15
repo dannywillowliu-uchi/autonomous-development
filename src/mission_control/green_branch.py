@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import shlex
 from dataclasses import dataclass
 
 import httpx
@@ -81,8 +82,8 @@ class GreenBranchManager:
 		if setup_cmd:
 			setup_timeout = self.config.target.verification.setup_timeout
 			logger.info("Running workspace setup: %s", setup_cmd)
-			proc = await asyncio.create_subprocess_shell(
-				setup_cmd,
+			proc = await asyncio.create_subprocess_exec(
+				*shlex.split(setup_cmd),
 				cwd=self.workspace,
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.STDOUT,
@@ -260,8 +261,8 @@ class GreenBranchManager:
 		source_repo = self.config.target.path
 		logger.info("Running deploy: %s", deploy.command)
 
-		proc = await asyncio.create_subprocess_shell(
-			deploy.command,
+		proc = await asyncio.create_subprocess_exec(
+			*shlex.split(deploy.command),
 			cwd=source_repo,
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
@@ -348,11 +349,12 @@ class GreenBranchManager:
 		output = stdout.decode() if stdout else ""
 		return (proc.returncode == 0, output)
 
-	async def _run_command(self, cmd: str) -> tuple[bool, str]:
-		"""Run a shell command in self.workspace."""
+	async def _run_command(self, cmd: str | list[str]) -> tuple[bool, str]:
+		"""Run a command in self.workspace using subprocess exec."""
 		timeout = self.config.target.verification.timeout
-		proc = await asyncio.create_subprocess_shell(
-			cmd,
+		args = shlex.split(cmd) if isinstance(cmd, str) else cmd
+		proc = await asyncio.create_subprocess_exec(
+			*args,
 			cwd=self.workspace,
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
