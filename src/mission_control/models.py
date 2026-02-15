@@ -144,6 +144,7 @@ class WorkUnit:
 	output_summary: str = ""
 	attempt: int = 0
 	max_attempts: int = 3
+	unit_type: str = "implementation"  # implementation/research
 	timeout: int | None = None  # per-unit timeout override (seconds)
 	verification_command: str | None = None  # per-unit verification override
 	epoch_id: str | None = None  # continuous mode epoch

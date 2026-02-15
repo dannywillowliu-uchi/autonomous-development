@@ -352,6 +352,7 @@ class Database:
 		self.conn.executescript(SCHEMA_SQL)
 		self._migrate_epoch_columns()
 		self._migrate_token_columns()
+		self._migrate_unit_type_column()
 
 	def _migrate_epoch_columns(self) -> None:
 		"""Add epoch_id columns to existing tables (idempotent)."""
@@ -382,6 +383,13 @@ class Database:
 				self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")  # noqa: S608
 			except sqlite3.OperationalError:
 				pass  # Column already exists
+
+	def _migrate_unit_type_column(self) -> None:
+		"""Add unit_type column to work_units table (idempotent)."""
+		try:
+			self.conn.execute("ALTER TABLE work_units ADD COLUMN unit_type TEXT NOT NULL DEFAULT 'implementation'")
+		except sqlite3.OperationalError:
+			pass  # Column already exists
 
 	def close(self) -> None:
 		self.conn.close()
@@ -691,9 +699,9 @@ class Database:
 			 depends_on, branch_name,
 			 claimed_at, heartbeat_at, started_at, finished_at,
 			 exit_code, commit_hash, output_summary, attempt, max_attempts,
-			 timeout, verification_command,
+			 unit_type, timeout, verification_command,
 			 epoch_id, input_tokens, output_tokens, cost_usd)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				unit.id, unit.plan_id, unit.title, unit.description,
 				unit.files_hint, unit.verification_hint, unit.priority,
@@ -702,7 +710,7 @@ class Database:
 				unit.claimed_at, unit.heartbeat_at, unit.started_at,
 				unit.finished_at, unit.exit_code, unit.commit_hash,
 				unit.output_summary, unit.attempt, unit.max_attempts,
-				unit.timeout, unit.verification_command,
+				unit.unit_type, unit.timeout, unit.verification_command,
 				unit.epoch_id, unit.input_tokens, unit.output_tokens, unit.cost_usd,
 			),
 		)
@@ -717,7 +725,7 @@ class Database:
 			depends_on=?, branch_name=?, claimed_at=?, heartbeat_at=?,
 			started_at=?, finished_at=?, exit_code=?, commit_hash=?,
 			output_summary=?, attempt=?, max_attempts=?,
-			timeout=?, verification_command=?,
+			unit_type=?, timeout=?, verification_command=?,
 			epoch_id=?, input_tokens=?, output_tokens=?, cost_usd=?
 			WHERE id=?""",
 			(
@@ -728,7 +736,7 @@ class Database:
 				unit.claimed_at, unit.heartbeat_at, unit.started_at,
 				unit.finished_at, unit.exit_code, unit.commit_hash,
 				unit.output_summary, unit.attempt, unit.max_attempts,
-				unit.timeout, unit.verification_command,
+				unit.unit_type, unit.timeout, unit.verification_command,
 				unit.epoch_id, unit.input_tokens, unit.output_tokens, unit.cost_usd,
 				unit.id,
 			),
@@ -853,6 +861,7 @@ class Database:
 			output_summary=row["output_summary"],
 			attempt=row["attempt"],
 			max_attempts=row["max_attempts"],
+			unit_type=row["unit_type"] if "unit_type" in keys else "implementation",
 			timeout=row["timeout"],
 			verification_command=row["verification_command"],
 			input_tokens=row["input_tokens"] if "input_tokens" in keys else 0,

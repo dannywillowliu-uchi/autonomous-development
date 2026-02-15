@@ -329,6 +329,29 @@ class TestWorkUnits:
 		assert result.timeout == 120
 		assert result.verification_command == "pytest tests/specific.py"
 
+	def test_unit_type_research_roundtrip(self, db: Database) -> None:
+		"""WorkUnit with unit_type='research' round-trips through insert/get."""
+		self._make_plan(db)
+		wu = WorkUnit(id="wu_res", plan_id="plan1", title="Research task", unit_type="research")
+		db.insert_work_unit(wu)
+		result = db.get_work_unit("wu_res")
+		assert result is not None
+		assert result.unit_type == "research"
+
+	def test_unit_type_default_implementation(self, db: Database) -> None:
+		"""WorkUnit without explicit unit_type defaults to 'implementation'."""
+		self._make_plan(db)
+		wu = WorkUnit(id="wu_impl", plan_id="plan1", title="Impl task")
+		db.insert_work_unit(wu)
+		result = db.get_work_unit("wu_impl")
+		assert result is not None
+		assert result.unit_type == "implementation"
+
+	def test_unit_type_migration_idempotent(self, db: Database) -> None:
+		"""Calling _migrate_unit_type_column twice does not raise."""
+		db._migrate_unit_type_column()
+		db._migrate_unit_type_column()
+
 
 class TestWorkers:
 	def test_insert_and_get(self, db: Database) -> None:
