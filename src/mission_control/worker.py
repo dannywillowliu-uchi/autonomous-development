@@ -11,7 +11,7 @@ from mission_control.backends.base import WorkerBackend, WorkerHandle
 from mission_control.config import MissionConfig
 from mission_control.db import Database
 from mission_control.models import Handoff, MergeRequest, Worker, WorkUnit, _now_iso
-from mission_control.session import parse_mc_result
+from mission_control.session import parse_mc_result, validate_mc_result
 
 logger = logging.getLogger(__name__)
 
@@ -87,18 +87,23 @@ def render_worker_prompt(
 
 
 def _build_handoff(mc_result: dict[str, object], work_unit_id: str, round_id: str) -> Handoff:
-	"""Build a Handoff from parsed MC_RESULT data."""
-	commits = mc_result.get("commits", [])
-	discoveries = mc_result.get("discoveries", [])
-	concerns = mc_result.get("concerns", [])
-	files_changed = mc_result.get("files_changed", [])
+	"""Build a Handoff from parsed MC_RESULT data.
+
+	Validates mc_result against MCResultSchema. On validation error,
+	extracts valid fields with degraded defaults via validate_mc_result().
+	"""
+	validated = validate_mc_result(mc_result)
+	commits = validated.get("commits", [])
+	discoveries = validated.get("discoveries", [])
+	concerns = validated.get("concerns", [])
+	files_changed = validated.get("files_changed", [])
 
 	return Handoff(
 		work_unit_id=work_unit_id,
 		round_id=round_id,
-		status=str(mc_result.get("status", "completed")),
+		status=str(validated.get("status", "completed")),
 		commits=json.dumps(commits) if isinstance(commits, list) else "[]",
-		summary=str(mc_result.get("summary", "")),
+		summary=str(validated.get("summary", "")),
 		discoveries=json.dumps(discoveries) if isinstance(discoveries, list) else "[]",
 		concerns=json.dumps(concerns) if isinstance(concerns, list) else "[]",
 		files_changed=json.dumps(files_changed) if isinstance(files_changed, list) else "[]",

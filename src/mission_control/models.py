@@ -4,7 +4,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Literal
 from uuid import uuid4
+
+from pydantic import BaseModel
+
+
+class MCResultSchema(BaseModel, extra="ignore"):
+	"""Pydantic schema for validating MC_RESULT JSON from worker output."""
+
+	status: Literal["completed", "failed", "blocked"]
+	commits: list[str]
+	summary: str
+	files_changed: list[str]
+	discoveries: list[str] = []
+	concerns: list[str] = []
 
 
 def _now_iso() -> str:

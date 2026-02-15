@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,12 +14,13 @@ from mission_control.config import (
 	TargetConfig,
 	VerificationConfig,
 )
-from mission_control.models import Snapshot, TaskRecord
+from mission_control.models import MCResultSchema, Snapshot, TaskRecord
 from mission_control.session import (
 	build_branch_name,
 	parse_mc_result,
 	render_prompt,
 	spawn_session,
+	validate_mc_result,
 )
 
 
@@ -192,3 +194,129 @@ class TestSpawnSessionTimeout:
 		assert "timed out" in session.output_summary
 		mock_proc.kill.assert_called_once()
 		mock_proc.wait.assert_awaited_once()
+
+
+class TestMCResultSchemaValidation:
+	"""Tests for MCResultSchema and validate_mc_result degraded parsing."""
+
+	def test_valid_input_passes(self) -> None:
+		"""Fully valid MC_RESULT dict passes validation unchanged."""
+		raw = {
+			"status": "completed",
+			"commits": ["abc123"],
+			"summary": "Did the thing",
+			"files_changed": ["src/foo.py"],
+			"discoveries": ["found a bug"],
+			"concerns": ["might break later"],
+		}
+		result = validate_mc_result(raw)
+		assert result["status"] == "completed"
+		assert result["commits"] == ["abc123"]
+		assert result["summary"] == "Did the thing"
+		assert result["files_changed"] == ["src/foo.py"]
+		assert result["discoveries"] == ["found a bug"]
+		assert result["concerns"] == ["might break later"]
+
+	def test_missing_optional_fields_get_defaults(self) -> None:
+		"""Missing optional fields (discoveries, concerns) default to empty lists."""
+		raw = {
+			"status": "completed",
+			"commits": ["abc123"],
+			"summary": "Did it",
+			"files_changed": ["src/foo.py"],
+		}
+		result = validate_mc_result(raw)
+		assert result["discoveries"] == []
+		assert result["concerns"] == []
+
+	def test_extra_fields_are_ignored(self) -> None:
+		"""Extra fields not in the schema are stripped out."""
+		raw = {
+			"status": "completed",
+			"commits": ["abc123"],
+			"summary": "Did it",
+			"files_changed": ["src/foo.py"],
+			"extra_field": "should be ignored",
+			"another": 42,
+		}
+		result = validate_mc_result(raw)
+		assert "extra_field" not in result
+		assert "another" not in result
+		assert result["status"] == "completed"
+
+	def test_wrong_status_type_returns_degraded(self, caplog: pytest.LogCaptureFixture) -> None:
+		"""Invalid status value triggers degraded parsing with warning."""
+		raw = {
+			"status": "unknown_status",
+			"commits": ["abc123"],
+			"summary": "Did it",
+			"files_changed": ["src/foo.py"],
+		}
+		with caplog.at_level(logging.WARNING, logger="mission_control.session"):
+			result = validate_mc_result(raw)
+		assert result["status"] == "failed"  # degraded default
+		assert result["commits"] == ["abc123"]  # valid field preserved
+		assert result["summary"] == "Did it"  # valid field preserved
+		assert "schema validation failed" in caplog.text.lower()
+
+	def test_wrong_commits_type_returns_degraded(self, caplog: pytest.LogCaptureFixture) -> None:
+		"""Non-list commits triggers degraded parsing, valid fields preserved."""
+		raw = {
+			"status": "completed",
+			"commits": "not-a-list",
+			"summary": "Did it",
+			"files_changed": ["src/foo.py"],
+		}
+		with caplog.at_level(logging.WARNING, logger="mission_control.session"):
+			result = validate_mc_result(raw)
+		assert result["status"] == "completed"  # valid field preserved
+		assert result["commits"] == []  # invalid field gets default
+		assert "schema validation failed" in caplog.text.lower()
+
+	def test_completely_invalid_input_returns_degraded(self, caplog: pytest.LogCaptureFixture) -> None:
+		"""Completely invalid dict returns all defaults with warning."""
+		raw = {"garbage": True, "number": 42}
+		with caplog.at_level(logging.WARNING, logger="mission_control.session"):
+			result = validate_mc_result(raw)
+		assert result["status"] == "failed"
+		assert result["commits"] == []
+		assert result["summary"] == ""
+		assert result["files_changed"] == []
+		assert result["discoveries"] == []
+		assert result["concerns"] == []
+		assert "schema validation failed" in caplog.text.lower()
+
+	def test_pydantic_model_directly(self) -> None:
+		"""MCResultSchema can be instantiated directly with valid data."""
+		schema = MCResultSchema(
+			status="blocked",
+			commits=[],
+			summary="Blocked on dependency",
+			files_changed=[],
+		)
+		assert schema.status == "blocked"
+		assert schema.discoveries == []
+		assert schema.concerns == []
+
+	def test_parse_mc_result_integration(self) -> None:
+		"""parse_mc_result returns validated data for valid MC_RESULT output."""
+		output = (
+			'MC_RESULT:{"status":"completed","commits":["abc"],'
+			'"summary":"done","files_changed":["f.py"]}'
+		)
+		result = parse_mc_result(output)
+		assert result is not None
+		assert result["status"] == "completed"
+		assert result["discoveries"] == []  # default filled in by schema
+
+	def test_parse_mc_result_degraded_integration(self, caplog: pytest.LogCaptureFixture) -> None:
+		"""parse_mc_result returns degraded result for invalid status."""
+		output = (
+			'MC_RESULT:{"status":"invalid","commits":["abc"],'
+			'"summary":"done","files_changed":["f.py"]}'
+		)
+		with caplog.at_level(logging.WARNING, logger="mission_control.session"):
+			result = parse_mc_result(output)
+		assert result is not None
+		assert result["status"] == "failed"  # degraded default
+		assert result["commits"] == ["abc"]  # valid field preserved
