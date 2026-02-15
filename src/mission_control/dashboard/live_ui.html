@@ -727,6 +727,7 @@ body {
 		<div class="header-stats">
 			<span>Elapsed: <span class="stat-value" id="elapsed">--</span></span>
 			<span>Cost: <span class="stat-value" id="cost">$0.00</span></span>
+			<span>Epoch: <span class="stat-value" id="epoch-num">0</span></span>
 			<span>Merged: <span class="stat-value" id="merged">0</span></span>
 			<span>Failed: <span class="stat-value" id="failed-count">0</span></span>
 			<span>Running: <span class="stat-value" id="running-count">0</span></span>
@@ -851,16 +852,17 @@ function updateAll(snapshot) {
 			workersByUnit[w.id] = w;
 		}
 	}
-	updateHeader(snapshot.mission);
+	updateHeader(snapshot.mission, snapshot.summary);
 	updatePlanTree(snapshot.plan_tree);
 	updateWorkerCards(snapshot.units);
 	updateEventLog(snapshot.events);
 }
 
-function updateHeader(mission) {
+function updateHeader(mission, summary) {
 	const badge = document.getElementById("mission-status");
 	const elapsed = document.getElementById("elapsed");
 	const cost = document.getElementById("cost");
+	const epochEl = document.getElementById("epoch-num");
 
 	updateControlStates(mission);
 
@@ -883,6 +885,15 @@ function updateHeader(mission) {
 		const mins = Math.floor(diffMs / 60000);
 		const secs = Math.floor((diffMs % 60000) / 1000);
 		elapsed.textContent = `${mins}m ${secs}s`;
+	}
+
+	// Update summary stats from server-side aggregation
+	if (summary) {
+		document.getElementById("merged").textContent = summary.units_merged || 0;
+		document.getElementById("failed-count").textContent = summary.units_failed || 0;
+		document.getElementById("running-count").textContent = summary.units_running || 0;
+		document.getElementById("pending-count").textContent = summary.units_pending || 0;
+		if (epochEl) epochEl.textContent = summary.current_epoch || 0;
 	}
 }
 

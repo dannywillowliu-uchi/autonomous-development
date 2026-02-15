@@ -128,6 +128,13 @@ class LiveDashboard:
 			workers = self.db.get_all_workers()
 			return [_serialize_worker(w) for w in workers]
 
+		@self.app.get("/api/summary")
+		async def get_summary() -> dict[str, Any]:
+			mission = self.db.get_active_mission() or self.db.get_latest_mission()
+			if mission is None:
+				return {"status": "no_mission"}
+			return self._build_summary(mission)
+
 	async def _broadcast_loop(self) -> None:
 		"""Poll DB every 1s, push snapshot to all connected clients."""
 		while True:
@@ -150,7 +157,10 @@ class LiveDashboard:
 		"""Build current mission state from DB."""
 		mission = self.db.get_active_mission() or self.db.get_latest_mission()
 		if mission is None:
-			return {"mission": None, "units": [], "events": [], "plan_tree": [], "workers": []}
+			return {
+				"mission": None, "units": [], "events": [],
+				"plan_tree": [], "workers": [], "summary": None,
+			}
 
 		units = self.db.get_work_units_for_mission(mission.id)
 		events = self.db.get_unit_events_for_mission(mission.id, limit=100)
@@ -162,6 +172,7 @@ class LiveDashboard:
 			"events": [_serialize_event(e) for e in events],
 			"plan_tree": self._build_plan_tree(mission.id),
 			"workers": [_serialize_worker(w) for w in workers],
+			"summary": self._build_summary(mission),
 		}
 
 	def _build_plan_tree(self, mission_id: str) -> list[dict[str, Any]]:
@@ -197,6 +208,21 @@ class LiveDashboard:
 			})
 
 		return tree
+
+	def _build_summary(self, mission: Any) -> dict[str, Any]:
+		"""Build lightweight summary stats for the dashboard stats bar."""
+		agg = self.db.get_mission_summary(mission.id)
+		units = agg["units_by_status"]
+		epochs = agg["epochs"]
+		return {
+			"total_cost_usd": mission.total_cost_usd,
+			"units_merged": units.get("completed", 0),
+			"units_failed": units.get("failed", 0),
+			"units_running": units.get("running", 0) + units.get("claimed", 0),
+			"units_pending": units.get("pending", 0),
+			"current_epoch": max((e["number"] for e in epochs), default=0),
+			"started_at": mission.started_at,
+		}
 
 
 def _serialize_mission(m: Any) -> dict[str, Any]:
