@@ -194,6 +194,12 @@ class ContinuousController:
 			result.total_units_merged = self._total_merged
 			result.total_units_failed = self._total_failed
 
+			try:
+				from mission_control.mission_report import generate_mission_report
+				generate_mission_report(result, mission, self.db, self.config)
+			except Exception as exc:
+				logger.error("Failed to generate mission report: %s", exc, exc_info=True)
+
 			if self._notifier:
 				await self._notifier.send_mission_end(
 					objective_met=result.objective_met,
