@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shlex
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -92,9 +93,59 @@ class ContinuousController:
 		self._total_failed: int = 0
 		self._event_stream: EventStream | None = None
 
-	async def run(self) -> ContinuousMissionResult:
+	async def run(self, dry_run: bool = False) -> ContinuousMissionResult:
 		"""Run the continuous mission loop until objective met or stopping condition."""
 		result = ContinuousMissionResult(objective=self.config.target.objective)
+
+		if dry_run:
+			await self._init_components()
+			if self._planner is None:
+				raise RuntimeError("Controller not initialized: call start() first")
+			mission = Mission(objective=self.config.target.objective, status="dry_run")
+			_, units, _ = await self._planner.get_next_units(
+				mission, max_units=10, feedback_context="",
+			)
+			if not units:
+				print("Planner returned no units.")
+				return result
+			# Build dependency graph for parallelism estimate
+			unit_ids = {u.id for u in units}
+			dep_graph: dict[str, list[str]] = {}
+			for u in units:
+				raw_deps = [d.strip() for d in u.depends_on.split(",") if d.strip()] if u.depends_on else []
+				deps = [d for d in raw_deps if d in unit_ids]
+				dep_graph[u.id] = deps
+			# Compute parallelism levels via topological layering
+			remaining = dict(dep_graph)
+			levels: list[list[str]] = []
+			while remaining:
+				layer = [uid for uid, deps in remaining.items() if not deps]
+				if not layer:
+					layer = list(remaining.keys())[:1]
+				levels.append(layer)
+				for uid in layer:
+					del remaining[uid]
+				for deps in remaining.values():
+					for uid in layer:
+						if uid in deps:
+							deps.remove(uid)
+			print(f"\nDry-run plan: {len(units)} units")
+			print(f"{'#':<4} {'Title':<50} {'Priority':>8} {'Files'}")
+			print("-" * 90)
+			for i, u in enumerate(units, 1):
+				files = u.files_hint[:60] if u.files_hint else ""
+				deps_str = ""
+				if u.depends_on:
+					dep_ids = [d.strip() for d in u.depends_on.split(",") if d.strip()]
+					valid_deps = [d[:8] for d in dep_ids if d in unit_ids]
+					if valid_deps:
+						deps_str = f" [depends: {', '.join(valid_deps)}]"
+				print(f"{i:<4} {u.title[:48]:<50} {u.priority:>8} {files}{deps_str}")
+			print(f"\nEstimated parallelism: {len(levels)} level(s), max {max(len(lv) for lv in levels)} concurrent")
+			if self._backend:
+				await self._backend.cleanup()
+			return result
+
 		self._start_time = time.monotonic()
 
 		mission = Mission(
@@ -355,8 +406,8 @@ class ContinuousController:
 			if setup_cmd:
 				setup_timeout = self.config.target.verification.setup_timeout
 				logger.info("Running verification setup: %s", setup_cmd)
-				proc = await asyncio.create_subprocess_shell(
-					setup_cmd,
+				proc = await asyncio.create_subprocess_exec(
+					*shlex.split(setup_cmd),
 					cwd=gb_workspace,
 					stdout=asyncio.subprocess.PIPE,
 					stderr=asyncio.subprocess.STDOUT,
@@ -887,6 +938,35 @@ class ContinuousController:
 		self._active_tasks.add(task)
 		task.add_done_callback(self._active_tasks.discard)
 
+	async def _fail_unit(
+		self,
+		unit: WorkUnit,
+		worker: Worker | None,
+		epoch: Epoch,
+		reason: str,
+		workspace: str,
+		put_on_queue: bool = True,
+	) -> None:
+		"""Mark a unit as failed, update the worker, and optionally queue completion."""
+		unit.attempt += 1
+		unit.status = "failed"
+		unit.output_summary = reason
+		unit.finished_at = _now_iso()
+		await self.db.locked_call("update_work_unit", unit)
+		if worker is not None:
+			worker.status = "dead"
+			worker.units_failed += 1
+			try:
+				await self.db.locked_call("update_worker", worker)
+			except Exception:
+				pass
+		if put_on_queue:
+			await self._completion_queue.put(
+				WorkerCompletion(
+					unit=unit, handoff=None, workspace=workspace, epoch=epoch,
+				),
+			)
+
 	async def _execute_single_unit(
 		self,
 		unit: WorkUnit,
@@ -910,14 +990,7 @@ class ContinuousController:
 				)
 			except RuntimeError as e:
 				logger.error("Failed to provision workspace: %s", e)
-				unit.attempt += 1
-				unit.status = "failed"
-				unit.output_summary = str(e)
-				unit.finished_at = _now_iso()
-				await self.db.locked_call("update_work_unit", unit)
-				await self._completion_queue.put(
-					WorkerCompletion(unit=unit, handoff=None, workspace="", epoch=epoch),
-				)
+				await self._fail_unit(unit, None, epoch, str(e), "")
 				return
 
 			branch_name = f"mc/unit-{unit.id}"
@@ -1028,22 +1101,7 @@ class ContinuousController:
 					break
 				if not self.running:
 					await self._backend.kill(handle)
-					unit.attempt += 1
-					unit.status = "failed"
-					unit.output_summary = "Stopped by signal"
-					unit.finished_at = _now_iso()
-					await self.db.locked_call("update_work_unit", unit)
-					worker.status = "dead"
-					worker.units_failed += 1
-					try:
-						await self.db.locked_call("update_worker", worker)
-					except Exception:
-						pass
-					await self._completion_queue.put(
-						WorkerCompletion(
-							unit=unit, handoff=None, workspace=workspace, epoch=epoch,
-						),
-					)
+					await self._fail_unit(unit, worker, epoch, "Stopped by signal", workspace)
 					return
 				output_so_far = await self._backend.get_output(handle)
 				poll_iter += 1
@@ -1058,21 +1116,9 @@ class ContinuousController:
 				await asyncio.sleep(monitor_interval)
 			else:
 				await self._backend.kill(handle)
-				unit.attempt += 1
-				unit.status = "failed"
-				unit.output_summary = f"Timed out after {effective_timeout}s"
-				unit.finished_at = _now_iso()
-				await self.db.locked_call("update_work_unit", unit)
-				worker.status = "dead"
-				worker.units_failed += 1
-				try:
-					await self.db.locked_call("update_worker", worker)
-				except Exception:
-					pass
-				await self._completion_queue.put(
-					WorkerCompletion(
-						unit=unit, handoff=None, workspace=workspace, epoch=epoch,
-					),
+				await self._fail_unit(
+					unit, worker, epoch,
+					f"Timed out after {effective_timeout}s", workspace,
 				)
 				return
 
@@ -1165,57 +1211,13 @@ class ContinuousController:
 
 		except (RuntimeError, OSError) as e:
 			logger.error("Infrastructure error executing unit %s: %s", unit.id, e)
-			unit.attempt += 1
-			unit.status = "failed"
-			unit.output_summary = f"Infrastructure error: {e}"
-			unit.finished_at = _now_iso()
-			await self.db.locked_call("update_work_unit", unit)
-			if worker is not None:
-				worker.status = "dead"
-				worker.units_failed += 1
-				try:
-					await self.db.locked_call("update_worker", worker)
-				except Exception:
-					pass
-			await self._completion_queue.put(
-				WorkerCompletion(
-					unit=unit, handoff=None, workspace=workspace, epoch=epoch,
-				),
-			)
+			await self._fail_unit(unit, worker, epoch, f"Infrastructure error: {e}", workspace)
 		except asyncio.CancelledError:
 			logger.info("Unit %s execution cancelled", unit.id)
-			unit.attempt += 1
-			unit.status = "failed"
-			unit.output_summary = "Cancelled"
-			unit.finished_at = _now_iso()
-			await self.db.locked_call("update_work_unit", unit)
-			if worker is not None:
-				worker.status = "dead"
-				worker.units_failed += 1
-				try:
-					await self.db.locked_call("update_worker", worker)
-				except Exception:
-					pass
-			# Don't put on queue -- controller is shutting down
+			await self._fail_unit(unit, worker, epoch, "Cancelled", workspace, put_on_queue=False)
 		except (ValueError, KeyError, json.JSONDecodeError, sqlite3.IntegrityError) as e:
 			logger.error("Data error executing unit %s: %s", unit.id, e)
-			unit.attempt += 1
-			unit.status = "failed"
-			unit.output_summary = f"Data error: {e}"
-			unit.finished_at = _now_iso()
-			await self.db.locked_call("update_work_unit", unit)
-			if worker is not None:
-				worker.status = "dead"
-				worker.units_failed += 1
-				try:
-					await self.db.locked_call("update_worker", worker)
-				except Exception:
-					pass
-			await self._completion_queue.put(
-				WorkerCompletion(
-					unit=unit, handoff=None, workspace=workspace, epoch=epoch,
-				),
-			)
+			await self._fail_unit(unit, worker, epoch, f"Data error: {e}", workspace)
 		finally:
 			# Safety net: ensure worker marked idle if not already cleaned up
 			if worker is not None and worker.status == "working":
@@ -1422,9 +1424,16 @@ class ContinuousController:
 		try:
 			params = json.loads(signal.payload) if signal.payload else {}
 			if "num_workers" in params:
-				self.config.scheduler.parallel.num_workers = int(
-					params["num_workers"],
-				)
+				new_count = int(params["num_workers"])
+				self.config.scheduler.parallel.num_workers = new_count
+				if self._semaphore is not None:
+					new_sem = asyncio.Semaphore(new_count)
+					in_flight = sum(
+						1 for t in self._active_tasks if not t.done()
+					)
+					for _ in range(in_flight):
+						new_sem._value = max(new_sem._value - 1, 0)
+					self._semaphore = new_sem
 				logger.info(
 					"Adjusted num_workers to %d",
 					self.config.scheduler.parallel.num_workers,
