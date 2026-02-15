@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Generator, Sequence
 
 from mission_control.models import (
 	Decision,
@@ -423,6 +424,20 @@ class Database:
 
 	def close(self) -> None:
 		self.conn.close()
+
+	@contextmanager
+	def transaction(self) -> Generator[sqlite3.Connection, None, None]:
+		"""Context manager for explicit transactions.
+
+		Commits on success, rolls back on exception.
+		"""
+		try:
+			yield self.conn
+		except Exception:
+			self.conn.rollback()
+			raise
+		else:
+			self.conn.commit()
 
 	async def locked_call(self, fn: str, *args: Any, **kwargs: Any) -> Any:
 		"""Call a Database method while holding the asyncio lock.

@@ -509,6 +509,21 @@ class ContinuousController:
 							unit.id, merge_result.failure_output[:200],
 						)
 
+						# Log merge_failed event
+						try:
+							self.db.insert_unit_event(UnitEvent(
+								mission_id=mission.id,
+								epoch_id=epoch.id,
+								work_unit_id=unit.id,
+								event_type="merge_failed",
+								details=json.dumps({
+									"failure_output": merge_result.failure_output[:500],
+									"failure_stage": merge_result.failure_stage,
+								}),
+							))
+						except Exception:
+							pass
+
 						# Append merge failure to handoff concerns
 						if handoff:
 							try:
@@ -549,6 +564,20 @@ class ContinuousController:
 						"merge_unit failed for %s: %s",
 						unit.id, exc, exc_info=True,
 					)
+					# Log merge_failed event for exception path
+					try:
+						self.db.insert_unit_event(UnitEvent(
+							mission_id=mission.id,
+							epoch_id=epoch.id,
+							work_unit_id=unit.id,
+							event_type="merge_failed",
+							details=json.dumps({
+								"failure_output": str(exc)[:500],
+								"failure_stage": "exception",
+							}),
+						))
+					except Exception:
+						pass
 					failure_reason = str(exc)[:300]
 					if unit.attempt < unit.max_attempts:
 						self._schedule_retry(unit, epoch, mission, failure_reason, cont)
