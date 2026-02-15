@@ -116,6 +116,8 @@ class ContinuousConfig:
 	backlog_min_size: int = 2  # replan when backlog drops below this
 	cooldown_between_units: int = 0
 	timeout_multiplier: float = 1.2  # applied to session_timeout for poll deadline
+	retry_base_delay_seconds: int = 30
+	retry_max_delay_seconds: int = 300
 
 
 @dataclass
@@ -305,6 +307,9 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 		cc.verify_before_merge = bool(data["verify_before_merge"])
 	if "timeout_multiplier" in data:
 		cc.timeout_multiplier = float(data["timeout_multiplier"])
+	for key in ("retry_base_delay_seconds", "retry_max_delay_seconds"):
+		if key in data:
+			setattr(cc, key, int(data[key]))
 	return cc
 
 
