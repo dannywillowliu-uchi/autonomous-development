@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -535,3 +537,55 @@ def load_config(path: str | Path) -> MissionConfig:
 	if not tg.chat_id:
 		tg.chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
 	return mc
+
+
+_TELEGRAM_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]+$")
+
+
+def validate_config(config: MissionConfig) -> list[tuple[str, str]]:
+	"""Perform semantic validation of a loaded MissionConfig.
+
+	Returns a list of (level, message) tuples where level is 'error' or 'warning'.
+	"""
+	issues: list[tuple[str, str]] = []
+
+	# 1. target.path exists and is a git repo
+	target_path = config.target.resolved_path
+	if not target_path.exists():
+		issues.append(("error", f"target.path does not exist: {target_path}"))
+	elif not (target_path / ".git").is_dir():
+		issues.append(("error", f"target.path is not a git repository (no .git dir): {target_path}"))
+
+	# 2. pool_dir is writable if set
+	pool_dir = config.scheduler.parallel.pool_dir
+	if pool_dir:
+		pool_path = Path(os.path.expanduser(pool_dir))
+		if pool_path.exists() and not os.access(pool_path, os.W_OK):
+			issues.append(("error", f"pool_dir is not writable: {pool_path}"))
+		elif not pool_path.exists():
+			issues.append(("error", f"pool_dir does not exist: {pool_path}"))
+
+	# 3. verification command first token is executable
+	verify_cmd = config.target.verification.command
+	if verify_cmd:
+		first_token = verify_cmd.split()[0]
+		if shutil.which(first_token) is None:
+			issues.append(("error", f"verification command not found: {first_token}"))
+
+	# 4. Telegram bot_token format if notifications enabled
+	tg = config.notifications.telegram
+	notifications_enabled = tg.on_heartbeat or tg.on_merge_fail or tg.on_mission_end
+	if notifications_enabled and tg.bot_token and not _TELEGRAM_TOKEN_RE.match(tg.bot_token):
+		issues.append(("error", "telegram bot_token format invalid (expected digits:alphanumeric)"))
+
+	# 5. Suspicious values
+	if config.scheduler.session_timeout < 60:
+		issues.append(("warning", f"session_timeout is very low: {config.scheduler.session_timeout}s"))
+	if config.scheduler.parallel.num_workers > 8:
+		issues.append(("warning", f"num_workers is high: {config.scheduler.parallel.num_workers}"))
+	if config.scheduler.session_timeout < 0:
+		issues.append(("warning", f"session_timeout is negative: {config.scheduler.session_timeout}"))
+	if config.scheduler.parallel.num_workers == 0:
+		issues.append(("warning", "num_workers is zero"))
+
+	return issues
