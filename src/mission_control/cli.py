@@ -80,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
 	# mc live
 	live = sub.add_parser("live", help="Launch live mission control dashboard")
 	live.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	live.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
 	live.add_argument("--port", type=int, default=8080, help="Port to serve on")
 
 	# mc summary
@@ -636,6 +637,8 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 def cmd_live(args: argparse.Namespace) -> int:
 	"""Launch the live mission control dashboard."""
 	try:
+		import secrets
+
 		import uvicorn
 
 		from mission_control.dashboard.live import LiveDashboard
@@ -648,9 +651,11 @@ def cmd_live(args: argparse.Namespace) -> int:
 		print("No database found. Run 'mc mission' first.")
 		return 1
 
-	dashboard = LiveDashboard(db_path)
-	print(f"Starting live dashboard at http://localhost:{args.port}")
-	uvicorn.run(dashboard.app, host="0.0.0.0", port=args.port, log_level="warning")
+	token = secrets.token_urlsafe(32)
+	dashboard = LiveDashboard(db_path, auth_token=token)
+	print(f"Starting live dashboard at http://{args.host}:{args.port}")
+	print(f"Auth token: {token}")
+	uvicorn.run(dashboard.app, host=args.host, port=args.port, log_level="warning")
 	return 0
 
 

@@ -208,6 +208,14 @@ class NotificationConfig:
 
 
 @dataclass
+class DashboardConfig:
+	"""Live dashboard settings."""
+
+	host: str = "127.0.0.1"
+	port: int = 8080
+
+
+@dataclass
 class DeployConfig:
 	"""Deployment settings."""
 
@@ -235,7 +243,17 @@ class MissionConfig:
 	discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
 	heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
 	notifications: NotificationConfig = field(default_factory=NotificationConfig)
+	dashboard: DashboardConfig = field(default_factory=DashboardConfig)
 	deploy: DeployConfig = field(default_factory=DeployConfig)
+
+
+def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
+	dc = DashboardConfig()
+	if "host" in data:
+		dc.host = str(data["host"])
+	if "port" in data:
+		dc.port = int(data["port"])
+	return dc
 
 
 def _build_verification(data: dict[str, Any]) -> VerificationConfig:
@@ -528,6 +546,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.heartbeat = _build_heartbeat(data["heartbeat"])
 	if "notifications" in data:
 		mc.notifications = _build_notifications(data["notifications"])
+	if "dashboard" in data:
+		mc.dashboard = _build_dashboard(data["dashboard"])
 	if "deploy" in data:
 		mc.deploy = _build_deploy(data["deploy"])
 	# Allow env vars as fallback for Telegram credentials
