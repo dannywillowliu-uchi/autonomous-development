@@ -489,6 +489,10 @@ function connect() {
 
 	ws.onmessage = (e) => {
 		const snapshot = JSON.parse(e.data);
+		if (snapshot.reload) {
+			location.reload();
+			return;
+		}
 		updateAll(snapshot);
 	};
 }
