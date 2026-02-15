@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from dataclasses import dataclass
+
+import httpx
 
 from mission_control.config import MissionConfig
 from mission_control.db import Database
@@ -294,21 +297,24 @@ class GreenBranchManager:
 
 	async def _poll_health_check(self, url: str, timeout: int) -> bool:
 		"""Poll a URL with HTTP GET until 200 or timeout."""
-		import urllib.request
-
-		deadline = asyncio.get_event_loop().time() + timeout
-		while asyncio.get_event_loop().time() < deadline:
-			try:
-				req = urllib.request.Request(url, method="GET")
-				resp = await asyncio.get_event_loop().run_in_executor(
-					None, lambda: urllib.request.urlopen(req, timeout=10),  # noqa: S310
-				)
-				if resp.status == 200:
-					return True
-			except Exception:
-				pass
-			await asyncio.sleep(5)
-		return False
+		loop = asyncio.get_event_loop()
+		deadline = loop.time() + timeout
+		async with httpx.AsyncClient() as client:
+			while True:
+				remaining = deadline - loop.time()
+				if remaining <= 0:
+					return False
+				try:
+					resp = await client.get(url, timeout=min(remaining, 10.0))
+					if resp.status_code == 200:
+						return True
+				except (httpx.HTTPError, OSError):
+					pass
+				# Check if we have time for another poll
+				remaining = deadline - loop.time()
+				if remaining <= 0:
+					return False
+				await asyncio.sleep(random.uniform(3.0, 7.0))
 
 	async def get_green_hash(self) -> str:
 		"""Return the current commit hash of mc/green."""
