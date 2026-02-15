@@ -13,6 +13,10 @@ from mission_control.workspace import WorkspacePool
 logger = logging.getLogger(__name__)
 
 
+_MB = 1024 * 1024
+_OUTPUT_WARNING_THRESHOLDS_MB = (10, 25, 50)
+
+
 class LocalBackend(WorkerBackend):
 	"""Execute workers as local subprocesses with shared git clones."""
 
@@ -22,6 +26,7 @@ class LocalBackend(WorkerBackend):
 		pool_dir: str,
 		max_clones: int = 10,
 		base_branch: str = "main",
+		max_output_mb: int = 50,
 	) -> None:
 		self._pool = WorkspacePool(
 			source_repo=source_repo,
@@ -32,6 +37,8 @@ class LocalBackend(WorkerBackend):
 		self._processes: dict[str, asyncio.subprocess.Process] = {}
 		self._stdout_bufs: dict[str, bytes] = {}
 		self._stdout_collected: set[str] = set()
+		self._max_output_bytes: int = max_output_mb * _MB
+		self._output_warnings_fired: dict[str, set[int]] = {}
 
 	async def initialize(self, warm_count: int = 0) -> None:
 		await self._pool.initialize(warm_count=warm_count)
@@ -99,6 +106,7 @@ class LocalBackend(WorkerBackend):
 		self._processes[worker_id] = proc
 		self._stdout_bufs[worker_id] = b""
 		self._stdout_collected.discard(worker_id)
+		self._output_warnings_fired[worker_id] = set()
 		return WorkerHandle(
 			worker_id=worker_id,
 			pid=proc.pid,
@@ -113,29 +121,53 @@ class LocalBackend(WorkerBackend):
 			return "running"
 		return "completed" if proc.returncode == 0 else "failed"
 
+	def _check_output_thresholds(self, worker_id: str, size: int) -> None:
+		"""Log warnings when output size crosses configured thresholds."""
+		fired = self._output_warnings_fired.get(worker_id, set())
+		for threshold_mb in _OUTPUT_WARNING_THRESHOLDS_MB:
+			threshold_bytes = threshold_mb * _MB
+			if size >= threshold_bytes and threshold_mb not in fired:
+				fired.add(threshold_mb)
+				logger.warning(
+					"Worker %s output reached %dMB (%d bytes)",
+					worker_id, threshold_mb, size,
+				)
+		self._output_warnings_fired[worker_id] = fired
+
 	async def get_output(self, handle: WorkerHandle) -> str:
 		proc = self._processes.get(handle.worker_id)
 		if proc is None:
 			return ""
+		wid = handle.worker_id
 		if proc.returncode is None:
 			# Process still running -- read what we have so far
 			if proc.stdout:
 				try:
 					chunk = await asyncio.wait_for(proc.stdout.read(65536), timeout=0.1)
-					self._stdout_bufs[handle.worker_id] = (
-						self._stdout_bufs.get(handle.worker_id, b"") + chunk
-					)
+					self._stdout_bufs[wid] = self._stdout_bufs.get(wid, b"") + chunk
 				except asyncio.TimeoutError:
 					pass
+			buf_size = len(self._stdout_bufs.get(wid, b""))
+			self._check_output_thresholds(wid, buf_size)
+			if buf_size >= self._max_output_bytes:
+				logger.error(
+					"Worker %s output exceeded limit (%dMB). Killing worker.",
+					wid, self._max_output_bytes // _MB,
+				)
+				self._stdout_bufs[wid] = self._stdout_bufs[wid][:self._max_output_bytes]
+				proc.kill()
+				await proc.wait()
 		else:
 			# Process finished -- collect remaining output once
-			if proc.stdout and handle.worker_id not in self._stdout_collected:
+			if proc.stdout and wid not in self._stdout_collected:
 				remaining = await proc.stdout.read()
-				self._stdout_bufs[handle.worker_id] = (
-					self._stdout_bufs.get(handle.worker_id, b"") + remaining
-				)
-				self._stdout_collected.add(handle.worker_id)
-		return self._stdout_bufs.get(handle.worker_id, b"").decode(errors="replace")
+				self._stdout_bufs[wid] = self._stdout_bufs.get(wid, b"") + remaining
+				# Truncate if final collection pushes over limit
+				if len(self._stdout_bufs[wid]) > self._max_output_bytes:
+					self._stdout_bufs[wid] = self._stdout_bufs[wid][:self._max_output_bytes]
+				self._stdout_collected.add(wid)
+			self._check_output_thresholds(wid, len(self._stdout_bufs.get(wid, b"")))
+		return self._stdout_bufs.get(wid, b"").decode(errors="replace")
 
 	async def kill(self, handle: WorkerHandle) -> None:
 		proc = self._processes.get(handle.worker_id)
@@ -154,4 +186,5 @@ class LocalBackend(WorkerBackend):
 		self._processes.clear()
 		self._stdout_bufs.clear()
 		self._stdout_collected.clear()
+		self._output_warnings_fired.clear()
 		await self._pool.cleanup()
