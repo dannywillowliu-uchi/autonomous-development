@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from mission_control.notifier import MAX_QUEUE_SIZE, NotificationPriority, TelegramNotifier
+from mission_control.notifier import MAX_QUEUE_SIZE, TELEGRAM_MAX_LEN, NotificationPriority, TelegramNotifier
 
 
 @pytest.fixture
@@ -210,3 +210,70 @@ class TestTelegramNotifier:
 		assert "batch-a" in first_batch
 		assert "batch-b" in first_batch
 		assert "batch-c" in first_batch
+
+
+class TestSplitMessage:
+	def test_short_message_not_split(self) -> None:
+		"""A message under max_len is returned as a single-element list."""
+		msg = "short message"
+		result = TelegramNotifier._split_message(msg)
+		assert result == [msg]
+
+	def test_split_at_separator_boundaries(self) -> None:
+		"""A message over max_len is split at \\n---\\n boundaries."""
+		chunk_a = "a" * 2000
+		chunk_b = "b" * 2000
+		chunk_c = "c" * 2000
+		combined = f"{chunk_a}\n---\n{chunk_b}\n---\n{chunk_c}"
+		assert len(combined) > TELEGRAM_MAX_LEN
+
+		result = TelegramNotifier._split_message(combined)
+		assert len(result) == 2
+		assert result[0] == f"{chunk_a}\n---\n{chunk_b}"
+		assert result[1] == chunk_c
+
+	def test_oversized_single_chunk_hard_split(self) -> None:
+		"""A single chunk exceeding max_len is hard-split at max_len boundaries."""
+		big = "x" * (TELEGRAM_MAX_LEN * 2 + 100)
+		result = TelegramNotifier._split_message(big)
+		assert len(result) == 3
+		assert result[0] == "x" * TELEGRAM_MAX_LEN
+		assert result[1] == "x" * TELEGRAM_MAX_LEN
+		assert result[2] == "x" * 100
+
+	def test_exact_boundary_not_split(self) -> None:
+		"""A message exactly at max_len is returned as a single-element list."""
+		msg = "z" * TELEGRAM_MAX_LEN
+		result = TelegramNotifier._split_message(msg)
+		assert result == [msg]
+
+	def test_exact_boundary_with_separator(self) -> None:
+		"""Two chunks that together with separator equal max_len stay in one message."""
+		sep = "\n---\n"
+		half = (TELEGRAM_MAX_LEN - len(sep)) // 2
+		chunk_a = "a" * half
+		chunk_b = "b" * (TELEGRAM_MAX_LEN - len(sep) - half)
+		combined = f"{chunk_a}{sep}{chunk_b}"
+		assert len(combined) == TELEGRAM_MAX_LEN
+
+		result = TelegramNotifier._split_message(combined)
+		assert result == [combined]
+
+	@pytest.mark.asyncio
+	async def test_flush_batch_sends_multiple_posts_for_long_batch(self, notifier: TelegramNotifier) -> None:
+		"""_flush_batch sends multiple posts when combined message exceeds max_len."""
+		mock_response = httpx.Response(200)
+		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+			mock_post.return_value = mock_response
+			# Create messages that exceed 4096 when combined
+			messages = ["m" * 2000, "n" * 2000, "o" * 2000]
+			await notifier._flush_batch(messages)
+
+			assert mock_post.call_count >= 2
+			sent_texts = [call.kwargs["json"]["text"] for call in mock_post.call_args_list]
+			rejoined = "\n---\n".join(sent_texts)
+			assert "m" * 2000 in rejoined
+			assert "n" * 2000 in rejoined
+			assert "o" * 2000 in rejoined
+
+		await notifier.close()

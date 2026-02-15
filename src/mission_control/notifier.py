@@ -26,6 +26,9 @@ class NotificationPriority(enum.Enum):
 	LOW = "low"
 
 
+TELEGRAM_MAX_LEN = 4096
+
+
 class TelegramNotifier:
 	"""Sends mission updates to Telegram via Bot API with message batching."""
 
@@ -64,20 +67,55 @@ class TelegramNotifier:
 
 			await self._flush_batch(messages)
 
+	@staticmethod
+	def _split_message(combined: str, max_len: int = TELEGRAM_MAX_LEN) -> list[str]:
+		"""Split a combined message at separator boundaries to fit within max_len."""
+		if len(combined) <= max_len:
+			return [combined]
+
+		separator = "\n---\n"
+		chunks = combined.split(separator)
+		result: list[str] = []
+		current = ""
+
+		for chunk in chunks:
+			if len(chunk) > max_len:
+				# Flush current buffer first
+				if current:
+					result.append(current)
+					current = ""
+				# Hard-split oversized chunk
+				for i in range(0, len(chunk), max_len):
+					result.append(chunk[i:i + max_len])
+			elif not current:
+				current = chunk
+			elif len(current) + len(separator) + len(chunk) <= max_len:
+				current = current + separator + chunk
+			else:
+				result.append(current)
+				current = chunk
+
+		if current:
+			result.append(current)
+
+		return result
+
 	async def _flush_batch(self, messages: list[str]) -> None:
-		"""Send a batch of messages as a single concatenated Telegram message."""
+		"""Send a batch of messages, splitting across multiple Telegram messages if needed."""
 		if not messages:
 			return
 		combined = "\n---\n".join(messages)
+		parts = self._split_message(combined)
 		try:
 			client = await self._ensure_client()
 			url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
-			await client.post(url, json={
-				"chat_id": self._chat_id,
-				"text": combined,
-				"parse_mode": "Markdown",
-				"disable_web_page_preview": True,
-			})
+			for part in parts:
+				await client.post(url, json={
+					"chat_id": self._chat_id,
+					"text": part,
+					"parse_mode": "Markdown",
+					"disable_web_page_preview": True,
+				})
 		except Exception as exc:
 			logger.warning("Telegram send failed: %s", exc)
 
