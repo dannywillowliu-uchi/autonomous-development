@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from mission_control.backends.base import WorkerBackend, WorkerHandle
-from mission_control.config import MissionConfig, TargetConfig, VerificationConfig
+from mission_control.config import MissionConfig
 from mission_control.db import Database
 from mission_control.models import Mission, Plan, Round, Worker, WorkUnit
 from mission_control.worker import WorkerAgent, render_mission_worker_prompt, render_worker_prompt
@@ -37,23 +37,6 @@ class MockBackend(WorkerBackend):
 
 	async def cleanup(self) -> None:
 		pass
-
-
-@pytest.fixture()
-def db() -> Database:
-	return Database(":memory:")
-
-
-@pytest.fixture()
-def config() -> MissionConfig:
-	cfg = MissionConfig()
-	cfg.target = TargetConfig(
-		name="test-proj",
-		path="/tmp/test",
-		branch="main",
-		verification=VerificationConfig(command="pytest -q"),
-	)
-	return cfg
 
 
 @pytest.fixture()

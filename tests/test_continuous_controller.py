@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mission_control.backends import LocalBackend
-from mission_control.config import ContinuousConfig, MissionConfig
+from mission_control.config import MissionConfig
 from mission_control.continuous_controller import (
 	ContinuousController,
 	ContinuousMissionResult,
@@ -22,69 +22,50 @@ from mission_control.green_branch import UnitMergeResult
 from mission_control.models import Epoch, Handoff, Mission, Plan, Signal, WorkUnit
 
 
-def _db() -> Database:
-	return Database(":memory:")
-
-
-def _config() -> MissionConfig:
-	mc = MissionConfig()
-	mc.continuous = ContinuousConfig(
-		stall_threshold_units=5,
-		stall_score_epsilon=0.01,
-		backlog_min_size=2,
-	)
-	return mc
-
-
 class TestShouldStop:
-	def test_running_false(self) -> None:
-		ctrl = ContinuousController(_config(), _db())
+	def test_running_false(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
 		ctrl.running = False
 		assert ctrl._should_stop(Mission(id="m1")) == "user_stopped"
 
-	def test_no_stop_condition(self) -> None:
-		ctrl = ContinuousController(_config(), _db())
+	def test_no_stop_condition(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
 		assert ctrl._should_stop(Mission(id="m1")) == ""
 
-	def test_wall_time_exceeded(self) -> None:
-		config = _config()
+	def test_wall_time_exceeded(self, config: MissionConfig, db: Database) -> None:
 		config.continuous.max_wall_time_seconds = 10
-		ctrl = ContinuousController(config, _db())
+		ctrl = ContinuousController(config, db)
 		ctrl._start_time = time.monotonic() - 20  # 20s elapsed, limit is 10s
 		assert ctrl._should_stop(Mission(id="m1")) == "wall_time_exceeded"
 
-	def test_wall_time_not_exceeded(self) -> None:
-		config = _config()
+	def test_wall_time_not_exceeded(self, config: MissionConfig, db: Database) -> None:
 		config.continuous.max_wall_time_seconds = 100
-		ctrl = ContinuousController(config, _db())
+		ctrl = ContinuousController(config, db)
 		ctrl._start_time = time.monotonic() - 10  # 10s elapsed, limit is 100s
 		assert ctrl._should_stop(Mission(id="m1")) == ""
 
-	def test_signal_stopped(self) -> None:
-		db = _db()
+	def test_signal_stopped(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		signal = Signal(mission_id="m1", signal_type="stop")
 		db.insert_signal(signal)
 
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		assert ctrl._should_stop(Mission(id="m1")) == "signal_stopped"
 		assert not ctrl.running
 
 
 class TestCheckSignals:
-	def test_stop_signal(self) -> None:
-		db = _db()
+	def test_stop_signal(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		signal = Signal(mission_id="m1", signal_type="stop")
 		db.insert_signal(signal)
 
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		result = ctrl._check_signals("m1")
 		assert result == "signal_stopped"
 		assert not ctrl.running
 
-	def test_adjust_signal(self) -> None:
-		db = _db()
+	def test_adjust_signal(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		signal = Signal(
 			mission_id="m1",
@@ -93,20 +74,18 @@ class TestCheckSignals:
 		)
 		db.insert_signal(signal)
 
-		config = _config()
 		ctrl = ContinuousController(config, db)
 		result = ctrl._check_signals("m1")
 		assert result == ""  # adjust doesn't stop
 		assert config.scheduler.parallel.num_workers == 4
 
-	def test_no_signals(self) -> None:
-		ctrl = ContinuousController(_config(), _db())
+	def test_no_signals(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
 		assert ctrl._check_signals("m1") == ""
 
 
 class TestHandleAdjustSignal:
-	def test_adjust_num_workers(self) -> None:
-		db = _db()
+	def test_adjust_num_workers(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		signal = Signal(
 			mission_id="m1",
@@ -115,13 +94,11 @@ class TestHandleAdjustSignal:
 		)
 		db.insert_signal(signal)
 
-		config = _config()
 		ctrl = ContinuousController(config, db)
 		ctrl._handle_adjust_signal(signal)
 		assert config.scheduler.parallel.num_workers == 8
 
-	def test_adjust_wall_time(self) -> None:
-		db = _db()
+	def test_adjust_wall_time(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		signal = Signal(
 			mission_id="m1",
@@ -130,40 +107,36 @@ class TestHandleAdjustSignal:
 		)
 		db.insert_signal(signal)
 
-		config = _config()
 		ctrl = ContinuousController(config, db)
 		ctrl._handle_adjust_signal(signal)
 		assert config.continuous.max_wall_time_seconds == 3600
 
 
 class TestPauseResumeSignals:
-	def test_pause_signal_sets_paused(self) -> None:
-		db = _db()
+	def test_pause_signal_sets_paused(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		signal = Signal(mission_id="m1", signal_type="pause")
 		db.insert_signal(signal)
 
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		assert ctrl._paused is False
 		ctrl._check_signals("m1")
 		assert ctrl._paused is True
 
-	def test_resume_signal_clears_paused(self) -> None:
-		db = _db()
+	def test_resume_signal_clears_paused(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		signal = Signal(mission_id="m1", signal_type="resume")
 		db.insert_signal(signal)
 
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		ctrl._paused = True
 		ctrl._check_signals("m1")
 		assert ctrl._paused is False
 
-	def test_pause_then_resume(self) -> None:
-		db = _db()
+	def test_pause_then_resume(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 
 		# Pause
 		pause_sig = Signal(mission_id="m1", signal_type="pause")
@@ -179,11 +152,10 @@ class TestPauseResumeSignals:
 
 
 class TestCancelUnitSignal:
-	def test_cancel_running_unit(self) -> None:
-		db = _db()
+	def test_cancel_running_unit(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 
 		# Create a mock task
 		mock_task = MagicMock(spec=asyncio.Task)
@@ -200,11 +172,10 @@ class TestCancelUnitSignal:
 
 		mock_task.cancel.assert_called_once()
 
-	def test_cancel_already_done_unit(self) -> None:
-		db = _db()
+	def test_cancel_already_done_unit(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 
 		mock_task = MagicMock(spec=asyncio.Task)
 		mock_task.done.return_value = True
@@ -222,8 +193,7 @@ class TestCancelUnitSignal:
 
 
 class TestForceRetrySignal:
-	def test_force_retry_resets_unit(self) -> None:
-		db = _db()
+	def test_force_retry_resets_unit(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		plan = Plan(id="p1", objective="test")
 		db.insert_plan(plan)
@@ -235,7 +205,7 @@ class TestForceRetrySignal:
 		)
 		db.insert_work_unit(unit)
 
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		signal = Signal(
 			mission_id="m1",
 			signal_type="force_retry",
@@ -249,11 +219,10 @@ class TestForceRetrySignal:
 		assert db_unit.status == "pending"
 		assert "[Force retry]" in db_unit.description
 
-	def test_force_retry_nonexistent_unit(self) -> None:
-		db = _db()
+	def test_force_retry_nonexistent_unit(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		signal = Signal(
 			mission_id="m1",
 			signal_type="force_retry",
@@ -265,11 +234,9 @@ class TestForceRetrySignal:
 
 
 class TestAddObjectiveSignal:
-	def test_add_objective_appends_to_config(self) -> None:
-		db = _db()
+	def test_add_objective_appends_to_config(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 
-		config = _config()
 		config.target.objective = "Original objective"
 		ctrl = ContinuousController(config, db)
 		ctrl._planner = MagicMock()
@@ -285,11 +252,9 @@ class TestAddObjectiveSignal:
 		assert "Also add logging" in config.target.objective
 		assert "Original objective" in config.target.objective
 
-	def test_add_objective_no_planner(self) -> None:
-		db = _db()
+	def test_add_objective_no_planner(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 
-		config = _config()
 		config.target.objective = "Original"
 		ctrl = ContinuousController(config, db)
 		# _planner is None
@@ -308,11 +273,9 @@ class TestAddObjectiveSignal:
 
 class TestProcessCompletions:
 	@pytest.mark.asyncio
-	async def test_merged_unit_updates_score(self) -> None:
+	async def test_merged_unit_updates_score(self, config: MissionConfig, db: Database) -> None:
 		"""Merged unit should update the running score."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
-		config = _config()
 		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
@@ -362,11 +325,9 @@ class TestProcessCompletions:
 		mock_gbm.merge_unit.assert_called_once()
 
 	@pytest.mark.asyncio
-	async def test_failed_merge_counts_as_failure(self) -> None:
+	async def test_failed_merge_counts_as_failure(self, config: MissionConfig, db: Database) -> None:
 		"""Unit that fails verify+merge should increment failure count."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
-		config = _config()
 		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
@@ -404,11 +365,10 @@ class TestProcessCompletions:
 		assert ctrl._total_merged == 0
 
 	@pytest.mark.asyncio
-	async def test_completed_no_commits_counts_as_merged(self) -> None:
+	async def test_completed_no_commits_counts_as_merged(self, config: MissionConfig, db: Database) -> None:
 		"""Unit completed without commits should count as merged."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 		ctrl._green_branch = MagicMock()
 
@@ -434,11 +394,10 @@ class TestProcessCompletions:
 		assert ctrl._total_merged == 1
 
 	@pytest.mark.asyncio
-	async def test_failed_unit_counts_as_failure(self) -> None:
+	async def test_failed_unit_counts_as_failure(self, config: MissionConfig, db: Database) -> None:
 		"""Unit with failed status should count as failure."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 		ctrl._green_branch = MagicMock()
 
@@ -464,11 +423,10 @@ class TestProcessCompletions:
 		assert ctrl._total_failed == 1
 
 	@pytest.mark.asyncio
-	async def test_merge_failure_appends_to_handoff_concerns(self) -> None:
+	async def test_merge_failure_appends_to_handoff_concerns(self, config: MissionConfig, db: Database) -> None:
 		"""When merge fails and handoff exists, failure is appended to concerns."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
 		mock_gbm = MagicMock()
@@ -519,11 +477,9 @@ class TestProcessCompletions:
 
 
 	@pytest.mark.asyncio
-	async def test_research_unit_skips_merge(self) -> None:
+	async def test_research_unit_skips_merge(self, config: MissionConfig, db: Database) -> None:
 		"""Research units should skip merge_unit() but count as merged."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
-		config = _config()
 		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
@@ -570,11 +526,10 @@ class TestProcessCompletions:
 		mock_planner.ingest_handoff.assert_called_once_with(handoff)
 
 	@pytest.mark.asyncio
-	async def test_research_unit_with_commits_skips_merge(self) -> None:
+	async def test_research_unit_with_commits_skips_merge(self, config: MissionConfig, db: Database) -> None:
 		"""Research units skip merge even if they have commits."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
 		mock_gbm = MagicMock()
@@ -605,11 +560,10 @@ class TestProcessCompletions:
 		mock_gbm.merge_unit.assert_not_called()
 
 	@pytest.mark.asyncio
-	async def test_failed_research_unit_counts_as_failure(self) -> None:
+	async def test_failed_research_unit_counts_as_failure(self, config: MissionConfig, db: Database) -> None:
 		"""Research unit with failed status should still count as failure."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
-		ctrl = ContinuousController(_config(), db)
+		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 		ctrl._green_branch = MagicMock()
 
@@ -637,8 +591,8 @@ class TestProcessCompletions:
 
 
 class TestStop:
-	def test_stop_sets_running_false(self) -> None:
-		ctrl = ContinuousController(_config(), _db())
+	def test_stop_sets_running_false(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
 		assert ctrl.running is True
 		ctrl.stop()
 		assert ctrl.running is False
@@ -666,17 +620,14 @@ class TestContinuousMissionResult:
 
 class TestExecuteSingleUnit:
 	@pytest.mark.asyncio
-	async def test_provision_failure_queues_failed_completion(self) -> None:
+	async def test_provision_failure_queues_failed_completion(self, config: MissionConfig, db: Database) -> None:
 		"""When workspace provisioning fails, a failed completion is queued."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
 		plan = Plan(id="p1", objective="test")
 		db.insert_plan(plan)
 		epoch = Epoch(id="ep1", mission_id="m1", number=1)
 		db.insert_epoch(epoch)
 
-		config = _config()
-		config.target.path = "/tmp/test"
 		ctrl = ContinuousController(config, db)
 
 		mock_backend = AsyncMock()
@@ -701,11 +652,8 @@ class TestExecuteSingleUnit:
 
 class TestEndToEnd:
 	@pytest.mark.asyncio
-	async def test_units_flow_dispatch_to_completion(self) -> None:
+	async def test_units_flow_dispatch_to_completion(self, config: MissionConfig, db: Database) -> None:
 		"""Integration: dispatch loop feeds units, completion processor merges them."""
-		db = _db()
-		config = _config()
-		config.target.path = "/tmp/test"
 		config.target.name = "test"
 		config.continuous.max_wall_time_seconds = 5
 		ctrl = ContinuousController(config, db)
@@ -778,19 +726,17 @@ class TestEndToEnd:
 
 
 class TestRetry:
-	def _make_ctrl(self) -> tuple[ContinuousController, Database]:
-		db = _db()
+	def _make_ctrl(self, config: MissionConfig, db: Database) -> tuple[ContinuousController, Database]:
 		db.insert_mission(Mission(id="m1", objective="test"))
-		config = _config()
 		ctrl = ContinuousController(config, db)
 		ctrl._green_branch = MagicMock()
 		ctrl._semaphore = asyncio.Semaphore(2)
 		return ctrl, db
 
 	@pytest.mark.asyncio
-	async def test_failed_unit_retried_when_under_max_attempts(self) -> None:
+	async def test_failed_unit_retried_when_under_max_attempts(self, config: MissionConfig, db: Database) -> None:
 		"""Unit fails with attempt=1, max_attempts=3 -> gets re-queued, not counted as failed."""
-		ctrl, db = self._make_ctrl()
+		ctrl, db = self._make_ctrl(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
 		epoch = Epoch(id="ep1", mission_id="m1", number=1)
@@ -818,9 +764,9 @@ class TestRetry:
 		assert unit.status == "pending"
 
 	@pytest.mark.asyncio
-	async def test_failed_unit_not_retried_at_max_attempts(self) -> None:
+	async def test_failed_unit_not_retried_at_max_attempts(self, config: MissionConfig, db: Database) -> None:
 		"""Unit fails with attempt=3, max_attempts=3 -> counted as failed, no retry."""
-		ctrl, db = self._make_ctrl()
+		ctrl, db = self._make_ctrl(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
 		epoch = Epoch(id="ep1", mission_id="m1", number=1)
@@ -847,9 +793,9 @@ class TestRetry:
 		assert unit.status == "failed"
 
 	@pytest.mark.asyncio
-	async def test_retry_appends_failure_context(self) -> None:
+	async def test_retry_appends_failure_context(self, config: MissionConfig, db: Database) -> None:
 		"""Verify the description is augmented with failure info on retry."""
-		ctrl, db = self._make_ctrl()
+		ctrl, db = self._make_ctrl(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
 		epoch = Epoch(id="ep1", mission_id="m1", number=1)
@@ -879,13 +825,13 @@ class TestRetry:
 		assert "Avoid the same mistake" in unit.description
 		assert unit.description.startswith("Original description")
 
-	def test_retry_delay_exponential_backoff(self) -> None:
+	def test_retry_delay_exponential_backoff(self, config: MissionConfig, db: Database) -> None:
 		"""Verify delay computation: base_delay * 2^(attempt-1), capped at max.
 
 		_schedule_retry increments attempt first, so starting at attempt=0:
 		  -> incremented to 1 -> delay = 30 * 2^0 = 30
 		"""
-		ctrl, _ = self._make_ctrl()
+		ctrl, _ = self._make_ctrl(config, db)
 		config = ctrl.config
 		config.continuous.retry_base_delay_seconds = 30
 		config.continuous.retry_max_delay_seconds = 300
@@ -911,9 +857,9 @@ class TestRetry:
 		assert min(30 * (2 ** 4), 300) == 300  # attempt=5 -> 2^4, capped
 
 	@pytest.mark.asyncio
-	async def test_merge_failure_triggers_retry(self) -> None:
+	async def test_merge_failure_triggers_retry(self, config: MissionConfig, db: Database) -> None:
 		"""Unit completes but merge fails -> retried if under max_attempts."""
-		ctrl, db = self._make_ctrl()
+		ctrl, db = self._make_ctrl(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
 		mock_gbm = MagicMock()
@@ -956,11 +902,9 @@ class TestRetry:
 class TestRetryCounterIncrement:
 	"""Verify _schedule_retry properly increments unit.attempt."""
 
-	def test_attempt_incremented_from_zero(self) -> None:
+	def test_attempt_incremented_from_zero(self, config: MissionConfig, db: Database) -> None:
 		"""Unit at attempt=0 should be incremented to 1 by _schedule_retry."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
-		config = _config()
 		ctrl = ContinuousController(config, db)
 
 		plan = Plan(id="p1", objective="test")
@@ -985,11 +929,9 @@ class TestRetryCounterIncrement:
 		assert db_unit is not None
 		assert db_unit.attempt == 1
 
-	def test_attempt_incremented_multiple_retries(self) -> None:
+	def test_attempt_incremented_multiple_retries(self, config: MissionConfig, db: Database) -> None:
 		"""Multiple retries should increment attempt each time."""
-		db = _db()
 		db.insert_mission(Mission(id="m1", objective="test"))
-		config = _config()
 		ctrl = ContinuousController(config, db)
 
 		plan = Plan(id="p1", objective="test")
@@ -1013,12 +955,10 @@ class TestVenvSymlink:
 	"""Verify .venv is symlinked into green branch workspace."""
 
 	@pytest.mark.asyncio
-	async def test_venv_symlinked_when_exists(self) -> None:
+	async def test_venv_symlinked_when_exists(self, config: MissionConfig, db: Database) -> None:
 		"""Source .venv should be symlinked into green branch workspace."""
 		import tempfile
 
-		config = _config()
-		db = _db()
 		ctrl = ContinuousController(config, db)
 
 		with tempfile.TemporaryDirectory() as source_repo:
@@ -1056,11 +996,9 @@ class TestVenvSymlink:
 
 class TestPostMissionDiscovery:
 	@pytest.mark.asyncio
-	async def test_discovery_runs_on_success(self) -> None:
+	async def test_discovery_runs_on_success(self, config: MissionConfig, db: Database) -> None:
 		"""Post-mission discovery should run when objective met and discovery enabled."""
-		config = _config()
 		config.discovery.enabled = True
-		db = _db()
 		ctrl = ContinuousController(config, db)
 
 		mock_engine = MagicMock()
@@ -1078,11 +1016,9 @@ class TestPostMissionDiscovery:
 		mock_engine.discover.assert_called_once()
 
 	@pytest.mark.asyncio
-	async def test_discovery_notifies_on_results(self) -> None:
+	async def test_discovery_notifies_on_results(self, config: MissionConfig, db: Database) -> None:
 		"""Should send Telegram notification with discovery results."""
-		config = _config()
 		config.discovery.enabled = True
-		db = _db()
 		ctrl = ContinuousController(config, db)
 		ctrl._notifier = MagicMock()
 		ctrl._notifier.send = AsyncMock()
@@ -1106,11 +1042,9 @@ class TestPostMissionDiscovery:
 		assert "1 new improvement" in call_args
 
 	@pytest.mark.asyncio
-	async def test_discovery_handles_errors(self) -> None:
+	async def test_discovery_handles_errors(self, config: MissionConfig, db: Database) -> None:
 		"""Post-mission discovery failure should not raise."""
-		config = _config()
 		config.discovery.enabled = True
-		db = _db()
 		ctrl = ContinuousController(config, db)
 
 		with patch(
@@ -1124,16 +1058,13 @@ class TestPostMissionDiscovery:
 class TestWorkerRecordPersistence:
 	"""Tests that Worker DB records are created/updated during _execute_single_unit."""
 
-	def _setup(self) -> tuple:
-		db = _db()
+	def _setup(self, config: MissionConfig, db: Database) -> tuple:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		plan = Plan(id="p1", objective="test")
 		db.insert_plan(plan)
 		epoch = Epoch(id="ep1", mission_id="m1", number=1)
 		db.insert_epoch(epoch)
 
-		config = _config()
-		config.target.path = "/tmp/test"
 		ctrl = ContinuousController(config, db)
 
 		async def mock_locked_call(method: str, *args: object) -> object:
@@ -1143,9 +1074,9 @@ class TestWorkerRecordPersistence:
 		return db, config, ctrl, epoch
 
 	@pytest.mark.asyncio
-	async def test_worker_created_on_spawn(self) -> None:
+	async def test_worker_created_on_spawn(self, config: MissionConfig, db: Database) -> None:
 		"""Worker record is inserted after backend.spawn() succeeds."""
-		db, config, ctrl, epoch = self._setup()
+		db, config, ctrl, epoch = self._setup(config, db)
 
 		mock_backend = AsyncMock()
 		mock_handle = MagicMock()
@@ -1168,9 +1099,9 @@ class TestWorkerRecordPersistence:
 		assert worker.backend_type == "local"
 
 	@pytest.mark.asyncio
-	async def test_worker_idle_on_completion(self) -> None:
+	async def test_worker_idle_on_completion(self, config: MissionConfig, db: Database) -> None:
 		"""Worker status set to idle after successful completion."""
-		db, config, ctrl, epoch = self._setup()
+		db, config, ctrl, epoch = self._setup(config, db)
 
 		mc_result = json.dumps({
 			"status": "completed", "commits": ["abc123"],
@@ -1202,9 +1133,9 @@ class TestWorkerRecordPersistence:
 		assert worker.units_failed == 0
 
 	@pytest.mark.asyncio
-	async def test_worker_dead_on_infrastructure_error(self) -> None:
+	async def test_worker_dead_on_infrastructure_error(self, config: MissionConfig, db: Database) -> None:
 		"""Worker status set to dead on infrastructure error."""
-		db, config, ctrl, epoch = self._setup()
+		db, config, ctrl, epoch = self._setup(config, db)
 
 		mock_backend = AsyncMock()
 		mock_handle = MagicMock()
@@ -1226,9 +1157,9 @@ class TestWorkerRecordPersistence:
 		assert worker.units_failed == 1
 
 	@pytest.mark.asyncio
-	async def test_no_worker_on_provision_failure(self) -> None:
+	async def test_no_worker_on_provision_failure(self, config: MissionConfig, db: Database) -> None:
 		"""No Worker record when workspace provisioning fails (before spawn)."""
-		db, config, ctrl, epoch = self._setup()
+		db, config, ctrl, epoch = self._setup(config, db)
 
 		mock_backend = AsyncMock()
 		mock_backend.provision_workspace.side_effect = RuntimeError("Pool full")
