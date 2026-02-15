@@ -178,6 +178,7 @@ Target path: {target.resolved_path}
 		)
 
 		proc = None
+		discovery_timeout = self.config.scheduler.session_timeout
 		try:
 			proc = await asyncio.create_subprocess_exec(
 				*cmd,
@@ -189,14 +190,14 @@ Target path: {target.resolved_path}
 			)
 			stdout, stderr = await asyncio.wait_for(
 				proc.communicate(input=prompt.encode()),
-				timeout=300,
+				timeout=discovery_timeout,
 			)
 			output = stdout.decode() if stdout else ""
 			stderr_text = stderr.decode() if stderr else ""
 		except asyncio.TimeoutError:
 			logger.error(
-				"Discovery subprocess timed out after 300s | cmd=%s cwd=%s",
-				cmd, target_path,
+				"Discovery subprocess timed out after %ds | cmd=%s cwd=%s",
+				discovery_timeout, cmd, target_path,
 			)
 			if proc is not None:
 				try:
@@ -204,7 +205,7 @@ Target path: {target.resolved_path}
 					await proc.wait()
 				except ProcessLookupError:
 					pass
-			return "", "timeout", "subprocess timed out after 300s"
+			return "", "timeout", f"subprocess timed out after {discovery_timeout}s"
 
 		if proc.returncode != 0:
 			error_type = self._classify_error(stderr_text)
