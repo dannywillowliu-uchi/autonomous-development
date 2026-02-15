@@ -132,16 +132,13 @@ def cmd_start(args: argparse.Namespace) -> int:
 		print(f"Database: {db_path}")
 		return 0
 
-	db = Database(db_path)
-	try:
+	with Database(db_path) as db:
 		scheduler = Scheduler(config, db)
 		report = asyncio.run(scheduler.run(max_sessions=args.max_sessions))
 		print(f"Sessions run: {report.sessions_run}")
 		print(f"Helped: {report.sessions_helped}, Hurt: {report.sessions_hurt}, Neutral: {report.sessions_neutral}")
 		print(f"Stopped: {report.stopped_reason}")
 		return 0
-	finally:
-		db.close()
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -153,8 +150,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 		print("No database found. Run 'mc start' first.")
 		return 1
 
-	db = Database(db_path)
-	try:
+	with Database(db_path) as db:
 		latest = db.get_latest_snapshot()
 		if latest:
 			print(f"Tests: {latest.test_passed}/{latest.test_total} passing")
@@ -170,8 +166,6 @@ def cmd_status(args: argparse.Namespace) -> int:
 			for s in recent:
 				print(f"  [{s.status}] {s.id}: {s.task_description}")
 		return 0
-	finally:
-		db.close()
 
 
 def cmd_history(args: argparse.Namespace) -> int:
@@ -182,8 +176,7 @@ def cmd_history(args: argparse.Namespace) -> int:
 		print("No database found. Run 'mc start' first.")
 		return 1
 
-	db = Database(db_path)
-	try:
+	with Database(db_path) as db:
 		sessions = db.get_recent_sessions(args.limit)
 		if not sessions:
 			print("No sessions yet.")
@@ -195,8 +188,6 @@ def cmd_history(args: argparse.Namespace) -> int:
 			if s.output_summary:
 				print(f"    {s.output_summary[:100]}")
 		return 0
-	finally:
-		db.close()
 
 
 def cmd_snapshot(args: argparse.Namespace) -> int:
@@ -232,8 +223,7 @@ def cmd_parallel(args: argparse.Namespace) -> int:
 		print(f"Database: {db_path}")
 		return 0
 
-	db = Database(db_path)
-	try:
+	with Database(db_path) as db:
 		coordinator = Coordinator(config, db, num_workers=num_workers)
 		report = asyncio.run(coordinator.run())
 		print(f"Plan: {report.plan_id}")
@@ -243,8 +233,6 @@ def cmd_parallel(args: argparse.Namespace) -> int:
 		print(f"Wall time: {report.wall_time_seconds:.1f}s")
 		print(f"Stopped: {report.stopped_reason}")
 		return 0
-	finally:
-		db.close()
 
 
 def cmd_discover(args: argparse.Namespace) -> int:
@@ -266,8 +254,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
 		print(f"Max items/track: {dc.max_items_per_track}")
 		return 0
 
-	db = Database(db_path)
-	try:
+	with Database(db_path) as db:
 		if args.latest:
 			result, items = db.get_latest_discovery()
 			if result is None:
@@ -303,8 +290,6 @@ def cmd_discover(args: argparse.Namespace) -> int:
 			_print_discovery_table(items)
 
 		return 0
-	finally:
-		db.close()
 
 
 def _print_discovery_table(items: list) -> None:
@@ -351,21 +336,17 @@ def cmd_mission(args: argparse.Namespace) -> int:
 		print(f"Database: {db_path}")
 
 		if config.target.objective:
-			db = Database(db_path)
-			try:
+			with Database(db_path) as db:
 				from mission_control.continuous_controller import ContinuousController
 				controller = ContinuousController(config, db)
 				asyncio.run(controller.run(dry_run=True))
-			finally:
-				db.close()
 		return 0
 
 	# Auto-discover mode: run discovery, then use results as objective
 	if args.auto_discover:
 		from mission_control.auto_discovery import DiscoveryEngine
 
-		db = Database(db_path)
-		try:
+		with Database(db_path) as db:
 			engine = DiscoveryEngine(config, db)
 			result, items = asyncio.run(engine.discover())
 
@@ -391,8 +372,6 @@ def cmd_mission(args: argparse.Namespace) -> int:
 			# Compose objective from approved items
 			config.target.objective = engine.compose_objective(items)
 			print(f"\nComposed objective from {len(items)} items.")
-		finally:
-			db.close()
 
 	if not config.target.objective:
 		print(
@@ -401,8 +380,7 @@ def cmd_mission(args: argparse.Namespace) -> int:
 		)
 		return 1
 
-	db = Database(db_path)
-	try:
+	with Database(db_path) as db:
 		from mission_control.continuous_controller import ContinuousController
 		controller = ContinuousController(config, db)
 		result = asyncio.run(controller.run())
@@ -418,8 +396,6 @@ def cmd_mission(args: argparse.Namespace) -> int:
 		print(f"Wall time: {result.wall_time_seconds:.1f}s")
 		print(f"Stopped: {result.stopped_reason}")
 		return 0 if result.objective_met else 1
-	finally:
-		db.close()
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
@@ -431,8 +407,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
 		print("No database found. Run 'mc mission' first.")
 		return 1
 
-	db = Database(db_path)
-	try:
+	with Database(db_path) as db:
 		if args.show_all:
 			missions = db.get_all_missions()
 			if not missions:
@@ -525,8 +500,6 @@ def cmd_summary(args: argparse.Namespace) -> int:
 			print(f"\nTokens: {inp:,} input, {out:,} output")
 
 		return 0
-	finally:
-		db.close()
 
 
 INIT_TEMPLATE = """\
