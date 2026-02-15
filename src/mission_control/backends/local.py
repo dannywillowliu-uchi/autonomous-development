@@ -64,7 +64,7 @@ class LocalBackend(WorkerBackend):
 		# Without this, the feature branch starts from whatever HEAD the clone
 		# was reset to (origin/main), ignoring the caller's base_branch.
 		base_proc = await asyncio.create_subprocess_exec(
-			"git", "checkout", base_branch,
+			"git", "checkout", "-B", base_branch, f"origin/{base_branch}",
 			cwd=str(workspace),
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,

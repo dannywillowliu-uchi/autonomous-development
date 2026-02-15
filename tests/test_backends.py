@@ -149,7 +149,7 @@ class TestLocalBackend:
 		assert fetch_call[0] == ("git", "fetch", "origin")
 		assert fetch_call[1]["cwd"] == "/pool/clone-1"
 		base_call = mock_exec.call_args_list[1]
-		assert base_call[0] == ("git", "checkout", "main")
+		assert base_call[0] == ("git", "checkout", "-B", "main", "origin/main")
 		assert base_call[1]["cwd"] == "/pool/clone-1"
 		branch_call = mock_exec.call_args_list[2]
 		assert branch_call[0] == ("git", "checkout", "-B", "mc/unit-w1")
@@ -246,7 +246,32 @@ class TestLocalBackend:
 
 		# call 0 = fetch, call 1 = base checkout (should be mc/green, not main)
 		base_call = mock_exec.call_args_list[1]
-		assert base_call[0] == ("git", "checkout", "mc/green")
+		assert base_call[0] == ("git", "checkout", "-B", "mc/green", "origin/mc/green")
+
+	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")
+	async def test_provision_workspace_resets_base_branch_to_origin(
+		self, mock_exec: AsyncMock, backend: LocalBackend,
+	) -> None:
+		"""provision_workspace uses -B to force-reset the local base branch to origin.
+
+		Without -B, a stale local mc/green would be checked out instead of the
+		latest origin/mc/green, causing merge conflicts when multiple workers
+		fork from outdated code.
+		"""
+		backend._pool.acquire.return_value = Path("/pool/clone-1")
+
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate = AsyncMock(return_value=(b"", None))
+		mock_exec.return_value = mock_proc
+
+		await backend.provision_workspace("w1", "/repo", "mc/green")
+
+		# The base branch checkout (call 1) must use -B to reset to origin
+		base_call = mock_exec.call_args_list[1]
+		assert base_call[0] == (
+			"git", "checkout", "-B", "mc/green", "origin/mc/green",
+		), "Base branch checkout must use -B to reset local branch to origin"
 
 	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")
 	async def test_spawn(self, mock_exec: AsyncMock, backend: LocalBackend) -> None:
