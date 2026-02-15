@@ -338,18 +338,88 @@ body {
 	letter-spacing: 0.5px;
 }
 
+/* Event filter bar */
+.event-filters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	margin-bottom: 10px;
+}
+
+.event-filter-btn {
+	font-size: 11px;
+	padding: 2px 8px;
+	border-radius: 10px;
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	transition: all 0.15s;
+	font-weight: 500;
+}
+
+.event-filter-btn:hover { background: rgba(255,255,255,0.05); }
+
+.event-filter-btn.active { color: #fff; }
+.event-filter-btn.active[data-type="dispatched"] { background: var(--blue); border-color: var(--blue); }
+.event-filter-btn.active[data-type="merged"] { background: var(--green); border-color: var(--green); color: #000; }
+.event-filter-btn.active[data-type="failed"] { background: var(--red); border-color: var(--red); }
+.event-filter-btn.active[data-type="retry_queued"] { background: var(--yellow); border-color: var(--yellow); color: #000; }
+.event-filter-btn.active[data-type="rejected"] { background: var(--red); border-color: var(--red); }
+.event-filter-btn.active[data-type="merge_failed"] { background: var(--red); border-color: var(--red); }
+.event-filter-btn.active[data-type="research_completed"] { background: var(--green); border-color: var(--green); color: #000; }
+.event-filter-btn.active[data-type="all"] { background: var(--border); border-color: var(--text-muted); color: var(--text); }
+
+/* Event groups */
+.event-group {
+	margin-bottom: 2px;
+	border-radius: 6px;
+	overflow: hidden;
+}
+
+.event-group.multi {
+	background: rgba(255,255,255,0.02);
+	border-left: 2px solid var(--border);
+	padding-left: 6px;
+	margin-bottom: 6px;
+}
+
+.event-group.multi .event-item { border-bottom: none; }
+.event-group.multi .event-item:last-child { border-bottom: none; }
+
+.event-group-label {
+	font-size: 10px;
+	color: var(--text-muted);
+	padding: 2px 4px 0 4px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.3px;
+}
+
+/* Event items with severity border */
 .event-item {
-	padding: 4px 0;
+	padding: 4px 0 4px 8px;
 	font-size: 12px;
 	display: flex;
 	gap: 8px;
 	border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+	border-left: 3px solid transparent;
+	transition: background 0.15s;
 }
+
+.event-item:hover { background: rgba(255,255,255,0.02); }
+
+.event-item.severity-success { border-left-color: var(--green); }
+.event-item.severity-info { border-left-color: var(--blue); }
+.event-item.severity-warning { border-left-color: var(--yellow); }
+.event-item.severity-error { border-left-color: var(--red); }
+
+.event-item.filtered-out { display: none; }
 
 .event-time {
 	color: var(--text-muted);
 	flex-shrink: 0;
-	width: 50px;
+	width: 60px;
 }
 
 .event-type {
@@ -560,6 +630,15 @@ body {
 		<!-- Event log -->
 		<div class="event-log">
 			<h2>Event Log</h2>
+			<div class="event-filters" id="event-filters">
+				<button class="event-filter-btn active" data-type="all" onclick="toggleEventFilter('all')">All</button>
+				<button class="event-filter-btn active" data-type="dispatched" onclick="toggleEventFilter('dispatched')">Dispatched</button>
+				<button class="event-filter-btn active" data-type="merged" onclick="toggleEventFilter('merged')">Merged</button>
+				<button class="event-filter-btn active" data-type="failed" onclick="toggleEventFilter('failed')">Failed</button>
+				<button class="event-filter-btn active" data-type="retry_queued" onclick="toggleEventFilter('retry_queued')">Retry</button>
+				<button class="event-filter-btn active" data-type="rejected" onclick="toggleEventFilter('rejected')">Rejected</button>
+				<button class="event-filter-btn active" data-type="merge_failed" onclick="toggleEventFilter('merge_failed')">Merge Fail</button>
+			</div>
 			<div id="event-log-content"></div>
 		</div>
 	</div>
@@ -803,27 +882,173 @@ function updateWorkerCards(units) {
 	pendingEl.textContent = pending;
 }
 
+let activeEventFilters = new Set(["all", "dispatched", "merged", "failed", "retry_queued", "rejected", "merge_failed"]);
+let lastEventData = [];
+
 function updateEventLog(events) {
 	const container = document.getElementById("event-log-content");
 	if (!events || events.length === 0) {
 		container.innerHTML = '<div class="empty-state">No events</div>';
+		lastEventData = [];
 		return;
 	}
 
-	// Show newest first
-	const reversed = [...events].reverse();
-	let html = "";
-	for (const event of reversed.slice(0, 100)) {
-		const time = event.timestamp ? formatTime(event.timestamp) : "--:--";
-		const unitTitle = unitTitles[event.work_unit_id] || event.work_unit_id.substring(0, 8);
+	lastEventData = events;
 
-		html += `<div class="event-item">`;
-		html += `<span class="event-time">${time}</span>`;
-		html += `<span class="event-type ${event.event_type}">${event.event_type}</span>`;
-		html += `<span class="event-unit" title="${escapeHtml(unitTitle)}">${escapeHtml(unitTitle)}</span>`;
+	// Show newest first
+	const reversed = [...events].reverse().slice(0, 100);
+
+	// Group consecutive events by unit_id
+	const groups = [];
+	let currentGroup = null;
+	for (const event of reversed) {
+		if (currentGroup && currentGroup.unitId === event.work_unit_id) {
+			currentGroup.events.push(event);
+		} else {
+			currentGroup = { unitId: event.work_unit_id, events: [event] };
+			groups.push(currentGroup);
+		}
+	}
+
+	let html = "";
+	for (const group of groups) {
+		const isMulti = group.events.length > 1;
+		const unitTitle = unitTitles[group.unitId] || group.unitId.substring(0, 8);
+
+		if (isMulti) {
+			html += `<div class="event-group multi">`;
+			html += `<div class="event-group-label">${escapeHtml(unitTitle)}</div>`;
+		} else {
+			html += `<div class="event-group">`;
+		}
+
+		for (const event of group.events) {
+			const severity = getSeverityClass(event.event_type);
+			const relTime = event.timestamp ? formatRelativeTime(event.timestamp) : "--";
+			const evtUnitTitle = unitTitles[event.work_unit_id] || event.work_unit_id.substring(0, 8);
+			const isFiltered = !activeEventFilters.has("all") && !activeEventFilters.has(event.event_type);
+
+			html += `<div class="event-item ${severity}${isFiltered ? " filtered-out" : ""}" data-event-type="${event.event_type}" data-timestamp="${event.timestamp || ""}">`;
+			html += `<span class="event-time" title="${event.timestamp ? new Date(event.timestamp).toLocaleString() : ""}">${relTime}</span>`;
+			html += `<span class="event-type ${event.event_type}">${event.event_type}</span>`;
+			if (!isMulti) {
+				html += `<span class="event-unit" title="${escapeHtml(evtUnitTitle)}">${escapeHtml(evtUnitTitle)}</span>`;
+			}
+			html += `</div>`;
+		}
+
 		html += `</div>`;
 	}
 	container.innerHTML = html;
+}
+
+function getSeverityClass(eventType) {
+	switch (eventType) {
+		case "merged":
+		case "research_completed":
+			return "severity-success";
+		case "dispatched":
+			return "severity-info";
+		case "retry_queued":
+			return "severity-warning";
+		case "failed":
+		case "rejected":
+		case "merge_failed":
+			return "severity-error";
+		default:
+			return "severity-info";
+	}
+}
+
+function formatRelativeTime(isoString) {
+	try {
+		const then = new Date(isoString);
+		const diffMs = Date.now() - then.getTime();
+		const diffSec = Math.floor(diffMs / 1000);
+		if (diffSec < 5) return "just now";
+		if (diffSec < 60) return `${diffSec}s ago`;
+		const diffMin = Math.floor(diffSec / 60);
+		if (diffMin < 60) return `${diffMin}m ago`;
+		const diffHr = Math.floor(diffMin / 60);
+		if (diffHr < 24) return `${diffHr}h ago`;
+		const diffDay = Math.floor(diffHr / 24);
+		return `${diffDay}d ago`;
+	} catch {
+		return "--";
+	}
+}
+
+function refreshRelativeTimestamps() {
+	const timeEls = document.querySelectorAll("#event-log-content .event-time[data-timestamp]");
+	for (const el of timeEls) {
+		// data-timestamp is on the parent .event-item
+	}
+	const items = document.querySelectorAll("#event-log-content .event-item[data-timestamp]");
+	for (const item of items) {
+		const ts = item.getAttribute("data-timestamp");
+		if (ts) {
+			const timeEl = item.querySelector(".event-time");
+			if (timeEl) timeEl.textContent = formatRelativeTime(ts);
+		}
+	}
+}
+
+function toggleEventFilter(type) {
+	if (type === "all") {
+		const allBtn = document.querySelector('.event-filter-btn[data-type="all"]');
+		if (activeEventFilters.has("all")) {
+			// Deactivate all filters
+			activeEventFilters.clear();
+			document.querySelectorAll(".event-filter-btn").forEach(b => b.classList.remove("active"));
+		} else {
+			// Activate all filters
+			activeEventFilters = new Set(["all", "dispatched", "merged", "failed", "retry_queued", "rejected", "merge_failed"]);
+			document.querySelectorAll(".event-filter-btn").forEach(b => b.classList.add("active"));
+		}
+	} else {
+		const btn = document.querySelector(`.event-filter-btn[data-type="${type}"]`);
+		if (activeEventFilters.has(type)) {
+			activeEventFilters.delete(type);
+			btn.classList.remove("active");
+		} else {
+			activeEventFilters.add(type);
+			btn.classList.add("active");
+		}
+
+		// Sync "all" button state
+		const allTypes = ["dispatched", "merged", "failed", "retry_queued", "rejected", "merge_failed"];
+		const allActive = allTypes.every(t => activeEventFilters.has(t));
+		const allBtn = document.querySelector('.event-filter-btn[data-type="all"]');
+		if (allActive) {
+			activeEventFilters.add("all");
+			allBtn.classList.add("active");
+		} else {
+			activeEventFilters.delete("all");
+			allBtn.classList.remove("active");
+		}
+	}
+
+	applyEventFilters();
+}
+
+function applyEventFilters() {
+	const showAll = activeEventFilters.has("all") || activeEventFilters.size === 0;
+	const items = document.querySelectorAll("#event-log-content .event-item");
+	for (const item of items) {
+		const type = item.getAttribute("data-event-type");
+		if (showAll || activeEventFilters.has(type)) {
+			item.classList.remove("filtered-out");
+		} else {
+			item.classList.add("filtered-out");
+		}
+	}
+
+	// Hide group labels when all events in a group are filtered out
+	const groups = document.querySelectorAll("#event-log-content .event-group");
+	for (const group of groups) {
+		const visibleItems = group.querySelectorAll(".event-item:not(.filtered-out)");
+		group.style.display = visibleItems.length === 0 ? "none" : "";
+	}
 }
 
 // Control actions
@@ -929,6 +1154,9 @@ function escapeHtml(text) {
 	div.textContent = text;
 	return div.innerHTML;
 }
+
+// Update relative timestamps every 15 seconds
+setInterval(refreshRelativeTimestamps, 15000);
 
 // Start
 connect();
