@@ -680,3 +680,194 @@ class TestPlannerRetry:
 		# Negative: empty units
 		empty = PlannerResult(type="leaves", units=[])
 		assert _is_parse_fallback(empty) is False
+
+
+# -- _parse_planner_output edge cases --
+
+
+class TestParsePlannerOutputEdgeCases:
+	def test_plan_result_marker_truncated_json(self) -> None:
+		"""PLAN_RESULT with truncated JSON should fall through to fallback."""
+		raw = 'Some analysis here.\n\nPLAN_RESULT:{"type":"leaves","units":[{"tit'
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert len(result.units) == 1
+		assert result.units[0]["title"] == "Execute scope"
+
+	def test_plan_result_marker_empty_json(self) -> None:
+		"""PLAN_RESULT:{} -- valid JSON but no type/units. Should return leaves with empty units."""
+		raw = "Reasoning text.\n\nPLAN_RESULT:{}"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units == []
+
+	def test_plan_result_marker_with_trailing_text(self) -> None:
+		"""PLAN_RESULT:<valid json> followed by trailing prose should still parse."""
+		obj = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Trailing test", "description": "ok", "files_hint": "", "priority": 1}],
+		})
+		raw = f"Let me think.\n\nPLAN_RESULT:{obj}\n\nHope that helps! Let me know if you need changes."
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert len(result.units) == 1
+		assert result.units[0]["title"] == "Trailing test"
+
+
+# -- depends_on_indices resolution tests --
+
+
+class TestDependsOnIndicesResolution:
+	"""Tests for the depends_on_indices -> WorkUnit.depends_on resolution in expand_node."""
+
+	@pytest.mark.asyncio
+	async def test_out_of_range_index(self) -> None:
+		"""depends_on_indices=[99] with only 3 units -- out-of-range index silently skipped."""
+		planner = _planner()
+		plan = Plan(objective="Test deps")
+		node = PlanNode(plan_id=plan.id, depth=0, scope="Root", node_type="branch")
+
+		leaf_result = PlannerResult(
+			type="leaves",
+			units=[
+				{"title": "A", "description": "a", "files_hint": "", "priority": 1, "depends_on_indices": []},
+				{"title": "B", "description": "b", "files_hint": "", "priority": 2, "depends_on_indices": []},
+				{"title": "C", "description": "c", "files_hint": "", "priority": 3, "depends_on_indices": [99]},
+			],
+		)
+
+		with patch.object(planner, "_invoke_planner_llm", new_callable=AsyncMock, return_value=leaf_result):
+			await planner.expand_node(node, plan, "Test deps", "hash", [])
+
+		pairs = node._child_leaves  # type: ignore[attr-defined]
+		assert len(pairs) == 3
+		# Unit C has out-of-range dep -- should have no depends_on set
+		wu_c = pairs[2][1]
+		assert wu_c.depends_on == ""
+
+	@pytest.mark.asyncio
+	async def test_self_reference_index(self) -> None:
+		"""depends_on_indices=[0] on unit index 0 -- self-reference should be skipped."""
+		planner = _planner()
+		plan = Plan(objective="Test self-ref")
+		node = PlanNode(plan_id=plan.id, depth=0, scope="Root", node_type="branch")
+
+		leaf_result = PlannerResult(
+			type="leaves",
+			units=[
+				{"title": "A", "description": "a", "files_hint": "", "priority": 1, "depends_on_indices": [0]},
+				{"title": "B", "description": "b", "files_hint": "", "priority": 2, "depends_on_indices": []},
+			],
+		)
+
+		with patch.object(planner, "_invoke_planner_llm", new_callable=AsyncMock, return_value=leaf_result):
+			await planner.expand_node(node, plan, "Test self-ref", "hash", [])
+
+		pairs = node._child_leaves  # type: ignore[attr-defined]
+		wu_a = pairs[0][1]
+		assert wu_a.depends_on == ""
+
+	@pytest.mark.asyncio
+	async def test_non_integer_values(self) -> None:
+		"""depends_on_indices=["foo", None, 1.5] -- non-int values should be skipped."""
+		planner = _planner()
+		plan = Plan(objective="Test non-int")
+		node = PlanNode(plan_id=plan.id, depth=0, scope="Root", node_type="branch")
+
+		leaf_result = PlannerResult(
+			type="leaves",
+			units=[
+				{"title": "A", "description": "a", "files_hint": "", "priority": 1, "depends_on_indices": []},
+				{
+				"title": "B", "description": "b", "files_hint": "", "priority": 2,
+				"depends_on_indices": ["foo", None, 1.5],
+			},
+			],
+		)
+
+		with patch.object(planner, "_invoke_planner_llm", new_callable=AsyncMock, return_value=leaf_result):
+			await planner.expand_node(node, plan, "Test non-int", "hash", [])
+
+		pairs = node._child_leaves  # type: ignore[attr-defined]
+		wu_b = pairs[1][1]
+		assert wu_b.depends_on == ""
+
+	@pytest.mark.asyncio
+	async def test_empty_depends_on_indices(self) -> None:
+		"""depends_on_indices=[] -- no depends_on should be set."""
+		planner = _planner()
+		plan = Plan(objective="Test empty deps")
+		node = PlanNode(plan_id=plan.id, depth=0, scope="Root", node_type="branch")
+
+		leaf_result = PlannerResult(
+			type="leaves",
+			units=[
+				{"title": "A", "description": "a", "files_hint": "", "priority": 1, "depends_on_indices": []},
+				{"title": "B", "description": "b", "files_hint": "", "priority": 2, "depends_on_indices": []},
+			],
+		)
+
+		with patch.object(planner, "_invoke_planner_llm", new_callable=AsyncMock, return_value=leaf_result):
+			await planner.expand_node(node, plan, "Test empty deps", "hash", [])
+
+		pairs = node._child_leaves  # type: ignore[attr-defined]
+		for _, wu in pairs:
+			assert wu.depends_on == ""
+
+	@pytest.mark.asyncio
+	async def test_valid_dependency_chain(self) -> None:
+		"""3 units: unit[1] depends on unit[0], unit[2] depends on unit[0] and unit[1]."""
+		planner = _planner()
+		plan = Plan(objective="Test dep chain")
+		node = PlanNode(plan_id=plan.id, depth=0, scope="Root", node_type="branch")
+
+		leaf_result = PlannerResult(
+			type="leaves",
+			units=[
+				{"title": "A", "description": "a", "files_hint": "", "priority": 1, "depends_on_indices": []},
+				{"title": "B", "description": "b", "files_hint": "", "priority": 2, "depends_on_indices": [0]},
+				{"title": "C", "description": "c", "files_hint": "", "priority": 3, "depends_on_indices": [0, 1]},
+			],
+		)
+
+		with patch.object(planner, "_invoke_planner_llm", new_callable=AsyncMock, return_value=leaf_result):
+			await planner.expand_node(node, plan, "Test dep chain", "hash", [])
+
+		pairs = node._child_leaves  # type: ignore[attr-defined]
+		wu_a = pairs[0][1]
+		wu_b = pairs[1][1]
+		wu_c = pairs[2][1]
+
+		assert wu_a.depends_on == ""
+		assert wu_b.depends_on == wu_a.id
+		assert wu_c.depends_on == f"{wu_a.id},{wu_b.id}"
+
+	@pytest.mark.asyncio
+	async def test_mixed_valid_and_invalid_indices(self) -> None:
+		"""depends_on_indices=[0, 99, -1, 1] -- only valid in-range, non-self indices kept."""
+		planner = _planner()
+		plan = Plan(objective="Test mixed deps")
+		node = PlanNode(plan_id=plan.id, depth=0, scope="Root", node_type="branch")
+
+		leaf_result = PlannerResult(
+			type="leaves",
+			units=[
+				{"title": "A", "description": "a", "files_hint": "", "priority": 1, "depends_on_indices": []},
+				{"title": "B", "description": "b", "files_hint": "", "priority": 2, "depends_on_indices": []},
+				{
+				"title": "C", "description": "c", "files_hint": "", "priority": 3,
+				"depends_on_indices": [0, 99, -1, 1],
+			},
+			],
+		)
+
+		with patch.object(planner, "_invoke_planner_llm", new_callable=AsyncMock, return_value=leaf_result):
+			await planner.expand_node(node, plan, "Test mixed deps", "hash", [])
+
+		pairs = node._child_leaves  # type: ignore[attr-defined]
+		wu_a = pairs[0][1]
+		wu_b = pairs[1][1]
+		wu_c = pairs[2][1]
+
+		# Only indices 0 and 1 are valid (99 out of range, -1 negative)
+		assert wu_c.depends_on == f"{wu_a.id},{wu_b.id}"
