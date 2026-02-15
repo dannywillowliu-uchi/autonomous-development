@@ -485,8 +485,7 @@ class TestInvokePlannerLlm:
 	async def test_llm_timeout_returns_fallback_and_kills_process(self) -> None:
 		"""When subprocess times out, kill the process and return a fallback leaf.
 
-		Timeout fallback triggers a retry with simplified prompt, so kill/wait
-		are called twice (once per attempt).
+		Timeout/infra fallbacks are NOT retried (only parse fallbacks are).
 		"""
 		planner = _planner()
 		planner.config.target.verification.timeout = 10
@@ -504,8 +503,8 @@ class TestInvokePlannerLlm:
 		assert len(result.units) == 1
 		assert result.units[0]["title"] == "Execute scope"
 		assert result.units[0]["description"] == "Slow scope"
-		assert mock_proc.kill.call_count == 2
-		assert mock_proc.wait.await_count == 2
+		assert mock_proc.kill.call_count == 1
+		assert mock_proc.wait.await_count == 1
 
 	@pytest.mark.asyncio
 	async def test_llm_uses_stdin_not_shell_interpolation(self) -> None:

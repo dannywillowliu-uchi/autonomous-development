@@ -164,6 +164,39 @@ class TestRenderMissionWorkerPrompt:
 		assert "## File Locking Warnings" not in prompt
 
 
+class TestResearchPromptSelection:
+	def test_research_unit_uses_research_template(self, config: MissionConfig) -> None:
+		"""Research units should use the research prompt template."""
+		unit = WorkUnit(title="Investigate API", description="Explore the API surface", unit_type="research")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "research agent" in prompt.lower()
+		assert "EXPLORATION and DISCOVERY" in prompt
+		assert "Do NOT commit code changes" in prompt
+
+	def test_implementation_unit_uses_standard_template(self, config: MissionConfig) -> None:
+		"""Implementation units should use the standard mission template."""
+		unit = WorkUnit(title="Fix bug", description="Fix the thing", unit_type="implementation")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "research agent" not in prompt.lower()
+		assert "Constraints" in prompt
+
+	def test_default_unit_type_uses_standard_template(self, config: MissionConfig) -> None:
+		"""Default unit_type (no explicit type) should use standard template."""
+		unit = WorkUnit(title="Fix bug", description="Fix the thing")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "Constraints" in prompt
+		assert "research agent" not in prompt.lower()
+
+	def test_research_template_includes_experience(self, config: MissionConfig) -> None:
+		"""Research prompt should include experience context when provided."""
+		unit = WorkUnit(title="Research", description="Explore", unit_type="research")
+		prompt = render_mission_worker_prompt(
+			unit, config, "/tmp/ws", "mc/unit-x",
+			experience_context="Previously found X",
+		)
+		assert "Previously found X" in prompt
+
+
 class TestWorkerAgent:
 	async def test_heartbeat_fires(
 		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],

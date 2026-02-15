@@ -105,6 +105,38 @@ def _build_handoff(mc_result: dict[str, object], work_unit_id: str, round_id: st
 	)
 
 
+RESEARCH_WORKER_PROMPT_TEMPLATE = """\
+You are a research agent for {target_name} at {workspace_path}.
+
+## Research Task
+{title}
+
+{description}
+
+## Guidelines
+- Focus on EXPLORATION and DISCOVERY, not code changes
+- Read files, run tests, analyze patterns, gather information
+- Do NOT commit code changes -- your output is the research itself
+- Document findings thoroughly in your MC_RESULT discoveries field
+- Note any risks, dependencies, or blockers you find in concerns
+
+## Scope
+Files to investigate: {files_hint}
+
+## Verification
+Run (read-only check): {verification_command}
+
+## Context
+{context_block}
+{experience_block}{mission_state_block}{overlap_warnings_block}
+## Output
+When done, write a summary as the LAST line of output:
+MC_RESULT:{{"status":"completed|failed|blocked","commits":[],\
+"summary":"what you found","discoveries":["key findings"],\
+"concerns":["potential issues"],"files_changed":[]}}
+"""
+
+
 MISSION_WORKER_PROMPT_TEMPLATE = """\
 You are working on {target_name} at {workspace_path}.
 
@@ -155,7 +187,12 @@ def render_mission_worker_prompt(
 	ow_block = ""
 	if overlap_warnings:
 		ow_block = f"\n## File Locking Warnings\n{overlap_warnings}\n"
-	return MISSION_WORKER_PROMPT_TEMPLATE.format(
+	template = (
+		RESEARCH_WORKER_PROMPT_TEMPLATE
+		if unit.unit_type == "research"
+		else MISSION_WORKER_PROMPT_TEMPLATE
+	)
+	return template.format(
 		target_name=config.target.name,
 		workspace_path=workspace_path,
 		title=unit.title,

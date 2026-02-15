@@ -177,16 +177,23 @@ class GreenBranchManager:
 
 		source_repo = self.config.target.path
 		push_branch = gb.push_branch
+		green_ref = "refs/mc/green-push"
 
-		# Fetch latest mc/green from workspace into source repo
-		await self._run_git_in(source_repo, "fetch", self.workspace, gb.green_branch)
+		# Fetch mc/green into a named ref (FETCH_HEAD gets overwritten by pull)
+		ok, output = await self._run_git_in(
+			source_repo, "fetch", self.workspace,
+			f"{gb.green_branch}:{green_ref}",
+		)
+		if not ok:
+			logger.error("Failed to fetch mc/green: %s", output)
+			return False
 
 		await self._run_git_in(source_repo, "checkout", push_branch)
 
 		# Pull remote first to avoid non-fast-forward
 		await self._run_git_in(source_repo, "pull", "--rebase", "origin", push_branch)
 
-		ok, output = await self._run_git_in(source_repo, "merge", "--ff-only", "FETCH_HEAD")
+		ok, output = await self._run_git_in(source_repo, "merge", "--ff-only", green_ref)
 		if not ok:
 			logger.error("Failed to ff-merge mc/green into %s: %s", push_branch, output)
 			return False

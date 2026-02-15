@@ -346,6 +346,124 @@ class TestProcessCompletions:
 		mock_planner.ingest_handoff.assert_called_once_with(handoff)
 
 
+	@pytest.mark.asyncio
+	async def test_research_unit_skips_merge(self) -> None:
+		"""Research units should skip merge_unit() but count as merged."""
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+		config = _config()
+		ctrl = ContinuousController(config, db)
+		result = ContinuousMissionResult(mission_id="m1")
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+		ctrl._green_branch = mock_gbm
+
+		mock_planner = MagicMock()
+		mock_planner.ingest_handoff = MagicMock()
+		ctrl._planner = mock_planner
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Research task",
+			status="completed", commit_hash=None,
+			unit_type="research",
+		)
+		db.insert_work_unit(unit)
+
+		handoff = Handoff(
+			work_unit_id="wu1", round_id="", epoch_id="ep1",
+			status="completed", summary="Found useful info",
+			discoveries='["pattern X exists"]',
+		)
+
+		completion = WorkerCompletion(
+			unit=unit, handoff=handoff, workspace="/tmp/ws", epoch=epoch,
+		)
+		ctrl._completion_queue.put_nowait(completion)
+		ctrl.running = False
+
+		await ctrl._process_completions(Mission(id="m1"), result)
+
+		# Should count as merged, not failed
+		assert ctrl._total_merged == 1
+		assert ctrl._total_failed == 0
+		# merge_unit should NOT have been called
+		mock_gbm.merge_unit.assert_not_called()
+		# Handoff should still be ingested
+		mock_planner.ingest_handoff.assert_called_once_with(handoff)
+
+	@pytest.mark.asyncio
+	async def test_research_unit_with_commits_skips_merge(self) -> None:
+		"""Research units skip merge even if they have commits."""
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(_config(), db)
+		result = ContinuousMissionResult(mission_id="m1")
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+		ctrl._green_branch = mock_gbm
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Research",
+			status="completed", commit_hash="abc123",
+			unit_type="research",
+		)
+		db.insert_work_unit(unit)
+
+		completion = WorkerCompletion(
+			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
+		)
+		ctrl._completion_queue.put_nowait(completion)
+		ctrl.running = False
+
+		await ctrl._process_completions(Mission(id="m1"), result)
+
+		assert ctrl._total_merged == 1
+		mock_gbm.merge_unit.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_failed_research_unit_counts_as_failure(self) -> None:
+		"""Research unit with failed status should still count as failure."""
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(_config(), db)
+		result = ContinuousMissionResult(mission_id="m1")
+		ctrl._green_branch = MagicMock()
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Research",
+			status="failed", unit_type="research",
+		)
+		db.insert_work_unit(unit)
+
+		completion = WorkerCompletion(
+			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
+		)
+		ctrl._completion_queue.put_nowait(completion)
+		ctrl.running = False
+
+		await ctrl._process_completions(Mission(id="m1"), result)
+
+		assert ctrl._total_failed == 1
+		assert ctrl._total_merged == 0
+
+
 class TestStop:
 	def test_stop_sets_running_false(self) -> None:
 		ctrl = ContinuousController(_config(), _db())

@@ -340,7 +340,9 @@ class ContinuousController:
 
 			# Dispatch each unit
 			for unit in units:
+				logger.info("Waiting for semaphore to dispatch unit %s: %s", unit.id[:12], unit.title[:60])
 				await semaphore.acquire()
+				logger.info("Semaphore acquired, dispatching unit %s", unit.id[:12])
 				unit.epoch_id = epoch.id
 				try:
 					self.db.insert_work_unit(unit)
@@ -399,6 +401,46 @@ class ContinuousController:
 			handoff = completion.handoff
 			epoch = completion.epoch
 			workspace = completion.workspace
+
+			# Research units: skip merge, just record findings
+			if unit.unit_type == "research":
+				if unit.status != "completed":
+					self._total_failed += 1
+					logger.info("Research unit %s failed", unit.id)
+					if handoff and self._planner:
+						self._planner.ingest_handoff(handoff)
+					mission.total_cost_usd += unit.cost_usd
+					try:
+						self.db.update_mission(mission)
+					except Exception:
+						pass
+					continue
+				logger.info("Research unit %s completed -- skipping merge", unit.id)
+				self._total_merged += 1
+				try:
+					self.db.insert_unit_event(UnitEvent(
+						mission_id=mission.id,
+						epoch_id=epoch.id,
+						work_unit_id=unit.id,
+						event_type="research_completed",
+					))
+				except Exception:
+					pass
+
+				if handoff and self._planner:
+					self._planner.ingest_handoff(handoff)
+
+				try:
+					self._update_mission_state(mission)
+				except Exception as exc:
+					logger.warning("Failed to update MISSION_STATE.md: %s", exc)
+
+				mission.total_cost_usd += unit.cost_usd
+				try:
+					self.db.update_mission(mission)
+				except Exception:
+					pass
+				continue
 
 			# Merge if the unit completed with commits
 			merged = False

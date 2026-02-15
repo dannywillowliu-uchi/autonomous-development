@@ -377,6 +377,7 @@ class Database:
 			("work_units", "cost_usd", "REAL DEFAULT 0.0"),
 			("unit_events", "input_tokens", "INTEGER DEFAULT 0"),
 			("unit_events", "output_tokens", "INTEGER DEFAULT 0"),
+			("work_units", "unit_type", "TEXT DEFAULT 'implementation'"),
 		]
 		for table, column, col_type in migrations:
 			try:

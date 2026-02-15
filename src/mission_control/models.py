@@ -147,6 +147,7 @@ class WorkUnit:
 	unit_type: str = "implementation"  # implementation/research
 	timeout: int | None = None  # per-unit timeout override (seconds)
 	verification_command: str | None = None  # per-unit verification override
+	unit_type: str = "implementation"  # implementation or research
 	epoch_id: str | None = None  # continuous mode epoch
 	input_tokens: int = 0
 	output_tokens: int = 0
