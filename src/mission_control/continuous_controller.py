@@ -83,7 +83,9 @@ class ContinuousController:
 		self._heartbeat: Heartbeat | None = None
 		self._completion_queue: asyncio.Queue[WorkerCompletion] = asyncio.Queue()
 		self._active_tasks: set[asyncio.Task[None]] = set()
+		self._unit_tasks: dict[str, asyncio.Task[None]] = {}  # unit_id -> task
 		self._semaphore: asyncio.Semaphore | None = None
+		self._paused: bool = False
 		self._start_time: float = 0.0
 		self._total_dispatched: int = 0
 		self._total_merged: int = 0
@@ -325,6 +327,17 @@ class ContinuousController:
 		cooldown = self.config.continuous.cooldown_between_units
 
 		while self.running:
+			# Honor pause state
+			if self._paused:
+				await asyncio.sleep(1)
+				# Still check signals while paused (for resume/stop)
+				reason = self._check_signals(mission.id)
+				if reason:
+					result.stopped_reason = reason
+					self.running = False
+					break
+				continue
+
 			# Expire stale signals
 			try:
 				self.db.expire_stale_signals(timeout_minutes=10)
@@ -425,7 +438,13 @@ class ContinuousController:
 					),
 				)
 				self._active_tasks.add(task)
-				task.add_done_callback(self._active_tasks.discard)
+				self._unit_tasks[unit.id] = task
+
+				def _on_task_done(t: asyncio.Task[None], uid: str = unit.id) -> None:
+					self._active_tasks.discard(t)
+					self._unit_tasks.pop(uid, None)
+
+				task.add_done_callback(_on_task_done)
 
 			if cooldown > 0:
 				await asyncio.sleep(cooldown)
@@ -1162,6 +1181,20 @@ class ContinuousController:
 				self.db.acknowledge_signal(signal.id)
 				self.running = False
 				return "signal_stopped"
+			elif signal.signal_type == "pause":
+				self._paused = True
+				self.db.acknowledge_signal(signal.id)
+				logger.info("Mission paused by signal")
+			elif signal.signal_type == "resume":
+				self._paused = False
+				self.db.acknowledge_signal(signal.id)
+				logger.info("Mission resumed by signal")
+			elif signal.signal_type == "cancel_unit":
+				self._handle_cancel_unit(signal)
+			elif signal.signal_type == "force_retry":
+				self._handle_force_retry(signal)
+			elif signal.signal_type == "add_objective":
+				self._handle_add_objective(signal)
 			elif signal.signal_type == "adjust":
 				self._handle_adjust_signal(signal)
 		return ""
@@ -1189,6 +1222,62 @@ class ContinuousController:
 			self.db.acknowledge_signal(signal.id)
 		except Exception as exc:
 			logger.error("Failed to handle adjust signal: %s", exc)
+
+	def _handle_cancel_unit(self, signal: Signal) -> None:
+		"""Cancel a running unit by its ID."""
+		try:
+			payload = json.loads(signal.payload) if signal.payload else {}
+			unit_id = payload.get("unit_id", "")
+			task = self._unit_tasks.get(unit_id)
+			if task and not task.done():
+				task.cancel()
+				logger.info("Cancelled unit %s by signal", unit_id[:12])
+			else:
+				logger.warning("Cancel signal for unit %s: not found or already done", unit_id[:12])
+			self.db.acknowledge_signal(signal.id)
+		except Exception as exc:
+			logger.error("Failed to handle cancel_unit signal: %s", exc)
+
+	def _handle_force_retry(self, signal: Signal) -> None:
+		"""Force retry a unit immediately (no delay, resets attempt counter)."""
+		try:
+			payload = json.loads(signal.payload) if signal.payload else {}
+			unit_id = payload.get("unit_id", "")
+			unit = self.db.get_work_unit(unit_id)
+			if unit is None:
+				logger.warning("Force retry: unit %s not found", unit_id[:12])
+				self.db.acknowledge_signal(signal.id)
+				return
+
+			# Cancel existing task if running
+			task = self._unit_tasks.get(unit_id)
+			if task and not task.done():
+				task.cancel()
+
+			# Reset unit for immediate re-dispatch
+			unit.status = "pending"
+			unit.commit_hash = None
+			unit.branch_name = ""
+			unit.output_summary = ""
+			unit.description += "\n\n[Force retry] Manually triggered re-dispatch."
+			self.db.update_work_unit(unit)
+			logger.info("Force retry queued for unit %s", unit_id[:12])
+			self.db.acknowledge_signal(signal.id)
+		except Exception as exc:
+			logger.error("Failed to handle force_retry signal: %s", exc)
+
+	def _handle_add_objective(self, signal: Signal) -> None:
+		"""Append a new objective to the mission for the planner to incorporate."""
+		try:
+			payload = json.loads(signal.payload) if signal.payload else {}
+			new_objective = payload.get("objective", "")
+			if new_objective and self._planner:
+				# Append to mission objective so the planner sees it
+				self.config.target.objective += f"\n\nAdditional objective: {new_objective}"
+				logger.info("Added objective: %s", new_objective[:60])
+			self.db.acknowledge_signal(signal.id)
+		except Exception as exc:
+			logger.error("Failed to handle add_objective signal: %s", exc)
 
 	async def _run_final_verification(self) -> tuple[bool, str]:
 		"""Run full verification on mc/green at mission end.
