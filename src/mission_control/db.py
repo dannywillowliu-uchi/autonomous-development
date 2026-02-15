@@ -9,6 +9,8 @@ from typing import Any, Sequence
 
 from mission_control.models import (
 	Decision,
+	DiscoveryItem,
+	DiscoveryResult,
 	Epoch,
 	Experience,
 	Handoff,
@@ -332,6 +334,33 @@ CREATE TABLE IF NOT EXISTS unit_events (
 
 CREATE INDEX IF NOT EXISTS idx_unit_events_mission ON unit_events(mission_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_unit_events_epoch ON unit_events(epoch_id);
+
+CREATE TABLE IF NOT EXISTS discoveries (
+	id TEXT PRIMARY KEY,
+	target_path TEXT NOT NULL DEFAULT '',
+	timestamp TEXT NOT NULL,
+	raw_output TEXT NOT NULL DEFAULT '',
+	model TEXT NOT NULL DEFAULT '',
+	item_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS discovery_items (
+	id TEXT PRIMARY KEY,
+	discovery_id TEXT NOT NULL,
+	track TEXT NOT NULL DEFAULT '',
+	title TEXT NOT NULL DEFAULT '',
+	description TEXT NOT NULL DEFAULT '',
+	rationale TEXT NOT NULL DEFAULT '',
+	files_hint TEXT NOT NULL DEFAULT '',
+	impact INTEGER NOT NULL DEFAULT 5,
+	effort INTEGER NOT NULL DEFAULT 5,
+	priority_score REAL NOT NULL DEFAULT 0.0,
+	status TEXT NOT NULL DEFAULT 'proposed',
+	FOREIGN KEY (discovery_id) REFERENCES discoveries(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_items_discovery ON discovery_items(discovery_id);
+CREATE INDEX IF NOT EXISTS idx_discovery_items_status ON discovery_items(status, priority_score DESC);
 """
 
 
@@ -1647,4 +1676,108 @@ class Database:
 			details=row["details"],
 			input_tokens=row["input_tokens"] if "input_tokens" in keys else 0,
 			output_tokens=row["output_tokens"] if "output_tokens" in keys else 0,
+		)
+
+	# -- Discoveries --
+
+	def insert_discovery_result(self, result: DiscoveryResult, items: list[DiscoveryItem]) -> None:
+		"""Insert a discovery result and its items atomically."""
+		try:
+			self.conn.execute(
+				"""INSERT INTO discoveries
+				(id, target_path, timestamp, raw_output, model, item_count)
+				VALUES (?, ?, ?, ?, ?, ?)""",
+				(
+					result.id, result.target_path, result.timestamp,
+					result.raw_output, result.model, result.item_count,
+				),
+			)
+			for item in items:
+				item.discovery_id = result.id
+				self.conn.execute(
+					"""INSERT INTO discovery_items
+					(id, discovery_id, track, title, description, rationale,
+					 files_hint, impact, effort, priority_score, status)
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+					(
+						item.id, item.discovery_id, item.track, item.title,
+						item.description, item.rationale, item.files_hint,
+						item.impact, item.effort, item.priority_score, item.status,
+					),
+				)
+			self.conn.commit()
+		except sqlite3.Error:
+			self.conn.rollback()
+			raise
+
+	def get_latest_discovery(self) -> tuple[DiscoveryResult | None, list[DiscoveryItem]]:
+		"""Get the most recent discovery result and its items."""
+		row = self.conn.execute(
+			"SELECT * FROM discoveries ORDER BY timestamp DESC LIMIT 1"
+		).fetchone()
+		if row is None:
+			return None, []
+		result = self._row_to_discovery_result(row)
+		items = self._get_discovery_items(result.id)
+		return result, items
+
+	def _get_discovery_items(self, discovery_id: str) -> list[DiscoveryItem]:
+		"""Get all items for a discovery, sorted by priority score descending."""
+		rows = self.conn.execute(
+			"SELECT * FROM discovery_items WHERE discovery_id=? ORDER BY priority_score DESC",
+			(discovery_id,),
+		).fetchall()
+		return [self._row_to_discovery_item(r) for r in rows]
+
+	def get_all_discovery_results(self, limit: int = 10) -> list[DiscoveryResult]:
+		"""Get recent discovery results."""
+		rows = self.conn.execute(
+			"SELECT * FROM discoveries ORDER BY timestamp DESC LIMIT ?",
+			(limit,),
+		).fetchall()
+		return [self._row_to_discovery_result(r) for r in rows]
+
+	def update_discovery_item_status(self, item_id: str, status: str) -> None:
+		"""Update the status of a discovery item."""
+		self.conn.execute(
+			"UPDATE discovery_items SET status=? WHERE id=?",
+			(status, item_id),
+		)
+		self.conn.commit()
+
+	def get_past_discovery_titles(self, limit: int = 50) -> list[str]:
+		"""Get titles of past discovery items to avoid repetition."""
+		rows = self.conn.execute(
+			"""SELECT di.title FROM discovery_items di
+			JOIN discoveries d ON di.discovery_id = d.id
+			ORDER BY d.timestamp DESC LIMIT ?""",
+			(limit,),
+		).fetchall()
+		return [row["title"] for row in rows]
+
+	@staticmethod
+	def _row_to_discovery_result(row: sqlite3.Row) -> DiscoveryResult:
+		return DiscoveryResult(
+			id=row["id"],
+			target_path=row["target_path"],
+			timestamp=row["timestamp"],
+			raw_output=row["raw_output"],
+			model=row["model"],
+			item_count=row["item_count"],
+		)
+
+	@staticmethod
+	def _row_to_discovery_item(row: sqlite3.Row) -> DiscoveryItem:
+		return DiscoveryItem(
+			id=row["id"],
+			discovery_id=row["discovery_id"],
+			track=row["track"],
+			title=row["title"],
+			description=row["description"],
+			rationale=row["rationale"],
+			files_hint=row["files_hint"],
+			impact=row["impact"],
+			effort=row["effort"],
+			priority_score=row["priority_score"],
+			status=row["status"],
 		)

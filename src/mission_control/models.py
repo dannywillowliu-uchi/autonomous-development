@@ -389,3 +389,35 @@ class UnitEvent:
 	details: str = ""  # JSON blob for extra info
 	input_tokens: int = 0
 	output_tokens: int = 0
+
+
+# -- Discovery models --
+
+
+@dataclass
+class DiscoveryItem:
+	"""A single improvement discovered during codebase analysis."""
+
+	id: str = field(default_factory=_new_id)
+	discovery_id: str = ""  # link to parent DiscoveryResult
+	track: str = ""  # feature, quality, or security
+	title: str = ""
+	description: str = ""
+	rationale: str = ""
+	files_hint: str = ""
+	impact: int = 5
+	effort: int = 5
+	priority_score: float = 0.0  # impact * (11 - effort) / 10
+	status: str = "proposed"  # proposed/approved/rejected/completed
+
+
+@dataclass
+class DiscoveryResult:
+	"""Result of a discovery run analyzing a target codebase."""
+
+	id: str = field(default_factory=_new_id)
+	target_path: str = ""
+	timestamp: str = field(default_factory=_now_iso)
+	raw_output: str = ""
+	model: str = ""
+	item_count: int = 0
