@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from mission_control.config import (
@@ -716,3 +717,93 @@ class TestRunDeploy:
 
 		assert result.merged is True
 		mgr.run_deploy.assert_not_awaited()
+
+
+class TestPollHealthCheck:
+	"""Tests for the httpx-based _poll_health_check implementation."""
+
+	async def test_success_on_first_try(self) -> None:
+		"""Health check returns True immediately on HTTP 200."""
+		mgr = _manager()
+		mock_response = httpx.Response(200)
+
+		mock_client = AsyncMock(spec=httpx.AsyncClient)
+		mock_client.get = AsyncMock(return_value=mock_response)
+		mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+		mock_client.__aexit__ = AsyncMock(return_value=False)
+
+		with patch("mission_control.green_branch.httpx.AsyncClient", return_value=mock_client):
+			result = await mgr._poll_health_check("https://example.com/health", 30)
+
+		assert result is True
+		mock_client.get.assert_awaited_once()
+
+	async def test_success_after_retries(self) -> None:
+		"""Health check returns True after initial failures."""
+		mgr = _manager()
+
+		call_count = 0
+
+		async def mock_get(url: str, timeout: float = 10.0) -> httpx.Response:
+			nonlocal call_count
+			call_count += 1
+			if call_count < 3:
+				raise httpx.ConnectError("Connection refused")
+			return httpx.Response(200)
+
+		mock_client = AsyncMock(spec=httpx.AsyncClient)
+		mock_client.get = AsyncMock(side_effect=mock_get)
+		mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+		mock_client.__aexit__ = AsyncMock(return_value=False)
+
+		with patch("mission_control.green_branch.httpx.AsyncClient", return_value=mock_client), \
+			patch("mission_control.green_branch.random.uniform", return_value=0.01):
+			result = await mgr._poll_health_check("https://example.com/health", 30)
+
+		assert result is True
+		assert call_count == 3
+
+	async def test_timeout_returns_false(self) -> None:
+		"""Health check returns False when total timeout expires."""
+		mgr = _manager()
+
+		mock_client = AsyncMock(spec=httpx.AsyncClient)
+		mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+		mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+		mock_client.__aexit__ = AsyncMock(return_value=False)
+
+		# Use a very short timeout so the test completes fast
+		with patch("mission_control.green_branch.httpx.AsyncClient", return_value=mock_client), \
+			patch("mission_control.green_branch.random.uniform", return_value=0.01):
+			result = await mgr._poll_health_check("https://example.com/health", 0)
+
+		assert result is False
+
+	async def test_jitter_range_applied(self) -> None:
+		"""Poll interval uses random.uniform(3.0, 7.0) for jitter."""
+		mgr = _manager()
+		mock_response = httpx.Response(503)
+
+		call_count = 0
+
+		async def mock_get(url: str, timeout: float = 10.0) -> httpx.Response:
+			nonlocal call_count
+			call_count += 1
+			if call_count >= 3:
+				return httpx.Response(200)
+			return mock_response
+
+		mock_client = AsyncMock(spec=httpx.AsyncClient)
+		mock_client.get = AsyncMock(side_effect=mock_get)
+		mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+		mock_client.__aexit__ = AsyncMock(return_value=False)
+
+		with patch("mission_control.green_branch.httpx.AsyncClient", return_value=mock_client), \
+			patch("mission_control.green_branch.random.uniform", return_value=0.01) as mock_uniform:
+			result = await mgr._poll_health_check("https://example.com/health", 30)
+
+		assert result is True
+		# random.uniform should be called for each sleep between polls
+		assert mock_uniform.call_count == 2
+		for call in mock_uniform.call_args_list:
+			assert call.args == (3.0, 7.0)
