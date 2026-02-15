@@ -22,6 +22,15 @@ class PlannerResult:
 	units: list[dict[str, Any]] = field(default_factory=list)
 
 
+def _is_parse_fallback(result: PlannerResult) -> bool:
+	"""Detect when _parse_planner_output returned the fallback single leaf."""
+	return (
+		result.type == "leaves"
+		and len(result.units) == 1
+		and result.units[0].get("title") == "Execute scope"
+	)
+
+
 def _parse_planner_output(output: str) -> PlannerResult:
 	"""Extract JSON from PLAN_RESULT marker in planner output, with fallbacks."""
 	data = None
@@ -162,6 +171,27 @@ class RecursivePlanner:
 
 		node.status = "expanded"
 
+	def _build_retry_prompt(self, node: PlanNode, objective: str) -> str:
+		"""Build a simplified prompt that strongly emphasizes the PLAN_RESULT JSON format."""
+		max_children = self.config.planner.max_children_per_node
+		return f"""You are a planner. Your ONLY job is to output a valid PLAN_RESULT JSON line.
+
+Objective: {objective}
+Scope: {node.scope}
+
+You MUST output EXACTLY one line starting with PLAN_RESULT: followed by valid JSON.
+
+Option A - subdivide into sub-scopes (max {max_children}):
+PLAN_RESULT:{{"type":"subdivide","children":[{{"scope":"sub-scope description"}}]}}
+
+Option B - leaf tasks:
+PLAN_RESULT:{{"type":"leaves","units":[{{"title":"task","description":"do X","files_hint":"f.py","priority":1}}]}}
+
+Option C - nothing to do:
+PLAN_RESULT:{{"type":"leaves","units":[]}}
+
+Output ONLY the PLAN_RESULT line. No explanation. No reasoning. Just the JSON."""
+
 	async def _invoke_planner_llm(
 		self,
 		node: PlanNode,
@@ -172,8 +202,6 @@ class RecursivePlanner:
 		discoveries_text = "\n".join(f"- {d}" for d in prior_discoveries) if prior_discoveries else "None"
 		max_depth = self.config.planner.max_depth
 		max_children = self.config.planner.max_children_per_node
-		budget = self.config.planner.budget_per_call_usd
-		model = self.config.scheduler.model
 
 		feedback_text = getattr(self, "_feedback_context", "")
 		feedback_section = ""
@@ -214,9 +242,25 @@ PLAN_RESULT:{{"type":"leaves","units":[{{"title":"...","description":"...","file
 
 IMPORTANT: The PLAN_RESULT line must be the LAST line of your output. Put all reasoning BEFORE it."""
 
-		log.info("Invoking planner LLM at depth %d for scope: %s", node.depth, node.scope[:80])
+		result = await self._run_planner_subprocess(prompt, node)
 
+		if _is_parse_fallback(result) and not getattr(node, "_planner_retried", False):
+			node._planner_retried = True  # type: ignore[attr-defined]
+			log.warning("Planner parse fallback at depth %d, retrying with simplified prompt", node.depth)
+			retry_prompt = self._build_retry_prompt(node, objective)
+			result = await self._run_planner_subprocess(retry_prompt, node)
+			if _is_parse_fallback(result):
+				log.warning("Planner retry also returned fallback at depth %d", node.depth)
+
+		return result
+
+	async def _run_planner_subprocess(self, prompt: str, node: PlanNode) -> PlannerResult:
+		"""Run the planner LLM subprocess and parse its output."""
+		budget = self.config.planner.budget_per_call_usd
+		model = self.config.scheduler.model
 		timeout = self.config.target.verification.timeout
+
+		log.info("Invoking planner LLM at depth %d for scope: %s", node.depth, node.scope[:80])
 
 		try:
 			proc = await asyncio.create_subprocess_exec(
