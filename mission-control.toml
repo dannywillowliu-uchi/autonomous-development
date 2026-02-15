@@ -73,8 +73,11 @@ enabled = true
 tracks = ["feature", "quality", "security"]
 max_items_per_track = 3
 min_priority_score = 3.0
-model = "sonnet"
+model = "opus"
 budget_per_call_usd = 5.0
+research_enabled = true
+research_model = "sonnet"
+research_parallel_queries = 3
 
 [heartbeat]
 interval = 300
