@@ -485,8 +485,8 @@ class ContinuousController:
 			# Expire stale signals
 			try:
 				self.db.expire_stale_signals(timeout_minutes=10)
-			except Exception:
-				pass
+			except Exception as exc:
+				logger.debug("Failed to expire stale signals: %s", exc)
 
 			# Check stopping conditions before dispatching
 			reason = self._should_stop(mission)
@@ -637,8 +637,8 @@ class ContinuousController:
 					mission.total_cost_usd += unit.cost_usd
 					try:
 						self.db.update_mission(mission)
-					except Exception:
-						pass
+					except Exception as exc:
+						logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
 					continue
 				logger.info("Research unit %s completed -- skipping merge", unit.id)
 				self._total_merged += 1
@@ -649,8 +649,8 @@ class ContinuousController:
 						work_unit_id=unit.id,
 						event_type="research_completed",
 					))
-				except Exception:
-					pass
+				except Exception as exc:
+					logger.warning("Failed to insert research_completed event for unit %s: %s", unit.id, exc)
 				if self._event_stream:
 					self._event_stream.emit(
 						"research_completed",
@@ -670,8 +670,8 @@ class ContinuousController:
 				mission.total_cost_usd += unit.cost_usd
 				try:
 					self.db.update_mission(mission)
-				except Exception:
-					pass
+				except Exception as exc:
+					logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
 				continue
 
 			# Merge if the unit completed with commits
