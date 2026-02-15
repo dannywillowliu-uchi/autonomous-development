@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -31,6 +32,8 @@ from mission_control.models import (
 	Worker,
 	WorkUnit,
 )
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS sessions (
@@ -373,9 +376,11 @@ class Database:
 		db_path = str(path)
 		self.conn = sqlite3.connect(db_path)
 		self.conn.row_factory = sqlite3.Row
+		logger.debug("Opened database connection: %s", db_path)
 		if db_path != ":memory:":
 			self.conn.execute("PRAGMA journal_mode=WAL")
 			self.conn.execute("PRAGMA busy_timeout=5000")
+			logger.debug("WAL mode activated for %s", db_path)
 		self.conn.execute("PRAGMA foreign_keys=ON")
 		self._lock = asyncio.Lock()
 		self._create_tables()
@@ -406,8 +411,13 @@ class Database:
 			self._validate_identifier(column)
 			try:
 				self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")  # noqa: S608
-			except sqlite3.OperationalError:
-				pass  # Column already exists
+				logger.debug("Migration: added column %s.%s", table, column)
+			except sqlite3.OperationalError as exc:
+				if "duplicate column name" in str(exc):
+					pass
+				else:
+					logger.warning("Migration failed for %s.%s: %s", table, column, exc)
+					raise
 
 	def _migrate_token_columns(self) -> None:
 		"""Add token tracking columns to existing tables (idempotent)."""
@@ -424,18 +434,35 @@ class Database:
 			self._validate_identifier(column)
 			try:
 				self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")  # noqa: S608
-			except sqlite3.OperationalError:
-				pass  # Column already exists
+				logger.debug("Migration: added column %s.%s", table, column)
+			except sqlite3.OperationalError as exc:
+				if "duplicate column name" in str(exc):
+					pass
+				else:
+					logger.warning("Migration failed for %s.%s: %s", table, column, exc)
+					raise
 
 	def _migrate_unit_type_column(self) -> None:
 		"""Add unit_type column to work_units table (idempotent)."""
 		try:
 			self.conn.execute("ALTER TABLE work_units ADD COLUMN unit_type TEXT NOT NULL DEFAULT 'implementation'")
-		except sqlite3.OperationalError:
-			pass  # Column already exists
+			logger.debug("Migration: added column work_units.unit_type")
+		except sqlite3.OperationalError as exc:
+			if "duplicate column name" in str(exc):
+				pass
+			else:
+				logger.warning("Migration failed for work_units.unit_type: %s", exc)
+				raise
 
 	def close(self) -> None:
+		logger.debug("Closing database connection")
 		self.conn.close()
+
+	def __enter__(self) -> Database:
+		return self
+
+	def __exit__(self, *args: object) -> None:
+		self.close()
 
 	@contextmanager
 	def transaction(self) -> Generator[sqlite3.Connection, None, None]:
@@ -686,6 +713,7 @@ class Database:
 					)
 			self.conn.commit()
 		except sqlite3.Error:
+			logger.error("persist_session_result failed for session %s, rolling back", session.id, exc_info=True)
 			self.conn.rollback()
 			raise
 
@@ -772,6 +800,7 @@ class Database:
 			),
 		)
 		self.conn.commit()
+		logger.info("Inserted work_unit %s (status=%s, type=%s)", unit.id, unit.status, unit.unit_type)
 
 	def update_work_unit(self, unit: WorkUnit) -> None:
 		self.conn.execute(
@@ -799,6 +828,7 @@ class Database:
 			),
 		)
 		self.conn.commit()
+		logger.info("Updated work_unit %s -> status=%s", unit.id, unit.status)
 
 	def get_work_unit(self, unit_id: str) -> WorkUnit | None:
 		row = self.conn.execute("SELECT * FROM work_units WHERE id=?", (unit_id,)).fetchone()
@@ -874,8 +904,11 @@ class Database:
 		).fetchone()
 		self.conn.commit()
 		if row is None:
+			logger.debug("No claimable work unit for worker %s", worker_id)
 			return None
-		return self._row_to_work_unit(row)
+		unit = self._row_to_work_unit(row)
+		logger.info("Worker %s claimed work_unit %s", worker_id, unit.id)
+		return unit
 
 	def recover_stale_units(self, timeout_seconds: int) -> list[WorkUnit]:
 		"""Release work units where heartbeat is stale (worker likely dead)."""
@@ -1043,6 +1076,7 @@ class Database:
 			),
 		)
 		self.conn.commit()
+		logger.info("Updated merge_request %s -> status=%s", mr.id, mr.status)
 
 	def get_next_merge_request(self) -> MergeRequest | None:
 		"""Get the next pending merge request by position."""
@@ -1104,6 +1138,7 @@ class Database:
 			),
 		)
 		self.conn.commit()
+		logger.info("Inserted merge_request %s at position %d for unit %s", mr.id, mr.position, mr.work_unit_id)
 		return mr
 
 	@staticmethod
@@ -1139,6 +1174,7 @@ class Database:
 			),
 		)
 		self.conn.commit()
+		logger.info("Inserted mission %s (status=%s)", mission.id, mission.status)
 
 	def update_mission(self, mission: Mission) -> None:
 		self.conn.execute(
@@ -1827,6 +1863,7 @@ class Database:
 				)
 			self.conn.commit()
 		except sqlite3.Error:
+			logger.error("insert_discovery_result failed for %s, rolling back", result.id, exc_info=True)
 			self.conn.rollback()
 			raise
 
