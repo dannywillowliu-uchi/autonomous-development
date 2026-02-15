@@ -296,3 +296,112 @@ class TestDiscoverSubprocess:
 
 		assert result.item_count == 0
 		assert items == []
+		assert result.error_type == "timeout"
+		assert "timed out" in result.error_detail
+
+
+class TestDiscoverySubprocessErrors:
+	"""Test structured error context for discovery subprocess failures."""
+
+	def _make_engine(self) -> tuple[DiscoveryEngine, Database]:
+		config = _config()
+		db = Database(":memory:")
+		return DiscoveryEngine(config, db), db
+
+	def _mock_proc(self, returncode: int, stdout: bytes = b"", stderr: bytes = b"") -> AsyncMock:
+		mock = AsyncMock()
+		mock.communicate = AsyncMock(return_value=(stdout, stderr))
+		mock.returncode = returncode
+		return mock
+
+	@pytest.mark.asyncio
+	async def test_timeout_error(self) -> None:
+		engine, db = self._make_engine()
+
+		mock_proc = AsyncMock()
+		mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+		mock_proc.kill = lambda: None  # kill() is sync on subprocess
+		mock_proc.wait = AsyncMock()
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
+			result, items = await engine.discover()
+
+		assert result.error_type == "timeout"
+		assert "timed out" in result.error_detail
+		assert result.item_count == 0
+		assert items == []
+
+	@pytest.mark.asyncio
+	async def test_nonzero_exit_budget_exceeded(self) -> None:
+		engine, db = self._make_engine()
+		stderr_msg = b"Error: budget limit exceeded -- session cost $1.50 exceeded max $1.00"
+		mock_proc = self._mock_proc(returncode=1, stderr=stderr_msg)
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
+			result, items = await engine.discover()
+
+		assert result.error_type == "budget_exceeded"
+		assert b"budget".decode() in result.error_detail
+		assert result.item_count == 0
+
+	@pytest.mark.asyncio
+	async def test_nonzero_exit_permission_denied(self) -> None:
+		engine, db = self._make_engine()
+		stderr_msg = b"Error: permission denied accessing /etc/shadow"
+		mock_proc = self._mock_proc(returncode=1, stderr=stderr_msg)
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
+			result, items = await engine.discover()
+
+		assert result.error_type == "permission_denied"
+		assert "permission" in result.error_detail
+
+	@pytest.mark.asyncio
+	async def test_nonzero_exit_workspace_corruption(self) -> None:
+		engine, db = self._make_engine()
+		stderr_msg = b"Fatal: workspace corrupted, cannot read .git/HEAD"
+		mock_proc = self._mock_proc(returncode=128, stderr=stderr_msg)
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
+			result, items = await engine.discover()
+
+		assert result.error_type == "workspace_corruption"
+		assert "corrupt" in result.error_detail.lower()
+
+	@pytest.mark.asyncio
+	async def test_nonzero_exit_unknown_error(self) -> None:
+		engine, db = self._make_engine()
+		stderr_msg = b"Segmentation fault (core dumped)"
+		mock_proc = self._mock_proc(returncode=139, stderr=stderr_msg)
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
+			result, items = await engine.discover()
+
+		assert result.error_type == "unknown"
+		assert "Segmentation fault" in result.error_detail
+
+	@pytest.mark.asyncio
+	async def test_stderr_captured_on_failure(self) -> None:
+		engine, db = self._make_engine()
+		long_stderr = b"x" * 1000
+		mock_proc = self._mock_proc(returncode=1, stderr=long_stderr)
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
+			result, items = await engine.discover()
+
+		assert result.error_type == "unknown"
+		# error_detail should be truncated to 500 chars
+		assert len(result.error_detail) == 500
+
+	@pytest.mark.asyncio
+	async def test_success_has_no_error(self) -> None:
+		engine, db = self._make_engine()
+		mock_output = _discovery_json([_sample_item()])
+		mock_proc = self._mock_proc(returncode=0, stdout=mock_output.encode(), stderr=b"")
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
+			result, items = await engine.discover()
+
+		assert result.error_type == ""
+		assert result.error_detail == ""
+		assert result.item_count == 1

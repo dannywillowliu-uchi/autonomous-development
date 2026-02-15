@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any
 
 from mission_control.config import MissionConfig, claude_subprocess_env
@@ -32,8 +33,10 @@ class DiscoveryEngine:
 	async def discover(self) -> tuple[DiscoveryResult, list[DiscoveryItem]]:
 		"""Run three-track discovery on the target codebase."""
 		prompt = self._build_discovery_prompt()
-		output = await self._run_discovery_subprocess(prompt)
+		output, error_type, error_detail = await self._run_discovery_subprocess(prompt)
 		result, items = self._parse_discovery_output(output)
+		result.error_type = error_type
+		result.error_detail = error_detail
 		self.db.insert_discovery_result(result, items)
 		return result, items
 
@@ -146,12 +149,28 @@ Target path: {target.resolved_path}
 """
 		return prompt
 
-	async def _run_discovery_subprocess(self, prompt: str) -> str:
-		"""Spawn `claude -p` in target repo dir, return output."""
+	@staticmethod
+	def _classify_error(stderr_text: str) -> str:
+		"""Classify subprocess error from stderr content."""
+		lower = stderr_text.lower()
+		if re.search(r"timeout", lower):
+			return "timeout"
+		if re.search(r"budget", lower):
+			return "budget_exceeded"
+		if re.search(r"permission", lower):
+			return "permission_denied"
+		if re.search(r"corrupt|workspace", lower):
+			return "workspace_corruption"
+		return "unknown"
+
+	async def _run_discovery_subprocess(self, prompt: str) -> tuple[str, str, str]:
+		"""Spawn `claude -p` in target repo dir, return (output, error_type, error_detail)."""
 		dc = self.config.discovery
 		budget = dc.budget_per_call_usd
 		model = dc.model
 		target_path = str(self.config.target.resolved_path)
+
+		cmd = ["claude", "-p", "--output-format", "text", "--max-budget-usd", str(budget), "--model", model]
 
 		logger.info(
 			"Running discovery on %s (model=%s, budget=$%.2f)",
@@ -161,10 +180,7 @@ Target path: {target.resolved_path}
 		proc = None
 		try:
 			proc = await asyncio.create_subprocess_exec(
-				"claude", "-p",
-				"--output-format", "text",
-				"--max-budget-usd", str(budget),
-				"--model", model,
+				*cmd,
 				stdin=asyncio.subprocess.PIPE,
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.PIPE,
@@ -176,23 +192,30 @@ Target path: {target.resolved_path}
 				timeout=300,
 			)
 			output = stdout.decode() if stdout else ""
+			stderr_text = stderr.decode() if stderr else ""
 		except asyncio.TimeoutError:
-			logger.error("Discovery subprocess timed out after 300s")
+			logger.error(
+				"Discovery subprocess timed out after 300s | cmd=%s cwd=%s",
+				cmd, target_path,
+			)
 			if proc is not None:
 				try:
 					proc.kill()
 					await proc.wait()
 				except ProcessLookupError:
 					pass
-			return ""
+			return "", "timeout", "subprocess timed out after 300s"
 
 		if proc.returncode != 0:
+			error_type = self._classify_error(stderr_text)
+			error_detail = stderr_text[:500]
 			logger.warning(
-				"Discovery subprocess failed (rc=%d): %s",
-				proc.returncode, (stderr.decode() if stderr else "")[:200],
+				"Discovery subprocess failed | cmd=%s cwd=%s rc=%d stderr=%s",
+				cmd, target_path, proc.returncode, error_detail,
 			)
+			return output, error_type, error_detail
 
-		return output
+		return output, "", ""
 
 	def _parse_discovery_output(self, output: str) -> tuple[DiscoveryResult, list[DiscoveryItem]]:
 		"""Extract DISCOVERY_RESULT: JSON from output."""

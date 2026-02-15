@@ -421,3 +421,5 @@ class DiscoveryResult:
 	raw_output: str = ""
 	model: str = ""
 	item_count: int = 0
+	error_type: str = ""  # timeout/budget_exceeded/permission_denied/workspace_corruption/unknown
+	error_detail: str = ""
