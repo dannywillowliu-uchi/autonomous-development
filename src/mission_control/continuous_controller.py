@@ -279,6 +279,13 @@ class ContinuousController:
 				"green-branch-mgr", source_repo, self.config.target.branch,
 			)
 			await self._green_branch.initialize(gb_workspace)
+
+			# Symlink source .venv into green branch workspace for verification
+			source_venv = Path(source_repo) / ".venv"
+			workspace_venv = Path(gb_workspace) / ".venv"
+			if source_venv.exists() and not workspace_venv.exists():
+				workspace_venv.symlink_to(source_venv)
+				logger.info("Symlinked .venv into green branch workspace")
 		else:
 			raise NotImplementedError(
 				"Continuous mode requires a local workspace for green branch "
@@ -634,6 +641,9 @@ class ContinuousController:
 		cont: ContinuousConfig,
 	) -> None:
 		"""Prepare a unit for retry and schedule delayed re-dispatch."""
+		# Increment attempt BEFORE delay calculation
+		unit.attempt += 1
+
 		delay = min(
 			cont.retry_base_delay_seconds * (2 ** (unit.attempt - 1)),
 			cont.retry_max_delay_seconds,
@@ -650,6 +660,12 @@ class ContinuousController:
 		unit.commit_hash = None
 		unit.branch_name = ""
 		unit.output_summary = ""
+
+		# Persist updated attempt count and status
+		try:
+			self.db.update_work_unit(unit)
+		except Exception as exc:
+			logger.error("Failed to persist retry state for %s: %s", unit.id, exc)
 
 		# Log retry event
 		try:
