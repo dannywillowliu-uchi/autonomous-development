@@ -29,6 +29,7 @@ from mission_control.models import (
 	_now_iso,
 )
 from mission_control.notifier import TelegramNotifier
+from mission_control.overlap import _parse_files_hint
 from mission_control.session import parse_mc_result
 from mission_control.token_parser import compute_token_cost, parse_stream_json
 from mission_control.worker import render_mission_worker_prompt
@@ -523,6 +524,37 @@ class ContinuousController:
 			context = load_context_for_mission_worker(unit, self.config)
 			experience_context = get_worker_context(self.db, unit)
 
+			# Read MISSION_STATE.md from target repo
+			mission_state = ""
+			state_path = self.config.target.resolved_path / "MISSION_STATE.md"
+			try:
+				if state_path.exists():
+					mission_state = state_path.read_text()
+			except OSError as exc:
+				logger.warning("Could not read MISSION_STATE.md: %s", exc)
+
+			# Compute overlap warnings from other running units
+			overlap_warnings = ""
+			try:
+				rows = self.db.conn.execute(
+					"SELECT * FROM work_units WHERE status='running' AND id != ?",
+					(unit.id,),
+				).fetchall()
+				running_units = [Database._row_to_work_unit(r) for r in rows]
+				current_files = _parse_files_hint(unit.files_hint)
+				if current_files:
+					conflicts: list[str] = []
+					for other in running_units:
+						other_files = _parse_files_hint(other.files_hint)
+						overlap = current_files & other_files
+						if overlap:
+							for f in sorted(overlap):
+								conflicts.append(f"- {f} (also targeted by unit {other.id[:8]}: {other.title})")
+					if conflicts:
+						overlap_warnings = "\n".join(conflicts)
+			except Exception as exc:
+				logger.warning("Could not compute overlap warnings: %s", exc)
+
 			prompt = render_mission_worker_prompt(
 				unit=unit,
 				config=self.config,
@@ -533,6 +565,8 @@ class ContinuousController:
 				branch_name=branch_name,
 				context=context,
 				experience_context=experience_context,
+				mission_state=mission_state,
+				overlap_warnings=overlap_warnings,
 			)
 
 			budget = self.config.scheduler.budget.max_per_session_usd

@@ -139,6 +139,30 @@ class TestRenderMissionWorkerPrompt:
 		assert "npm test" in prompt
 		assert "pytest -q" not in prompt
 
+	def test_mission_state_injected_in_prompt(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Fix bug", description="Fix the thing")
+		state = "## Completed\n- [x] abc123 -- Added auth module"
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x", mission_state=state)
+		assert "## Mission State" in prompt
+		assert "Added auth module" in prompt
+
+	def test_mission_state_empty_omits_section(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Fix bug", description="Fix the thing")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x", mission_state="")
+		assert "## Mission State" not in prompt
+
+	def test_overlap_warnings_injected_in_prompt(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Fix bug", description="Fix the thing")
+		warnings = "- src/auth.py (also targeted by unit abc12345: Add login)"
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x", overlap_warnings=warnings)
+		assert "## File Locking Warnings" in prompt
+		assert "src/auth.py" in prompt
+
+	def test_overlap_warnings_empty_omits_section(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Fix bug", description="Fix the thing")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x", overlap_warnings="")
+		assert "## File Locking Warnings" not in prompt
+
 
 class TestWorkerAgent:
 	async def test_heartbeat_fires(

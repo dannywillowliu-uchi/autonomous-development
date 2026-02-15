@@ -125,7 +125,7 @@ Run: {verification_command}
 
 ## Context
 {context_block}
-{experience_block}
+{experience_block}{mission_state_block}{overlap_warnings_block}
 ## Output
 When done, write a summary as the LAST line of output:
 MC_RESULT:{{"status":"completed|failed|blocked","commits":["hash"],\
@@ -141,12 +141,20 @@ def render_mission_worker_prompt(
 	branch_name: str,
 	context: str = "",
 	experience_context: str = "",
+	mission_state: str = "",
+	overlap_warnings: str = "",
 ) -> str:
 	"""Render constraint-based prompt for mission mode workers."""
 	verify_cmd = unit.verification_command or config.target.verification.command
 	exp_block = ""
 	if experience_context:
 		exp_block = f"\n## Relevant Past Experiences\n{experience_context}\n"
+	ms_block = ""
+	if mission_state:
+		ms_block = f"\n## Mission State\n{mission_state}\n"
+	ow_block = ""
+	if overlap_warnings:
+		ow_block = f"\n## File Locking Warnings\n{overlap_warnings}\n"
 	return MISSION_WORKER_PROMPT_TEMPLATE.format(
 		target_name=config.target.name,
 		workspace_path=workspace_path,
@@ -156,6 +164,8 @@ def render_mission_worker_prompt(
 		verification_command=verify_cmd,
 		context_block=context or "No additional context.",
 		experience_block=exp_block,
+		mission_state_block=ms_block,
+		overlap_warnings_block=ow_block,
 	)
 
 
