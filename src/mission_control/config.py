@@ -203,6 +203,19 @@ class NotificationConfig:
 
 
 @dataclass
+class DeployConfig:
+	"""Deployment settings."""
+
+	enabled: bool = False
+	command: str = ""
+	health_check_url: str = ""
+	health_check_timeout: int = 60
+	timeout: int = 300
+	on_auto_push: bool = False
+	on_mission_end: bool = True
+
+
+@dataclass
 class MissionConfig:
 	"""Top-level mission-control configuration."""
 
@@ -217,6 +230,7 @@ class MissionConfig:
 	discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
 	heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
 	notifications: NotificationConfig = field(default_factory=NotificationConfig)
+	deploy: DeployConfig = field(default_factory=DeployConfig)
 
 
 def _build_verification(data: dict[str, Any]) -> VerificationConfig:
@@ -430,6 +444,24 @@ def _build_notifications(data: dict[str, Any]) -> NotificationConfig:
 	return nc
 
 
+def _build_deploy(data: dict[str, Any]) -> DeployConfig:
+	dc = DeployConfig()
+	if "enabled" in data:
+		dc.enabled = bool(data["enabled"])
+	if "command" in data:
+		dc.command = str(data["command"])
+	if "health_check_url" in data:
+		dc.health_check_url = str(data["health_check_url"])
+	for key in ("health_check_timeout", "timeout"):
+		if key in data:
+			setattr(dc, key, int(data[key]))
+	if "on_auto_push" in data:
+		dc.on_auto_push = bool(data["on_auto_push"])
+	if "on_mission_end" in data:
+		dc.on_mission_end = bool(data["on_mission_end"])
+	return dc
+
+
 _STRIP_ENV_KEYS = {"ANTHROPIC_API_KEY", "CLAUDECODE"}
 
 
@@ -485,6 +517,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.heartbeat = _build_heartbeat(data["heartbeat"])
 	if "notifications" in data:
 		mc.notifications = _build_notifications(data["notifications"])
+	if "deploy" in data:
+		mc.deploy = _build_deploy(data["deploy"])
 	# Allow env vars as fallback for Telegram credentials
 	tg = mc.notifications.telegram
 	if not tg.bot_token:

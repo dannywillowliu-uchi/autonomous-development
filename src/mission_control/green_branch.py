@@ -169,7 +169,13 @@ class GreenBranchManager:
 
 				# Auto-push if configured
 				if gb.auto_push:
-					await self.push_green_to_main()
+					push_ok = await self.push_green_to_main()
+					# Deploy after push if configured
+					deploy = self.config.deploy
+					if push_ok and deploy.enabled and deploy.on_auto_push:
+						deploy_ok, deploy_out = await self.run_deploy()
+						if not deploy_ok:
+							logger.warning("Post-push deploy failed: %s", deploy_out[:200])
 
 				return UnitMergeResult(
 					merged=True,
@@ -238,6 +244,71 @@ class GreenBranchManager:
 
 		logger.info("Pushed mc/green to origin/%s", push_branch)
 		return True
+
+	async def run_deploy(self) -> tuple[bool, str]:
+		"""Run the configured deploy command and optional health check.
+
+		Returns (success, output) tuple.
+		"""
+		deploy = self.config.deploy
+		if not deploy.command:
+			return (False, "No deploy command configured")
+
+		source_repo = self.config.target.path
+		logger.info("Running deploy: %s", deploy.command)
+
+		proc = await asyncio.create_subprocess_shell(
+			deploy.command,
+			cwd=source_repo,
+			stdout=asyncio.subprocess.PIPE,
+			stderr=asyncio.subprocess.STDOUT,
+		)
+		try:
+			stdout, _ = await asyncio.wait_for(
+				proc.communicate(), timeout=deploy.timeout,
+			)
+		except asyncio.TimeoutError:
+			try:
+				proc.kill()
+				await proc.wait()
+			except ProcessLookupError:
+				pass
+			return (False, f"Deploy timed out after {deploy.timeout}s")
+
+		output = stdout.decode() if stdout else ""
+		if proc.returncode != 0:
+			return (False, f"Deploy failed (exit {proc.returncode}): {output[:500]}")
+
+		logger.info("Deploy command succeeded")
+
+		# Health check if URL is configured
+		if deploy.health_check_url:
+			healthy = await self._poll_health_check(
+				deploy.health_check_url, deploy.health_check_timeout,
+			)
+			if not healthy:
+				return (False, f"Health check failed: {deploy.health_check_url}")
+			logger.info("Health check passed: %s", deploy.health_check_url)
+
+		return (True, output)
+
+	async def _poll_health_check(self, url: str, timeout: int) -> bool:
+		"""Poll a URL with HTTP GET until 200 or timeout."""
+		import urllib.request
+
+		deadline = asyncio.get_event_loop().time() + timeout
+		while asyncio.get_event_loop().time() < deadline:
+			try:
+				req = urllib.request.Request(url, method="GET")
+				resp = await asyncio.get_event_loop().run_in_executor(
+					None, lambda: urllib.request.urlopen(req, timeout=10),  # noqa: S310
+				)
+				if resp.status == 200:
+					return True
+			except Exception:
+				pass
+			await asyncio.sleep(5)
+		return False
 
 	async def get_green_hash(self) -> str:
 		"""Return the current commit hash of mc/green."""

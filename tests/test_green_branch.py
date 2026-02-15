@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mission_control.config import (
+	DeployConfig,
 	GreenBranchConfig,
 	MissionConfig,
 	TargetConfig,
@@ -556,3 +557,162 @@ class TestParallelMergeConflicts:
 		# Since asyncio.Lock serializes, no two merges ran simultaneously.
 		# Verify all branches were processed (order may vary due to asyncio scheduling)
 		assert set(execution_order) == {"unit-a", "unit-b", "unit-c"}
+
+
+class TestRunDeploy:
+	"""Tests for run_deploy() with mock subprocess."""
+
+	def _deploy_config(self) -> MissionConfig:
+		mc = _config()
+		mc.deploy = DeployConfig(
+			enabled=True,
+			command="vercel deploy --prod",
+			timeout=60,
+		)
+		return mc
+
+	async def test_successful_deploy(self) -> None:
+		config = self._deploy_config()
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate = AsyncMock(return_value=(b"Deployed!", None))
+
+		with patch(
+			"mission_control.green_branch.asyncio.create_subprocess_shell",
+			return_value=mock_proc,
+		):
+			ok, output = await mgr.run_deploy()
+
+		assert ok is True
+		assert "Deployed!" in output
+
+	async def test_deploy_failure(self) -> None:
+		config = self._deploy_config()
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 1
+		mock_proc.communicate = AsyncMock(return_value=(b"Error: auth failed", None))
+
+		with patch(
+			"mission_control.green_branch.asyncio.create_subprocess_shell",
+			return_value=mock_proc,
+		):
+			ok, output = await mgr.run_deploy()
+
+		assert ok is False
+		assert "exit 1" in output
+
+	async def test_deploy_timeout(self) -> None:
+		config = self._deploy_config()
+		config.deploy.timeout = 1
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		mock_proc = AsyncMock()
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+
+		with patch(
+			"mission_control.green_branch.asyncio.create_subprocess_shell",
+			return_value=mock_proc,
+		), patch(
+			"mission_control.green_branch.asyncio.wait_for",
+			side_effect=asyncio.TimeoutError,
+		):
+			ok, output = await mgr.run_deploy()
+
+		assert ok is False
+		assert "timed out" in output
+
+	async def test_no_deploy_command(self) -> None:
+		config = _config()
+		config.deploy = DeployConfig(enabled=True, command="")
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		ok, output = await mgr.run_deploy()
+		assert ok is False
+		assert "No deploy command" in output
+
+	async def test_health_check_success(self) -> None:
+		config = self._deploy_config()
+		config.deploy.health_check_url = "https://example.com"
+		config.deploy.health_check_timeout = 10
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate = AsyncMock(return_value=(b"ok", None))
+
+		with patch(
+			"mission_control.green_branch.asyncio.create_subprocess_shell",
+			return_value=mock_proc,
+		), patch.object(
+			mgr, "_poll_health_check", AsyncMock(return_value=True),
+		):
+			ok, output = await mgr.run_deploy()
+
+		assert ok is True
+
+	async def test_health_check_failure(self) -> None:
+		config = self._deploy_config()
+		config.deploy.health_check_url = "https://example.com"
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate = AsyncMock(return_value=(b"ok", None))
+
+		with patch(
+			"mission_control.green_branch.asyncio.create_subprocess_shell",
+			return_value=mock_proc,
+		), patch.object(
+			mgr, "_poll_health_check", AsyncMock(return_value=False),
+		):
+			ok, output = await mgr.run_deploy()
+
+		assert ok is False
+		assert "Health check failed" in output
+
+	async def test_deploy_after_auto_push(self) -> None:
+		"""When auto_push and on_auto_push, deploy runs after push."""
+		config = self._deploy_config()
+		config.green_branch.auto_push = True
+		config.deploy.on_auto_push = True
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+		mgr.workspace = "/tmp/test-workspace"
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+		mgr.push_green_to_main = AsyncMock(return_value=True)  # type: ignore[method-assign]
+		mgr.run_deploy = AsyncMock(return_value=(True, "ok"))  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
+
+		assert result.merged is True
+		mgr.push_green_to_main.assert_awaited_once()
+		mgr.run_deploy.assert_awaited_once()
+
+	async def test_no_deploy_when_push_disabled(self) -> None:
+		"""When auto_push is off, deploy is not triggered on merge."""
+		config = self._deploy_config()
+		config.green_branch.auto_push = False
+		config.deploy.on_auto_push = True
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+		mgr.workspace = "/tmp/test-workspace"
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+		mgr.run_deploy = AsyncMock(return_value=(True, "ok"))  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
+
+		assert result.merged is True
+		mgr.run_deploy.assert_not_awaited()

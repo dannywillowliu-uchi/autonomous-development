@@ -196,6 +196,38 @@ class ContinuousController:
 					result.final_verification_passed = False
 					result.final_verification_output = str(exc)
 
+			# Deploy at mission end if configured and verification passed
+			deploy = self.config.deploy
+			if (
+				self._green_branch
+				and deploy.enabled
+				and deploy.on_mission_end
+				and result.final_verification_passed
+			):
+				try:
+					deploy_ok, deploy_output = await self._green_branch.run_deploy()
+					if self._event_stream:
+						self._event_stream.emit(
+							"deploy_completed" if deploy_ok else "deploy_failed",
+							mission_id=mission.id,
+							details={"output": deploy_output[:500]},
+						)
+					if self._notifier:
+						status_str = "succeeded" if deploy_ok else "failed"
+						await self._notifier.send(
+							f"Deploy {status_str}: {deploy_output[:200]}"
+						)
+					if not deploy_ok:
+						logger.warning("Deploy failed: %s", deploy_output[:200])
+				except Exception as exc:
+					logger.error("Deploy error: %s", exc, exc_info=True)
+					if self._event_stream:
+						self._event_stream.emit(
+							"deploy_failed",
+							mission_id=mission.id,
+							details={"error": str(exc)},
+						)
+
 			mission.status = "completed" if result.objective_met else "stopped"
 			mission.finished_at = _now_iso()
 			mission.stopped_reason = result.stopped_reason

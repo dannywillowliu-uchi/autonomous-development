@@ -302,6 +302,45 @@ setup_timeout = 60
 	assert cfg.target.verification.setup_timeout == 60
 
 
+def test_deploy_config_defaults() -> None:
+	"""DeployConfig has sensible defaults."""
+	cfg = MissionConfig()
+	assert cfg.deploy.enabled is False
+	assert cfg.deploy.command == ""
+	assert cfg.deploy.health_check_url == ""
+	assert cfg.deploy.health_check_timeout == 60
+	assert cfg.deploy.timeout == 300
+	assert cfg.deploy.on_auto_push is False
+	assert cfg.deploy.on_mission_end is True
+
+
+def test_deploy_config_from_toml(tmp_path: Path) -> None:
+	"""DeployConfig fields parsed from TOML."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[deploy]
+enabled = true
+command = "vercel deploy --prod"
+health_check_url = "https://example.com"
+health_check_timeout = 30
+timeout = 600
+on_auto_push = true
+on_mission_end = false
+""")
+	cfg = load_config(toml)
+	assert cfg.deploy.enabled is True
+	assert cfg.deploy.command == "vercel deploy --prod"
+	assert cfg.deploy.health_check_url == "https://example.com"
+	assert cfg.deploy.health_check_timeout == 30
+	assert cfg.deploy.timeout == 600
+	assert cfg.deploy.on_auto_push is True
+	assert cfg.deploy.on_mission_end is False
+
+
 def test_green_branch_defaults() -> None:
 	"""GreenBranchConfig defaults."""
 	cfg = MissionConfig()
