@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import defaultdict
+from typing import Any
 
 from fastapi.testclient import TestClient
 
 from mission_control.dashboard.live import (
+	VALID_SIGNAL_TYPES,
 	LiveDashboard,
 	_serialize_event,
 	_serialize_mission,
@@ -163,12 +166,14 @@ class TestSerialization:
 
 
 class TestRESTEndpoints:
-	def _make_client(self) -> TestClient:
+	def _make_client(self, auth_token: str = "") -> TestClient:
 		db = _setup_db(check_same_thread=False)
 		dashboard = LiveDashboard.__new__(LiveDashboard)
 		dashboard.db = db
+		dashboard.auth_token = auth_token
 		dashboard._connections = set()
 		dashboard._broadcast_task = None
+		dashboard._signal_timestamps = defaultdict(list)
 		from fastapi import FastAPI
 		dashboard.app = FastAPI()
 		dashboard._setup_routes()
@@ -245,8 +250,10 @@ class TestRESTEndpoints:
 
 		dashboard = LiveDashboard.__new__(LiveDashboard)
 		dashboard.db = db
+		dashboard.auth_token = ""
 		dashboard._connections = set()
 		dashboard._broadcast_task = None
+		dashboard._signal_timestamps = defaultdict(list)
 		from fastapi import FastAPI
 		dashboard.app = FastAPI()
 		dashboard._setup_routes()
@@ -269,8 +276,10 @@ class TestSignalInsertion:
 		db = _setup_db(check_same_thread=False)
 		dashboard = LiveDashboard.__new__(LiveDashboard)
 		dashboard.db = db
+		dashboard.auth_token = ""
 		dashboard._connections = set()
 		dashboard._broadcast_task = None
+		dashboard._signal_timestamps = defaultdict(list)
 		from fastapi import FastAPI
 		dashboard.app = FastAPI()
 		dashboard._setup_routes()
@@ -289,8 +298,10 @@ class TestSignalInsertion:
 		db = _setup_db(check_same_thread=False)
 		dashboard = LiveDashboard.__new__(LiveDashboard)
 		dashboard.db = db
+		dashboard.auth_token = ""
 		dashboard._connections = set()
 		dashboard._broadcast_task = None
+		dashboard._signal_timestamps = defaultdict(list)
 		from fastapi import FastAPI
 		dashboard.app = FastAPI()
 		dashboard._setup_routes()
@@ -417,8 +428,10 @@ class TestWorkerVisibility:
 		db = self._setup_with_workers(check_same_thread=False)
 		dashboard = LiveDashboard.__new__(LiveDashboard)
 		dashboard.db = db
+		dashboard.auth_token = ""
 		dashboard._connections = set()
 		dashboard._broadcast_task = None
+		dashboard._signal_timestamps = defaultdict(list)
 		from fastapi import FastAPI
 		dashboard.app = FastAPI()
 		dashboard._setup_routes()
@@ -432,3 +445,146 @@ class TestWorkerVisibility:
 		assert len(working) == 1
 		assert working[0]["pid"] == 1234
 		assert working[0]["output_excerpt"] == "Running tests..."
+
+
+def _make_authed_client(auth_token: str = "test-secret") -> TestClient:
+	"""Create a test client with auth enabled."""
+	db = _setup_db(check_same_thread=False)
+	dashboard = LiveDashboard.__new__(LiveDashboard)
+	dashboard.db = db
+	dashboard.auth_token = auth_token
+	dashboard._connections = set()
+	dashboard._broadcast_task = None
+	dashboard._signal_timestamps = defaultdict(list)
+	from fastapi import FastAPI
+	dashboard.app = FastAPI()
+	dashboard._setup_routes()
+	return TestClient(dashboard.app)
+
+
+class TestBearerTokenAuth:
+	def test_missing_token_returns_401(self) -> None:
+		client = _make_authed_client()
+		resp = client.get("/api/mission")
+		assert resp.status_code == 401
+
+	def test_wrong_token_returns_401(self) -> None:
+		client = _make_authed_client()
+		resp = client.get("/api/mission", headers={"Authorization": "Bearer wrong-token"})
+		assert resp.status_code == 401
+
+	def test_correct_token_returns_200(self) -> None:
+		client = _make_authed_client("my-token")
+		resp = client.get("/api/mission", headers={"Authorization": "Bearer my-token"})
+		assert resp.status_code == 200
+
+	def test_auth_on_all_api_endpoints(self) -> None:
+		client = _make_authed_client()
+		for path in ["/api/mission", "/api/units", "/api/events", "/api/plan-tree", "/api/workers", "/api/summary"]:
+			resp = client.get(path)
+			assert resp.status_code == 401, f"{path} should require auth"
+
+	def test_signal_endpoint_requires_auth(self) -> None:
+		client = _make_authed_client()
+		resp = client.post("/api/signal", json={"signal_type": "stop", "payload": {}})
+		assert resp.status_code == 401
+
+	def test_index_does_not_require_auth(self) -> None:
+		client = _make_authed_client()
+		resp = client.get("/")
+		assert resp.status_code == 200
+
+	def test_no_token_mode_allows_all(self) -> None:
+		client = _make_authed_client(auth_token="")
+		resp = client.get("/api/mission")
+		assert resp.status_code == 200
+
+
+class TestWebSocketAuth:
+	def test_ws_rejects_missing_token(self) -> None:
+		from starlette.websockets import WebSocketDisconnect as StarletteWSDisconnect
+		client = _make_authed_client()
+		try:
+			with client.websocket_connect("/ws"):
+				pass
+			assert False, "Expected WebSocketDisconnect"
+		except StarletteWSDisconnect as e:
+			assert e.code == 4401
+
+	def test_ws_rejects_wrong_token(self) -> None:
+		from starlette.websockets import WebSocketDisconnect as StarletteWSDisconnect
+		client = _make_authed_client("secret")
+		try:
+			with client.websocket_connect("/ws?token=wrong"):
+				pass
+			assert False, "Expected WebSocketDisconnect"
+		except StarletteWSDisconnect as e:
+			assert e.code == 4401
+
+	def test_ws_accepts_correct_token(self) -> None:
+		client = _make_authed_client("secret")
+		with client.websocket_connect("/ws?token=secret") as ws:
+			data = ws.receive_json()
+			assert "mission" in data
+
+
+class TestSignalValidation:
+	def test_unknown_signal_type_returns_422(self) -> None:
+		client = _make_authed_client("")
+		resp = client.post("/api/signal", json={"signal_type": "nuke_everything", "payload": {}})
+		assert resp.status_code == 422
+		assert "Unknown signal_type" in resp.json()["detail"]
+
+	def test_all_valid_signal_types_accepted(self) -> None:
+		for sig_type in VALID_SIGNAL_TYPES:
+			client = _make_authed_client("")
+			payload: dict[str, Any] = {}
+			if sig_type == "adjust_workers":
+				payload = {"num_workers": 2}
+			elif sig_type == "cancel_unit":
+				payload = {"unit_id": "wu1"}
+			resp = client.post("/api/signal", json={"signal_type": sig_type, "payload": payload})
+			assert resp.status_code == 200, f"{sig_type} should be accepted"
+
+	def test_adjust_workers_requires_num_workers(self) -> None:
+		client = _make_authed_client("")
+		resp = client.post("/api/signal", json={"signal_type": "adjust_workers", "payload": {}})
+		assert resp.status_code == 422
+		assert "num_workers" in resp.json()["detail"]
+
+	def test_cancel_unit_requires_unit_id(self) -> None:
+		client = _make_authed_client("")
+		resp = client.post("/api/signal", json={"signal_type": "cancel_unit", "payload": {}})
+		assert resp.status_code == 422
+		assert "unit_id" in resp.json()["detail"]
+
+	def test_adjust_workers_maps_to_adjust_in_db(self) -> None:
+		db = _setup_db(check_same_thread=False)
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+		dashboard.auth_token = ""
+		dashboard._connections = set()
+		dashboard._broadcast_task = None
+		dashboard._signal_timestamps = defaultdict(list)
+		from fastapi import FastAPI
+		dashboard.app = FastAPI()
+		dashboard._setup_routes()
+
+		client = TestClient(dashboard.app)
+		client.post("/api/signal", json={"signal_type": "adjust_workers", "payload": {"num_workers": 3}})
+
+		signals = db.get_pending_signals("m1")
+		assert len(signals) == 1
+		assert signals[0].signal_type == "adjust"
+
+
+class TestRateLimiting:
+	def test_rate_limit_exceeded(self) -> None:
+		client = _make_authed_client("")
+		for i in range(10):
+			resp = client.post("/api/signal", json={"signal_type": "pause", "payload": {}})
+			assert resp.status_code == 200, f"Request {i+1} should succeed"
+
+		resp = client.post("/api/signal", json={"signal_type": "pause", "payload": {}})
+		assert resp.status_code == 429
+		assert "Rate limit" in resp.json()["detail"]
