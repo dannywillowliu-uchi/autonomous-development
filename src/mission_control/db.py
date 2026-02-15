@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -374,9 +375,16 @@ class Database:
 		self.conn.row_factory = sqlite3.Row
 		if db_path != ":memory:":
 			self.conn.execute("PRAGMA journal_mode=WAL")
+			self.conn.execute("PRAGMA busy_timeout=5000")
 		self.conn.execute("PRAGMA foreign_keys=ON")
 		self._lock = asyncio.Lock()
 		self._create_tables()
+
+	@staticmethod
+	def _validate_identifier(name: str) -> None:
+		"""Validate a SQL identifier to prevent injection in dynamic ALTER TABLE statements."""
+		if not name or len(name) > 64 or not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", name):
+			raise ValueError(f"Invalid SQL identifier: {name!r}")
 
 	def _create_tables(self) -> None:
 		self.conn.executescript(SCHEMA_SQL)
@@ -394,6 +402,8 @@ class Database:
 			("experiences", "epoch_id", "TEXT"),
 		]
 		for table, column, col_type in migrations:
+			self._validate_identifier(table)
+			self._validate_identifier(column)
 			try:
 				self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")  # noqa: S608
 			except sqlite3.OperationalError:
@@ -410,6 +420,8 @@ class Database:
 			("work_units", "unit_type", "TEXT DEFAULT 'implementation'"),
 		]
 		for table, column, col_type in migrations:
+			self._validate_identifier(table)
+			self._validate_identifier(column)
 			try:
 				self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")  # noqa: S608
 			except sqlite3.OperationalError:

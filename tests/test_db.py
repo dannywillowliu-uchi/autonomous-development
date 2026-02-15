@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from typing import Any
 
 import pytest
 
@@ -617,3 +618,55 @@ class TestMissionSummary:
 		assert summary["total_input_tokens"] == 0
 		assert summary["events_by_type"] == {}
 		assert summary["epochs"] == []
+
+
+class TestBusyTimeout:
+	def test_busy_timeout_set_on_file_db(self, tmp_path: Any) -> None:
+		"""busy_timeout pragma should be set to 5000 for file-based DBs."""
+		db_path = tmp_path / "test.db"
+		db = Database(db_path)
+		row = db.conn.execute("PRAGMA busy_timeout").fetchone()
+		assert row[0] == 5000
+		db.close()
+
+class TestValidateIdentifier:
+	def test_valid_names(self) -> None:
+		"""Valid SQL identifiers should pass without error."""
+		for name in ["work_units", "epoch_id", "a", "_private", "Table1", "col_2_x"]:
+			Database._validate_identifier(name)
+
+	def test_rejects_empty_string(self) -> None:
+		with pytest.raises(ValueError, match="Invalid SQL identifier"):
+			Database._validate_identifier("")
+
+	def test_rejects_name_starting_with_digit(self) -> None:
+		with pytest.raises(ValueError, match="Invalid SQL identifier"):
+			Database._validate_identifier("1bad")
+
+	def test_rejects_name_over_64_chars(self) -> None:
+		with pytest.raises(ValueError, match="Invalid SQL identifier"):
+			Database._validate_identifier("a" * 65)
+
+	def test_accepts_name_at_64_chars(self) -> None:
+		Database._validate_identifier("a" * 64)
+
+	def test_rejects_sql_injection_attempts(self) -> None:
+		injection_attempts = [
+			"work_units; DROP TABLE work_units;--",
+			"col FROM work_units;--",
+			"epoch_id TEXT); DROP TABLE work_units;--",
+			"name OR 1=1",
+			"col\nDROP",
+			"table name",
+			"col-name",
+			"col.name",
+		]
+		for attempt in injection_attempts:
+			with pytest.raises(ValueError, match="Invalid SQL identifier"):
+				Database._validate_identifier(attempt)
+
+	def test_migrations_work_with_validation(self, db: Database) -> None:
+		"""Migrations should complete successfully with validation in place."""
+		db._migrate_epoch_columns()
+		db._migrate_token_columns()
+		db._migrate_unit_type_column()
