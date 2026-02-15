@@ -92,6 +92,19 @@ class TestSnapshotBuilding:
 		assert len(snapshot["events"]) == 3
 		assert len(snapshot["plan_tree"]) == 1  # 1 epoch
 
+	def test_build_snapshot_includes_summary(self) -> None:
+		db = _setup_db()
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+
+		snapshot = dashboard._build_snapshot()
+		assert "summary" in snapshot
+		summary = snapshot["summary"]
+		assert summary["units_merged"] == 1  # wu2 completed
+		assert summary["units_failed"] == 1  # wu3 failed
+		assert summary["units_running"] == 1  # wu1 running
+		assert summary["current_epoch"] == 1
+
 	def test_build_snapshot_no_mission(self) -> None:
 		db = Database(":memory:")
 		dashboard = LiveDashboard.__new__(LiveDashboard)
@@ -100,6 +113,7 @@ class TestSnapshotBuilding:
 		snapshot = dashboard._build_snapshot()
 		assert snapshot["mission"] is None
 		assert snapshot["units"] == []
+		assert snapshot["summary"] is None
 
 	def test_plan_tree_structure(self) -> None:
 		db = _setup_db()
@@ -210,6 +224,38 @@ class TestRESTEndpoints:
 		assert resp.status_code == 200
 		data = resp.json()
 		assert data["status"] == "ok"
+
+	def test_get_summary(self) -> None:
+		client = self._make_client()
+		resp = client.get("/api/summary")
+		assert resp.status_code == 200
+		data = resp.json()
+		assert "units_merged" in data
+		assert "units_failed" in data
+		assert "current_epoch" in data
+
+	def test_get_summary_no_mission(self) -> None:
+		db = Database.__new__(Database)
+		import asyncio
+		db.conn = sqlite3.connect(":memory:", check_same_thread=False)
+		db.conn.row_factory = sqlite3.Row
+		db.conn.execute("PRAGMA foreign_keys=ON")
+		db._lock = asyncio.Lock()
+		db._create_tables()
+
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+		dashboard._connections = set()
+		dashboard._broadcast_task = None
+		from fastapi import FastAPI
+		dashboard.app = FastAPI()
+		dashboard._setup_routes()
+
+		client = TestClient(dashboard.app)
+		resp = client.get("/api/summary")
+		assert resp.status_code == 200
+		data = resp.json()
+		assert data["status"] == "no_mission"
 
 	def test_index_returns_html(self) -> None:
 		client = self._make_client()
