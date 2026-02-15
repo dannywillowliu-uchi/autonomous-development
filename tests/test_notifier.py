@@ -8,7 +8,14 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from mission_control.notifier import MAX_QUEUE_SIZE, TELEGRAM_MAX_LEN, NotificationPriority, TelegramNotifier
+from mission_control.notifier import (
+	MAX_QUEUE_SIZE,
+	MAX_RETRIES,
+	RETRY_BASE_DELAY,
+	TELEGRAM_MAX_LEN,
+	NotificationPriority,
+	TelegramNotifier,
+)
 
 
 @pytest.fixture
@@ -275,5 +282,178 @@ class TestSplitMessage:
 			assert "m" * 2000 in rejoined
 			assert "n" * 2000 in rejoined
 			assert "o" * 2000 in rejoined
+
+		await notifier.close()
+
+
+class TestRetryLogic:
+	"""Tests for transient network failure retry logic in _send_with_retry."""
+
+	@pytest.mark.asyncio
+	async def test_http_429_retries_with_backoff(self, notifier: TelegramNotifier) -> None:
+		"""HTTP 429 rate limit triggers retry; succeeds on second attempt."""
+		resp_429 = httpx.Response(429, headers={"Retry-After": "0.01"})
+		resp_200 = httpx.Response(200)
+		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+			mock_post.side_effect = [resp_429, resp_200]
+			await notifier._flush_batch(["rate limited msg"])
+
+			assert mock_post.call_count == 2
+
+		await notifier.close()
+
+	@pytest.mark.asyncio
+	async def test_http_429_respects_retry_after_header(self, notifier: TelegramNotifier) -> None:
+		"""When 429 includes Retry-After, that value is used for the delay."""
+		resp_429 = httpx.Response(429, headers={"Retry-After": "0.01"})
+		resp_200 = httpx.Response(200)
+
+		sleep_delays: list[float] = []
+		original_sleep = asyncio.sleep
+
+		async def track_sleep(delay: float) -> None:
+			sleep_delays.append(delay)
+			await original_sleep(min(delay, 0.01))
+
+		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post, \
+			patch("mission_control.notifier.asyncio.sleep", side_effect=track_sleep):
+			mock_post.side_effect = [resp_429, resp_200]
+			await notifier._flush_batch(["msg"])
+
+		assert len(sleep_delays) >= 1
+		assert sleep_delays[0] == pytest.approx(0.01)
+
+		await notifier.close()
+
+	@pytest.mark.asyncio
+	async def test_http_429_exhausts_retries(self, notifier: TelegramNotifier) -> None:
+		"""HTTP 429 on every attempt exhausts retries and drops the batch."""
+		resp_429 = httpx.Response(429, headers={"Retry-After": "0.01"})
+		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post, \
+			patch("mission_control.notifier.asyncio.sleep", new_callable=AsyncMock):
+			mock_post.return_value = resp_429
+			await notifier._flush_batch(["doomed msg"])
+
+			assert mock_post.call_count == MAX_RETRIES
+
+		await notifier.close()
+
+	@pytest.mark.asyncio
+	async def test_http_500_retries_then_succeeds(self, notifier: TelegramNotifier) -> None:
+		"""HTTP 500 triggers retry; succeeds on second attempt."""
+		resp_500 = httpx.Response(500)
+		resp_200 = httpx.Response(200)
+		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post, \
+			patch("mission_control.notifier.asyncio.sleep", new_callable=AsyncMock):
+			mock_post.side_effect = [resp_500, resp_200]
+			await notifier._flush_batch(["server error msg"])
+
+			assert mock_post.call_count == 2
+
+		await notifier.close()
+
+	@pytest.mark.asyncio
+	async def test_http_5xx_exhausts_retries(self, notifier: TelegramNotifier) -> None:
+		"""HTTP 5xx on every attempt exhausts retries and drops the batch."""
+		resp_502 = httpx.Response(502)
+		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post, \
+			patch("mission_control.notifier.asyncio.sleep", new_callable=AsyncMock):
+			mock_post.return_value = resp_502
+			await notifier._flush_batch(["repeated 502 msg"])
+
+			assert mock_post.call_count == MAX_RETRIES
+
+		await notifier.close()
+
+	@pytest.mark.asyncio
+	async def test_connection_timeout_retries_then_succeeds(self, notifier: TelegramNotifier) -> None:
+		"""ConnectTimeout triggers retry; succeeds on second attempt without hanging."""
+		resp_200 = httpx.Response(200)
+		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post, \
+			patch("mission_control.notifier.asyncio.sleep", new_callable=AsyncMock):
+			mock_post.side_effect = [httpx.ConnectTimeout("timed out"), resp_200]
+
+			async def run_with_timeout() -> None:
+				await notifier._flush_batch(["timeout msg"])
+
+			await asyncio.wait_for(run_with_timeout(), timeout=5.0)
+
+			assert mock_post.call_count == 2
+
+		await notifier.close()
+
+	@pytest.mark.asyncio
+	async def test_connection_timeout_exhausts_retries(self, notifier: TelegramNotifier) -> None:
+		"""ConnectTimeout on every attempt exhausts retries without hanging."""
+		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post, \
+			patch("mission_control.notifier.asyncio.sleep", new_callable=AsyncMock):
+			mock_post.side_effect = httpx.ConnectTimeout("timed out")
+
+			async def run_with_timeout() -> None:
+				await notifier._flush_batch(["doomed timeout msg"])
+
+			await asyncio.wait_for(run_with_timeout(), timeout=5.0)
+
+			assert mock_post.call_count == MAX_RETRIES
+
+		await notifier.close()
+
+	@pytest.mark.asyncio
+	async def test_exponential_backoff_delays(self, notifier: TelegramNotifier) -> None:
+		"""Verify retry delays follow exponential backoff pattern (1s, 2s, 4s)."""
+		resp_500 = httpx.Response(500)
+		sleep_delays: list[float] = []
+
+		async def capture_sleep(delay: float) -> None:
+			sleep_delays.append(delay)
+
+		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post, \
+			patch("mission_control.notifier.asyncio.sleep", side_effect=capture_sleep):
+			mock_post.return_value = resp_500
+			await notifier._flush_batch(["backoff msg"])
+
+		# MAX_RETRIES=3 means attempts 0,1,2; sleeps between 0->1 and 1->2
+		assert len(sleep_delays) == MAX_RETRIES - 1
+		for i, delay in enumerate(sleep_delays):
+			assert delay == pytest.approx(RETRY_BASE_DELAY * (2 ** i))
+
+		await notifier.close()
+
+	@pytest.mark.asyncio
+	async def test_queue_overflow_drops_low_priority(self, notifier: TelegramNotifier) -> None:
+		"""Rapidly enqueuing > MAX_QUEUE_SIZE messages drops low-priority ones."""
+		with patch.object(notifier, "_ensure_batch_task"):
+			# Fill queue with low-priority messages
+			for i in range(MAX_QUEUE_SIZE + 50):
+				await notifier.send(f"overflow-low-{i}", priority=NotificationPriority.LOW)
+
+			assert len(notifier._priority_queue) <= MAX_QUEUE_SIZE
+
+			# Now add high-priority messages on top
+			for i in range(30):
+				await notifier.send(f"overflow-high-{i}", priority=NotificationPriority.HIGH)
+
+			assert len(notifier._priority_queue) <= MAX_QUEUE_SIZE
+
+			# All high-priority messages are preserved
+			messages = [msg for _, msg in notifier._priority_queue]
+			for i in range(30):
+				assert f"overflow-high-{i}" in messages
+
+			# Low-priority messages were dropped to make room
+			high_count = sum(1 for p, _ in notifier._priority_queue if p == NotificationPriority.HIGH)
+			low_count = sum(1 for p, _ in notifier._priority_queue if p == NotificationPriority.LOW)
+			assert high_count == 30
+			assert low_count == MAX_QUEUE_SIZE - 30
+
+	@pytest.mark.asyncio
+	async def test_4xx_non_429_not_retried(self, notifier: TelegramNotifier) -> None:
+		"""Non-retryable 4xx errors (e.g. 400) are not retried."""
+		resp_400 = httpx.Response(400)
+		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+			mock_post.return_value = resp_400
+			await notifier._flush_batch(["bad request msg"])
+
+			assert mock_post.call_count == 1
 
 		await notifier.close()

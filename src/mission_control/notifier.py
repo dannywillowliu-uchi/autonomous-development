@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 BATCH_WINDOW = 5.0
 MAX_QUEUE_SIZE = 100
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0
 
 
 class NotificationPriority(enum.Enum):
@@ -100,6 +102,50 @@ class TelegramNotifier:
 
 		return result
 
+	async def _send_with_retry(self, client: httpx.AsyncClient, url: str, payload: dict) -> None:
+		"""Send a single Telegram API request with exponential backoff on transient failures."""
+		for attempt in range(MAX_RETRIES):
+			try:
+				resp = await client.post(url, json=payload)
+				if resp.status_code == 429:
+					default_delay = RETRY_BASE_DELAY * (2 ** attempt)
+					retry_after = float(resp.headers.get("Retry-After", default_delay))
+					logger.warning(
+						"Telegram rate limited (429), retry after %.1fs (%d/%d)",
+						retry_after, attempt + 1, MAX_RETRIES,
+					)
+					if attempt < MAX_RETRIES - 1:
+						await asyncio.sleep(retry_after)
+						continue
+					logger.error("Telegram send failed after %d retries: HTTP 429", MAX_RETRIES)
+					return
+				if resp.status_code >= 500:
+					delay = RETRY_BASE_DELAY * (2 ** attempt)
+					logger.warning(
+						"Telegram server error (%d), retry after %.1fs (%d/%d)",
+						resp.status_code, delay, attempt + 1, MAX_RETRIES,
+					)
+					if attempt < MAX_RETRIES - 1:
+						await asyncio.sleep(delay)
+						continue
+					logger.error(
+						"Telegram send failed after %d retries: HTTP %d",
+						MAX_RETRIES, resp.status_code,
+					)
+					return
+				return
+			except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as exc:
+				delay = RETRY_BASE_DELAY * (2 ** attempt)
+				logger.warning(
+					"Telegram connection error: %s, retry after %.1fs (%d/%d)",
+					exc, delay, attempt + 1, MAX_RETRIES,
+				)
+				if attempt < MAX_RETRIES - 1:
+					await asyncio.sleep(delay)
+					continue
+				logger.error("Telegram send failed after %d retries: %s", MAX_RETRIES, exc)
+				return
+
 	async def _flush_batch(self, messages: list[str]) -> None:
 		"""Send a batch of messages, splitting across multiple Telegram messages if needed."""
 		if not messages:
@@ -110,14 +156,14 @@ class TelegramNotifier:
 			client = await self._ensure_client()
 			url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
 			for part in parts:
-				await client.post(url, json={
+				await self._send_with_retry(client, url, {
 					"chat_id": self._chat_id,
 					"text": part,
 					"parse_mode": "Markdown",
 					"disable_web_page_preview": True,
 				})
 		except Exception as exc:
-			logger.warning("Telegram send failed: %s", exc)
+			logger.error("Telegram send failed: %s", exc)
 
 	def _apply_backpressure(self) -> None:
 		"""Drop low-priority messages when queue exceeds MAX_QUEUE_SIZE."""
