@@ -8,11 +8,18 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from mission_control.config import MissionConfig, ParallelConfig, TargetConfig, VerificationConfig
+from mission_control.config import (
+	GreenBranchConfig,
+	MissionConfig,
+	ParallelConfig,
+	TargetConfig,
+	VerificationConfig,
+)
 from mission_control.coordinator import Coordinator
 from mission_control.db import Database
+from mission_control.green_branch import GreenBranchManager
 from mission_control.merge_queue import MergeQueue
-from mission_control.models import MergeRequest, Plan, Snapshot, WorkUnit
+from mission_control.models import Epoch, MergeRequest, Mission, Plan, Snapshot, UnitEvent, WorkUnit
 from mission_control.planner import _parse_plan_output
 from mission_control.worker import render_worker_prompt
 
@@ -426,3 +433,120 @@ class TestPromptRendering:
 		assert "mc/unit-abc" in prompt
 		assert "Previous worker fixed config loading" in prompt
 		assert "pytest -q" in prompt  # verification command from config
+
+
+class TestParallelMergeConflictIntegration:
+	"""Integration: 3 workers targeting same file, verify DB state after merges."""
+
+	async def test_three_workers_same_file_db_state(self, db: Database) -> None:
+		"""Create 3 units targeting same file, simulate merges, verify DB state."""
+		# Setup mission infrastructure
+		mission = Mission(id="m1", objective="test merge conflicts", status="running")
+		db.insert_mission(mission)
+		epoch = Epoch(id="e1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test", status="active", total_units=3)
+		db.insert_plan(plan)
+
+		# 3 work units all targeting the same file
+		units = []
+		for i in range(3):
+			wu = WorkUnit(
+				id=f"wu{i}",
+				plan_id="p1",
+				title=f"Modify shared.py (worker {i})",
+				description="Edit the same shared module",
+				files_hint="src/shared.py",
+				status="running",
+				worker_id=f"w{i}",
+				branch_name=f"mc/unit-wu{i}",
+				commit_hash=f"commit{i}abc",
+				epoch_id="e1",
+			)
+			db.insert_work_unit(wu)
+			units.append(wu)
+
+		# Setup GreenBranchManager with stateful mock
+		cfg = MissionConfig()
+		cfg.target = TargetConfig(
+			name="test", path="/tmp/test", branch="main",
+			verification=VerificationConfig(command="pytest -q"),
+		)
+		cfg.green_branch = GreenBranchConfig(
+			working_branch="mc/working", green_branch="mc/green",
+		)
+		mgr = GreenBranchManager(cfg, db)
+		mgr.workspace = "/tmp/workspace"
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		# Track which merge is first (succeeds), rest conflict
+		merge_attempt = 0
+
+		async def stateful_git(*args: str) -> tuple[bool, str]:
+			nonlocal merge_attempt
+			if args[0] == "merge" and len(args) > 1 and args[1] == "--no-ff":
+				merge_attempt += 1
+				if merge_attempt == 1:
+					return (True, "Merge made by the 'ort' strategy.")
+				return (False, "CONFLICT (content): Merge conflict in src/shared.py")
+			if args[0] == "merge" and "--abort" in args:
+				return (True, "")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=stateful_git)
+
+		# Simulate sequential merge attempts (as controller would do)
+		merge_results = []
+		for wu in units:
+			result = await mgr.merge_unit(f"/tmp/w{wu.id[-1]}", wu.branch_name)
+			merge_results.append((wu, result))
+
+		# Record events in DB based on merge results
+		merged_count = 0
+		rejected_count = 0
+		for wu, result in merge_results:
+			if result.merged:
+				merged_count += 1
+				wu.status = "completed"
+				db.update_work_unit(wu)
+				event = UnitEvent(
+					mission_id="m1", epoch_id="e1", work_unit_id=wu.id,
+					event_type="merged",
+				)
+				db.insert_unit_event(event)
+			else:
+				rejected_count += 1
+				wu.status = "failed"
+				wu.output_summary = result.failure_output
+				db.update_work_unit(wu)
+				event = UnitEvent(
+					mission_id="m1", epoch_id="e1", work_unit_id=wu.id,
+					event_type="rejected",
+					details=result.failure_output,
+				)
+				db.insert_unit_event(event)
+
+		# Verify: exactly 1 merged, 2 rejected
+		assert merged_count == 1
+		assert rejected_count == 2
+
+		# Verify DB state: unit_events
+		events = db.get_unit_events_for_mission("m1")
+		merged_events = [e for e in events if e.event_type == "merged"]
+		rejected_events = [e for e in events if e.event_type == "rejected"]
+		assert len(merged_events) == 1
+		assert len(rejected_events) == 2
+
+		# Verify work unit statuses in DB
+		for wu in units:
+			db_unit = db.get_work_unit(wu.id)
+			assert db_unit is not None
+			if wu.id == merge_results[0][0].id and merge_results[0][1].merged:
+				assert db_unit.status == "completed"
+			else:
+				# Check it's either completed (the winner) or failed (the losers)
+				assert db_unit.status in ("completed", "failed")
+
+		# Verify rejected events contain conflict details
+		for e in rejected_events:
+			assert "conflict" in e.details.lower() or "Merge conflict" in e.details

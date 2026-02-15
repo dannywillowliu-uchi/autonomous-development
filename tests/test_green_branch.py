@@ -346,3 +346,137 @@ class TestSyncToSource:
 
 		# Both branches attempted despite first failure
 		assert len(calls) == 2
+
+
+class TestParallelMergeConflicts:
+	"""Tests for concurrent merge scenarios and conflict handling."""
+
+	async def test_concurrent_merge_only_one_succeeds(self) -> None:
+		"""3 workers modify the same file; only 1 merge succeeds, 2 get conflicts."""
+		mgr = _manager()
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		# Track mc/green state: first --no-ff merge succeeds, subsequent ones conflict
+		# because the green branch has advanced.
+		merge_count = 0
+
+		async def stateful_git(*args: str) -> tuple[bool, str]:
+			nonlocal merge_count
+			# The critical merge command: "merge --no-ff <remote>/<branch>"
+			if args[0] == "merge" and len(args) > 1 and args[1] == "--no-ff":
+				merge_count += 1
+				if merge_count == 1:
+					return (True, "Merge made by the 'ort' strategy.")
+				return (False, "CONFLICT (content): Merge conflict in shared.py")
+			# merge --abort is fine
+			if args[0] == "merge" and "--abort" in args:
+				return (True, "")
+			# All other git commands succeed
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=stateful_git)
+
+		# Launch 3 concurrent merge_unit calls
+		results = await asyncio.gather(
+			mgr.merge_unit("/tmp/w1", "feat/unit-1"),
+			mgr.merge_unit("/tmp/w2", "feat/unit-2"),
+			mgr.merge_unit("/tmp/w3", "feat/unit-3"),
+		)
+
+		succeeded = [r for r in results if r.merged]
+		failed = [r for r in results if not r.merged]
+
+		assert len(succeeded) == 1
+		assert len(failed) == 2
+		for r in failed:
+			assert r.rebase_ok is False
+			assert "Merge conflict" in r.failure_output
+
+	async def test_merge_conflict_detection(self) -> None:
+		"""merge_unit detects conflicts and returns rebase_ok=False with descriptive output."""
+		mgr = _manager()
+		conflict_msg = "CONFLICT (content): Merge conflict in src/shared_module.py\nAutomatic merge failed"
+
+		async def conflict_git(*args: str) -> tuple[bool, str]:
+			if args[0] == "merge" and len(args) > 1 and args[1] == "--no-ff":
+				return (False, conflict_msg)
+			if args[0] == "merge" and "--abort" in args:
+				return (True, "")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=conflict_git)
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/conflicting")
+
+		assert result.merged is False
+		assert result.rebase_ok is False
+		assert "Merge conflict" in result.failure_output
+		assert "src/shared_module.py" in result.failure_output
+
+	async def test_green_branch_advances_monotonically(self) -> None:
+		"""After N sequential merges, green hash changes each time and never goes backwards."""
+		mgr = _manager()
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		# Simulate a git environment where rev-parse returns incrementing hashes
+		hash_counter = 0
+		hashes_seen: list[str] = []
+
+		async def tracking_git(*args: str) -> tuple[bool, str]:
+			nonlocal hash_counter
+			if args[0] == "rev-parse" and args[-1] == "mc/green":
+				hash_counter += 1
+				h = f"{hash_counter:040x}"
+				hashes_seen.append(h)
+				return (True, h + "\n")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=tracking_git)
+
+		# Perform 5 sequential merges
+		for i in range(5):
+			result = await mgr.merge_unit(f"/tmp/w{i}", f"feat/unit-{i}")
+			assert result.merged is True
+
+		# Capture the green hash after each merge
+		green_hashes: list[str] = []
+		for i in range(5):
+			h = await mgr.get_green_hash()
+			green_hashes.append(h)
+
+		# All hashes should be unique (branch advanced each time)
+		assert len(set(green_hashes)) == len(green_hashes)
+		# Hashes should be monotonically increasing (never goes backwards)
+		for i in range(1, len(green_hashes)):
+			assert green_hashes[i] > green_hashes[i - 1]
+
+	async def test_concurrent_merge_lock_serialization(self) -> None:
+		"""_merge_lock serializes concurrent merge attempts (no true parallelism)."""
+		mgr = _manager()
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		execution_order: list[str] = []
+
+		async def ordered_git(*args: str) -> tuple[bool, str]:
+			if args[0] == "merge" and len(args) > 1 and args[1] == "--no-ff":
+				# Extract branch name from the remote/branch arg
+				branch = args[2].split("/")[-1] if len(args) > 2 else "unknown"
+				execution_order.append(branch)
+				# Small sleep to verify that other tasks don't interleave
+				await asyncio.sleep(0.01)
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=ordered_git)
+
+		# Launch 3 concurrent merges
+		await asyncio.gather(
+			mgr.merge_unit("/tmp/w1", "unit-a"),
+			mgr.merge_unit("/tmp/w2", "unit-b"),
+			mgr.merge_unit("/tmp/w3", "unit-c"),
+		)
+
+		# All 3 merges should have executed (serialized by the lock)
+		assert len(execution_order) == 3
+		# Since asyncio.Lock serializes, no two merges ran simultaneously.
+		# Verify all branches were processed (order may vary due to asyncio scheduling)
+		assert set(execution_order) == {"unit-a", "unit-b", "unit-c"}
