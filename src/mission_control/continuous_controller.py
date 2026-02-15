@@ -22,8 +22,6 @@ from mission_control.models import (
 	Epoch,
 	Handoff,
 	Mission,
-	Plan,
-	PlanNode,
 	Signal,
 	UnitEvent,
 	Worker,
@@ -411,8 +409,10 @@ class ContinuousController:
 		result: ContinuousMissionResult,
 	) -> None:
 		"""Dispatch work units to free workers as they become available."""
-		assert self._planner is not None
-		assert self._backend is not None
+		if self._planner is None:
+			raise RuntimeError("Controller not initialized: call start() first")
+		if self._backend is None:
+			raise RuntimeError("Controller not initialized: call start() first")
 
 		num_workers = self.config.scheduler.parallel.num_workers
 		semaphore = asyncio.Semaphore(num_workers)
@@ -556,7 +556,8 @@ class ContinuousController:
 		result: ContinuousMissionResult,
 	) -> None:
 		"""Process completed units: verify, merge, record feedback."""
-		assert self._green_branch is not None
+		if self._green_branch is None:
+			raise RuntimeError("Controller not initialized: call start() first")
 
 		cont = self.config.continuous
 
@@ -877,7 +878,8 @@ class ContinuousController:
 		await asyncio.sleep(delay)
 		if not self.running:
 			return
-		assert self._semaphore is not None
+		if self._semaphore is None:
+			raise RuntimeError("Controller not initialized: call start() first")
 		await self._semaphore.acquire()
 		task = asyncio.create_task(
 			self._execute_single_unit(unit, epoch, mission, self._semaphore),
@@ -893,7 +895,8 @@ class ContinuousController:
 		semaphore: asyncio.Semaphore,
 	) -> None:
 		"""Execute a single work unit and put completion on queue."""
-		assert self._backend is not None
+		if self._backend is None:
+			raise RuntimeError("Controller not initialized: call start() first")
 
 		source_repo = str(self.config.target.resolved_path)
 		base_branch = self.config.green_branch.green_branch
@@ -1239,50 +1242,6 @@ class ContinuousController:
 				await self._backend.release_workspace(workspace)
 			semaphore.release()
 
-	def _persist_plan_tree(self, node: PlanNode, plan: Plan) -> None:
-		"""Persist the in-memory plan tree to the database."""
-		try:
-			self.db.insert_plan_node(node)
-		except Exception as exc:
-			logger.error(
-				"Failed to insert plan node %s: %s", node.id, exc, exc_info=True,
-			)
-			raise
-
-		if hasattr(node, "_forced_unit"):
-			wu = node._forced_unit
-			try:
-				self.db.insert_work_unit(wu)
-			except Exception as exc:
-				logger.error(
-					"Failed to insert forced work unit %s: %s",
-					wu.id, exc, exc_info=True,
-				)
-				raise
-
-		if hasattr(node, "_child_leaves"):
-			for leaf, wu in node._child_leaves:
-				try:
-					self.db.insert_plan_node(leaf)
-				except Exception as exc:
-					logger.error(
-						"Failed to insert child plan node %s: %s",
-						leaf.id, exc, exc_info=True,
-					)
-					raise
-				try:
-					self.db.insert_work_unit(wu)
-				except Exception as exc:
-					logger.error(
-						"Failed to insert child work unit %s: %s",
-						wu.id, exc, exc_info=True,
-					)
-					raise
-
-		if hasattr(node, "_subdivided_children"):
-			for child in node._subdivided_children:
-				self._persist_plan_tree(child, plan)
-
 	def _build_planner_context(self, mission_id: str) -> str:
 		"""Build planner context from recent handoff summaries."""
 		try:
@@ -1543,7 +1502,8 @@ class ContinuousController:
 
 		Returns (passed, output) tuple.
 		"""
-		assert self._green_branch is not None
+		if self._green_branch is None:
+			raise RuntimeError("Controller not initialized: call start() first")
 		verify_cmd = self.config.target.verification.command
 		gb = self.config.green_branch
 
