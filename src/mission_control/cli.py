@@ -503,17 +503,16 @@ COMMANDS = {
 
 
 def main(argv: list[str] | None = None) -> int:
-	handler = logging.StreamHandler()
-	handler.setFormatter(logging.Formatter(
-		"%(asctime)s %(levelname)s %(name)s: %(message)s",
-		datefmt="%H:%M:%S",
-	))
-	handler.flush = lambda: handler.stream.flush()  # type: ignore[assignment]
-	logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
-	# Force unbuffered stdout/stderr for nohup/redirect scenarios
+	# Force line-buffered stderr for nohup/redirect scenarios
 	import sys
 	if hasattr(sys.stderr, "reconfigure"):
 		sys.stderr.reconfigure(line_buffering=True)  # type: ignore[union-attr]
+	logging.basicConfig(
+		level=logging.INFO,
+		format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+		datefmt="%H:%M:%S",
+		force=True,
+	)
 	parser = build_parser()
 	args = parser.parse_args(argv)
 
