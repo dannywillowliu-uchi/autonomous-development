@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime, timezone
 
+from pydantic import ValidationError
+
 from mission_control.config import MissionConfig
 from mission_control.json_utils import extract_json_from_text
-from mission_control.models import Session, Snapshot, TaskRecord
+from mission_control.models import MCResultSchema, Session, Snapshot, TaskRecord
+
+logger = logging.getLogger(__name__)
 
 PROMPT_TEMPLATE = """\
 You are working on {target_name} at {target_path}.
@@ -78,17 +83,58 @@ def parse_mc_result(output: str) -> dict[str, object] | None:
 	# Try balanced brace extraction (handles multiline JSON)
 	result = extract_json_from_text(remainder)
 	if isinstance(result, dict):
-		return result
+		return validate_mc_result(result)
 
 	# Fallback: single-line regex for simple cases
 	match = re.search(r"\{.*\}", remainder.split("\n")[0])
 	if match:
 		try:
-			return json.loads(match.group(0))  # type: ignore[no-any-return]
+			raw = json.loads(match.group(0))
+			if isinstance(raw, dict):
+				return validate_mc_result(raw)
 		except json.JSONDecodeError:
 			pass
 
 	return None
+
+
+_MC_RESULT_DEFAULTS: dict[str, object] = {
+	"status": "failed",
+	"commits": [],
+	"summary": "",
+	"files_changed": [],
+	"discoveries": [],
+	"concerns": [],
+}
+
+
+def validate_mc_result(raw: dict[str, object]) -> dict[str, object]:
+	"""Validate an MC_RESULT dict against MCResultSchema.
+
+	On success, returns the validated dict. On ValidationError, extracts
+	whatever valid fields exist and returns a degraded dict with defaults
+	for missing/invalid fields. Logs a warning on degraded parse.
+	"""
+	try:
+		validated = MCResultSchema.model_validate(raw)
+		return validated.model_dump()
+	except ValidationError as exc:
+		logger.warning("MC_RESULT schema validation failed, extracting valid fields: %s", exc)
+		degraded: dict[str, object] = {}
+		for field_name in MCResultSchema.model_fields:
+			value = raw.get(field_name)
+			if value is not None:
+				try:
+					partial = MCResultSchema.model_validate({
+						**_MC_RESULT_DEFAULTS,
+						field_name: value,
+					})
+					degraded[field_name] = getattr(partial, field_name)
+				except ValidationError:
+					degraded[field_name] = _MC_RESULT_DEFAULTS[field_name]
+			else:
+				degraded[field_name] = _MC_RESULT_DEFAULTS[field_name]
+		return degraded
 
 
 def build_branch_name(session_id: str) -> str:
