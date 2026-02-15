@@ -1,19 +1,29 @@
 """Telegram notifications for mission events.
 
 Uses async httpx client. Notifications are batched over a 5-second window
-and sent as a single concatenated message to reduce API calls.
+and sent as a single concatenated message to reduce API calls. Includes
+priority-based backpressure: when the internal queue exceeds MAX_QUEUE_SIZE,
+low-priority notifications are dropped.
 """
 
 from __future__ import annotations
 
 import asyncio
+import enum
 import logging
+from collections import deque
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 BATCH_WINDOW = 5.0
+MAX_QUEUE_SIZE = 100
+
+
+class NotificationPriority(enum.Enum):
+	HIGH = "high"
+	LOW = "low"
 
 
 class TelegramNotifier:
@@ -23,8 +33,9 @@ class TelegramNotifier:
 		self._bot_token = bot_token
 		self._chat_id = chat_id
 		self._client: httpx.AsyncClient | None = None
-		self._batch_queue: asyncio.Queue[str] = asyncio.Queue()
+		self._priority_queue: deque[tuple[NotificationPriority, str]] = deque()
 		self._batch_task: asyncio.Task[None] | None = None
+		self._queue_event: asyncio.Event = asyncio.Event()
 
 	async def _ensure_client(self) -> httpx.AsyncClient:
 		if self._client is None:
@@ -38,20 +49,18 @@ class TelegramNotifier:
 	async def _batch_loop(self) -> None:
 		"""Collect messages for BATCH_WINDOW seconds, then flush."""
 		while True:
-			messages: list[str] = []
 			try:
-				msg = await self._batch_queue.get()
-				messages.append(msg)
+				await self._queue_event.wait()
+				self._queue_event.clear()
 			except asyncio.CancelledError:
 				return
 
 			await asyncio.sleep(BATCH_WINDOW)
 
-			while not self._batch_queue.empty():
-				try:
-					messages.append(self._batch_queue.get_nowait())
-				except asyncio.QueueEmpty:
-					break
+			messages: list[str] = []
+			while self._priority_queue:
+				_, msg = self._priority_queue.popleft()
+				messages.append(msg)
 
 			await self._flush_batch(messages)
 
@@ -72,10 +81,32 @@ class TelegramNotifier:
 		except Exception as exc:
 			logger.warning("Telegram send failed: %s", exc)
 
-	async def send(self, message: str) -> None:
-		"""Queue a message for batched delivery."""
+	def _apply_backpressure(self) -> None:
+		"""Drop low-priority messages when queue exceeds MAX_QUEUE_SIZE."""
+		if len(self._priority_queue) <= MAX_QUEUE_SIZE:
+			return
+		high: list[tuple[NotificationPriority, str]] = []
+		low: list[tuple[NotificationPriority, str]] = []
+		for item in self._priority_queue:
+			if item[0] == NotificationPriority.HIGH:
+				high.append(item)
+			else:
+				low.append(item)
+		low_slots = max(0, MAX_QUEUE_SIZE - len(high))
+		dropped = len(low) - low_slots
+		if dropped > 0:
+			low = low[:low_slots]
+			logger.warning("Backpressure: dropped %d low-priority notifications", dropped)
+		self._priority_queue.clear()
+		self._priority_queue.extend(high)
+		self._priority_queue.extend(low)
+
+	async def send(self, message: str, priority: NotificationPriority = NotificationPriority.LOW) -> None:
+		"""Queue a message for batched delivery with optional priority."""
 		self._ensure_batch_task()
-		self._batch_queue.put_nowait(message)
+		self._priority_queue.append((priority, message))
+		self._apply_backpressure()
+		self._queue_event.set()
 
 	async def close(self) -> None:
 		"""Flush remaining messages and close the HTTP client."""
@@ -87,11 +118,9 @@ class TelegramNotifier:
 				pass
 
 		remaining: list[str] = []
-		while not self._batch_queue.empty():
-			try:
-				remaining.append(self._batch_queue.get_nowait())
-			except asyncio.QueueEmpty:
-				break
+		while self._priority_queue:
+			_, msg = self._priority_queue.popleft()
+			remaining.append(msg)
 		if remaining:
 			await self._flush_batch(remaining)
 
@@ -103,7 +132,8 @@ class TelegramNotifier:
 		await self.send(
 			f"*Mission started*\n"
 			f"Objective: {objective[:200]}\n"
-			f"Workers: {workers}"
+			f"Workers: {workers}",
+			priority=NotificationPriority.HIGH,
 		)
 
 	async def send_mission_end(
@@ -126,10 +156,11 @@ class TelegramNotifier:
 			lines.append(
 				f"Final verification: {'PASS' if verification_passed else 'FAIL'}"
 			)
-		await self.send("\n".join(lines))
+		await self.send("\n".join(lines), priority=NotificationPriority.HIGH)
 
 	async def send_merge_conflict(self, unit_title: str, failure: str) -> None:
 		await self.send(
 			f"Merge conflict: {unit_title[:100]}\n"
-			f"```\n{failure[:300]}\n```"
+			f"```\n{failure[:300]}\n```",
+			priority=NotificationPriority.HIGH,
 		)
