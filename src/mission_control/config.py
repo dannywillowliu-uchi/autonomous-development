@@ -121,6 +121,18 @@ class ContinuousConfig:
 
 
 @dataclass
+class DiscoveryConfig:
+	"""Auto-discovery settings."""
+
+	enabled: bool = True
+	tracks: list[str] = field(default_factory=lambda: ["feature", "quality", "security"])
+	max_items_per_track: int = 3
+	min_priority_score: float = 3.0
+	model: str = "opus"
+	budget_per_call_usd: float = 2.0
+
+
+@dataclass
 class GreenBranchConfig:
 	"""Green branch pattern settings."""
 
@@ -197,6 +209,7 @@ class MissionConfig:
 	green_branch: GreenBranchConfig = field(default_factory=GreenBranchConfig)
 	backend: BackendConfig = field(default_factory=BackendConfig)
 	pricing: PricingConfig = field(default_factory=PricingConfig)
+	discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
 	heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
 	notifications: NotificationConfig = field(default_factory=NotificationConfig)
 
@@ -329,6 +342,24 @@ def _build_green_branch(data: dict[str, Any]) -> GreenBranchConfig:
 	return gc
 
 
+def _build_discovery(data: dict[str, Any]) -> DiscoveryConfig:
+	dc = DiscoveryConfig()
+	if "enabled" in data:
+		dc.enabled = bool(data["enabled"])
+	if "tracks" in data:
+		dc.tracks = list(data["tracks"])
+	for key in ("max_items_per_track",):
+		if key in data:
+			setattr(dc, key, int(data[key]))
+	if "min_priority_score" in data:
+		dc.min_priority_score = float(data["min_priority_score"])
+	if "model" in data:
+		dc.model = str(data["model"])
+	if "budget_per_call_usd" in data:
+		dc.budget_per_call_usd = float(data["budget_per_call_usd"])
+	return dc
+
+
 def _build_pricing(data: dict[str, Any]) -> PricingConfig:
 	pc = PricingConfig()
 	for key in ("input_per_million", "output_per_million", "cache_write_per_million", "cache_read_per_million"):
@@ -431,6 +462,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.green_branch = _build_green_branch(data["green_branch"])
 	if "backend" in data:
 		mc.backend = _build_backend(data["backend"])
+	if "discovery" in data:
+		mc.discovery = _build_discovery(data["discovery"])
 	if "pricing" in data:
 		mc.pricing = _build_pricing(data["pricing"])
 	if "heartbeat" in data:
