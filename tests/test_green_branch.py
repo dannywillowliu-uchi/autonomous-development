@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -807,3 +809,268 @@ class TestPollHealthCheck:
 		assert mock_uniform.call_count == 2
 		for call in mock_uniform.call_args_list:
 			assert call.args == (3.0, 7.0)
+
+
+def _run(cmd: list[str], cwd: str | Path) -> str:
+	"""Run a git command synchronously, raise on failure."""
+	result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=True)
+	return result.stdout.strip()
+
+
+def _setup_source_repo(tmp_path: Path) -> tuple[Path, Path]:
+	"""Create a bare source repo and a workspace clone with initial commits.
+
+	Returns (source_repo, workspace) paths.
+	"""
+	source = tmp_path / "source.git"
+	source.mkdir()
+	_run(["git", "init", "--bare"], source)
+
+	# Create a temporary clone to make initial commits
+	setup_clone = tmp_path / "setup-clone"
+	_run(["git", "clone", str(source), str(setup_clone)], tmp_path)
+	_run(["git", "config", "user.email", "test@test.com"], setup_clone)
+	_run(["git", "config", "user.name", "Test"], setup_clone)
+
+	# Initial commit on main
+	(setup_clone / "README.md").write_text("# Test Project\n")
+	_run(["git", "add", "README.md"], setup_clone)
+	_run(["git", "commit", "-m", "Initial commit"], setup_clone)
+	_run(["git", "push", "origin", "main"], setup_clone)
+
+	# Second commit so there's history
+	(setup_clone / "app.py").write_text("print('hello')\n")
+	_run(["git", "add", "app.py"], setup_clone)
+	_run(["git", "commit", "-m", "Add app.py"], setup_clone)
+	_run(["git", "push", "origin", "main"], setup_clone)
+
+	# Create mc/green branch in source repo pointing to main
+	main_hash = _run(["git", "rev-parse", "main"], setup_clone)
+	_run(["git", "branch", "mc/green", main_hash], setup_clone)
+	_run(["git", "push", "origin", "mc/green"], setup_clone)
+	_run(["git", "branch", "mc/working", main_hash], setup_clone)
+	_run(["git", "push", "origin", "mc/working"], setup_clone)
+
+	# Create the workspace clone (this is what GreenBranchManager operates on)
+	workspace = tmp_path / "workspace"
+	_run(["git", "clone", str(source), str(workspace)], tmp_path)
+	_run(["git", "config", "user.email", "test@test.com"], workspace)
+	_run(["git", "config", "user.name", "Test"], workspace)
+	# Track mc/green and mc/working locally
+	_run(["git", "branch", "mc/green", "origin/mc/green"], workspace)
+	_run(["git", "branch", "mc/working", "origin/mc/working"], workspace)
+
+	return source, workspace
+
+
+def _make_worker_clone(tmp_path: Path, source: Path, name: str) -> Path:
+	"""Create a worker clone from the source repo and return its path."""
+	worker = tmp_path / name
+	_run(["git", "clone", str(source), str(worker)], tmp_path)
+	_run(["git", "config", "user.email", "worker@test.com"], worker)
+	_run(["git", "config", "user.name", "Worker"], worker)
+	return worker
+
+
+def _real_config(source: Path) -> MissionConfig:
+	"""Build a MissionConfig pointing at real repos."""
+	mc = MissionConfig()
+	mc.target = TargetConfig(
+		name="test",
+		path=str(source),
+		branch="main",
+		verification=VerificationConfig(command="true"),
+	)
+	mc.green_branch = GreenBranchConfig(
+		working_branch="mc/working",
+		green_branch="mc/green",
+		reset_on_init=False,
+	)
+	return mc
+
+
+class TestGreenBranchRealGit:
+	"""Integration tests using real git repos -- no mocks."""
+
+	async def test_merge_unit_creates_merge_commit_on_green(self, tmp_path: Path) -> None:
+		"""merge_unit produces a merge commit on mc/green with correct parents."""
+		source, workspace = _setup_source_repo(tmp_path)
+		config = _real_config(source)
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+		mgr.workspace = str(workspace)
+
+		# Get mc/green hash before merge
+		green_before = _run(["git", "rev-parse", "mc/green"], workspace)
+
+		# Create a worker clone and make a commit on a unit branch
+		worker = _make_worker_clone(tmp_path, source, "worker1")
+		_run(["git", "checkout", "-b", "unit/feature-a"], worker)
+		(worker / "feature_a.py").write_text("# Feature A\n")
+		_run(["git", "add", "feature_a.py"], worker)
+		_run(["git", "commit", "-m", "Add feature A"], worker)
+		unit_hash = _run(["git", "rev-parse", "HEAD"], worker)
+
+		result = await mgr.merge_unit(str(worker), "unit/feature-a")
+
+		assert result.merged is True
+		assert result.rebase_ok is True
+		assert result.failure_output == ""
+
+		# Verify mc/green advanced
+		green_after = _run(["git", "rev-parse", "mc/green"], workspace)
+		assert green_after != green_before
+
+		# Verify it's a merge commit (2 parents)
+		parents = _run(["git", "log", "-1", "--format=%P", "mc/green"], workspace)
+		parent_list = parents.split()
+		assert len(parent_list) == 2
+		assert green_before in parent_list
+		# The other parent should be the unit commit
+		assert unit_hash in parent_list
+
+		# Verify the file exists on mc/green
+		_run(["git", "checkout", "mc/green"], workspace)
+		assert (workspace / "feature_a.py").exists()
+
+	async def test_merge_conflict_detection(self, tmp_path: Path) -> None:
+		"""Two workers modifying the same line -- first merges, second gets conflict."""
+		source, workspace = _setup_source_repo(tmp_path)
+		config = _real_config(source)
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+		mgr.workspace = str(workspace)
+
+		# Worker 1: modify app.py line 1
+		worker1 = _make_worker_clone(tmp_path, source, "worker-conflict-1")
+		_run(["git", "checkout", "-b", "unit/change-1"], worker1)
+		(worker1 / "app.py").write_text("print('worker 1 was here')\n")
+		_run(["git", "add", "app.py"], worker1)
+		_run(["git", "commit", "-m", "Worker 1 change"], worker1)
+
+		# Worker 2: modify the same line differently
+		worker2 = _make_worker_clone(tmp_path, source, "worker-conflict-2")
+		_run(["git", "checkout", "-b", "unit/change-2"], worker2)
+		(worker2 / "app.py").write_text("print('worker 2 was here')\n")
+		_run(["git", "add", "app.py"], worker2)
+		_run(["git", "commit", "-m", "Worker 2 change"], worker2)
+
+		# First merge succeeds
+		result1 = await mgr.merge_unit(str(worker1), "unit/change-1")
+		assert result1.merged is True
+
+		# Second merge should fail with conflict
+		result2 = await mgr.merge_unit(str(worker2), "unit/change-2")
+		assert result2.merged is False
+		assert result2.rebase_ok is False
+		assert "conflict" in result2.failure_output.lower()
+
+		# Verify mc/green still has worker 1's content (not corrupted)
+		_run(["git", "checkout", "mc/green"], workspace)
+		content = (workspace / "app.py").read_text()
+		assert "worker 1 was here" in content
+
+	async def test_cleanup_after_merge(self, tmp_path: Path) -> None:
+		"""Temp branch and worker remote are removed after merge."""
+		source, workspace = _setup_source_repo(tmp_path)
+		config = _real_config(source)
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+		mgr.workspace = str(workspace)
+
+		worker = _make_worker_clone(tmp_path, source, "worker-cleanup")
+		_run(["git", "checkout", "-b", "unit/cleanup-test"], worker)
+		(worker / "cleanup.py").write_text("# cleanup\n")
+		_run(["git", "add", "cleanup.py"], worker)
+		_run(["git", "commit", "-m", "Cleanup test"], worker)
+
+		result = await mgr.merge_unit(str(worker), "unit/cleanup-test")
+		assert result.merged is True
+
+		# Temp branch mc/merge-unit/cleanup-test should not exist
+		branches = _run(["git", "branch"], workspace)
+		assert "mc/merge-" not in branches
+
+		# Worker remote should not exist
+		remotes = _run(["git", "remote"], workspace)
+		assert "worker-unit/cleanup-test" not in remotes
+
+	async def test_cleanup_after_failed_merge(self, tmp_path: Path) -> None:
+		"""Temp branch and worker remote are removed even when merge fails."""
+		source, workspace = _setup_source_repo(tmp_path)
+		config = _real_config(source)
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+		mgr.workspace = str(workspace)
+
+		# First merge: occupy mc/green with a change to app.py
+		worker1 = _make_worker_clone(tmp_path, source, "worker-ok")
+		_run(["git", "checkout", "-b", "unit/ok"], worker1)
+		(worker1 / "app.py").write_text("print('occupied')\n")
+		_run(["git", "add", "app.py"], worker1)
+		_run(["git", "commit", "-m", "Occupy"], worker1)
+		await mgr.merge_unit(str(worker1), "unit/ok")
+
+		# Second merge: conflicting change
+		worker2 = _make_worker_clone(tmp_path, source, "worker-fail")
+		_run(["git", "checkout", "-b", "unit/fail"], worker2)
+		(worker2 / "app.py").write_text("print('conflict')\n")
+		_run(["git", "add", "app.py"], worker2)
+		_run(["git", "commit", "-m", "Conflict"], worker2)
+		result = await mgr.merge_unit(str(worker2), "unit/fail")
+		assert result.merged is False
+
+		# Cleanup still happened
+		branches = _run(["git", "branch"], workspace)
+		assert "mc/merge-" not in branches
+		remotes = _run(["git", "remote"], workspace)
+		assert "worker-unit/fail" not in remotes
+
+	async def test_sync_to_source_updates_source_repo(self, tmp_path: Path) -> None:
+		"""After merge_unit, source repo's mc/green matches workspace's mc/green."""
+		source, workspace = _setup_source_repo(tmp_path)
+		config = _real_config(source)
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+		mgr.workspace = str(workspace)
+
+		worker = _make_worker_clone(tmp_path, source, "worker-sync")
+		_run(["git", "checkout", "-b", "unit/sync-test"], worker)
+		(worker / "sync.py").write_text("# sync\n")
+		_run(["git", "add", "sync.py"], worker)
+		_run(["git", "commit", "-m", "Sync test"], worker)
+
+		await mgr.merge_unit(str(worker), "unit/sync-test")
+
+		# Source repo's mc/green should match workspace's mc/green
+		ws_green = _run(["git", "rev-parse", "mc/green"], workspace)
+		src_green = _run(["git", "rev-parse", "mc/green"], source)
+		assert ws_green == src_green
+
+	async def test_sequential_merges_advance_green(self, tmp_path: Path) -> None:
+		"""Multiple sequential merges each advance mc/green."""
+		source, workspace = _setup_source_repo(tmp_path)
+		config = _real_config(source)
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+		mgr.workspace = str(workspace)
+
+		hashes: list[str] = []
+		hashes.append(_run(["git", "rev-parse", "mc/green"], workspace))
+
+		for i in range(3):
+			worker = _make_worker_clone(tmp_path, source, f"worker-seq-{i}")
+			_run(["git", "checkout", "-b", f"unit/seq-{i}"], worker)
+			(worker / f"seq_{i}.py").write_text(f"# seq {i}\n")
+			_run(["git", "add", f"seq_{i}.py"], worker)
+			_run(["git", "commit", "-m", f"Sequential {i}"], worker)
+
+			result = await mgr.merge_unit(str(worker), f"unit/seq-{i}")
+			assert result.merged is True
+			hashes.append(_run(["git", "rev-parse", "mc/green"], workspace))
+
+		# All hashes should be unique (mc/green advanced each time)
+		assert len(set(hashes)) == 4
+		# Each hash should be different from the previous
+		for j in range(1, len(hashes)):
+			assert hashes[j] != hashes[j - 1]
