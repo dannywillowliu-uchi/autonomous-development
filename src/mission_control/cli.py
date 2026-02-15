@@ -8,7 +8,7 @@ import logging
 import sys
 from pathlib import Path
 
-from mission_control.config import load_config
+from mission_control.config import load_config, validate_config
 from mission_control.db import Database
 from mission_control.scheduler import Scheduler
 
@@ -104,6 +104,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 	# mc mcp
 	sub.add_parser("mcp", help="Start the MCP server (stdio)")
+
+	# mc validate-config
+	vc = sub.add_parser("validate-config", help="Validate config file semantically")
+	vc.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
 
 	return parser
 
@@ -710,6 +714,24 @@ def cmd_projects(args: argparse.Namespace) -> int:
 		registry.close()
 
 
+def cmd_validate_config(args: argparse.Namespace) -> int:
+	"""Validate config file semantically."""
+	config = load_config(args.config)
+	issues = validate_config(config)
+
+	errors = [(lvl, msg) for lvl, msg in issues if lvl == "error"]
+	warnings = [(lvl, msg) for lvl, msg in issues if lvl == "warning"]
+
+	for level, msg in issues:
+		print(f"[{level.upper()}] {msg}")
+
+	if not issues:
+		print("Config OK")
+
+	print(f"\n{len(errors)} error(s), {len(warnings)} warning(s)")
+	return 1 if errors else 0
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
 	"""Start the MCP server."""
 	try:
@@ -739,6 +761,7 @@ COMMANDS = {
 	"unregister": cmd_unregister,
 	"projects": cmd_projects,
 	"mcp": cmd_mcp,
+	"validate-config": cmd_validate_config,
 }
 
 

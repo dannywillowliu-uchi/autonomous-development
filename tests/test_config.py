@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from mission_control.config import MissionConfig, load_config
+from mission_control.config import MissionConfig, load_config, validate_config
 
 
 @pytest.fixture()
@@ -451,3 +452,130 @@ budget_per_call_usd = 3.0
 	assert cfg.discovery.research_enabled is True
 	assert cfg.discovery.research_model == "sonnet"
 	assert cfg.discovery.research_parallel_queries == 3
+
+
+# -- validate_config tests --
+
+
+def _make_git_repo(path: Path) -> None:
+	"""Initialize a bare git repo at the given path."""
+	path.mkdir(parents=True, exist_ok=True)
+	subprocess.run(["git", "init", str(path)], capture_output=True, check=True)
+
+
+def _valid_config(tmp_path: Path) -> MissionConfig:
+	"""Build a MissionConfig that passes all validation checks."""
+	repo = tmp_path / "repo"
+	_make_git_repo(repo)
+	cfg = MissionConfig()
+	cfg.target.name = "test"
+	cfg.target.path = str(repo)
+	cfg.target.verification.command = "git status"
+	# Disable telegram notifications so token isn't checked
+	cfg.notifications.telegram.on_heartbeat = False
+	cfg.notifications.telegram.on_merge_fail = False
+	cfg.notifications.telegram.on_mission_end = False
+	return cfg
+
+
+def test_validate_valid_config(tmp_path: Path) -> None:
+	"""A well-formed config produces no errors or warnings."""
+	cfg = _valid_config(tmp_path)
+	issues = validate_config(cfg)
+	assert issues == []
+
+
+def test_validate_missing_target_path(tmp_path: Path) -> None:
+	"""Missing target.path generates an error."""
+	cfg = _valid_config(tmp_path)
+	cfg.target.path = str(tmp_path / "nonexistent")
+	issues = validate_config(cfg)
+	errors = [msg for lvl, msg in issues if lvl == "error"]
+	assert any("does not exist" in e for e in errors)
+
+
+def test_validate_non_git_path(tmp_path: Path) -> None:
+	"""A directory without .git generates an error."""
+	plain_dir = tmp_path / "plain"
+	plain_dir.mkdir()
+	cfg = _valid_config(tmp_path)
+	cfg.target.path = str(plain_dir)
+	issues = validate_config(cfg)
+	errors = [msg for lvl, msg in issues if lvl == "error"]
+	assert any("not a git repository" in e for e in errors)
+
+
+def test_validate_bad_bot_token_format(tmp_path: Path) -> None:
+	"""Invalid Telegram bot_token format generates an error."""
+	cfg = _valid_config(tmp_path)
+	cfg.notifications.telegram.on_heartbeat = True
+	cfg.notifications.telegram.bot_token = "not-a-valid-token"
+	issues = validate_config(cfg)
+	errors = [msg for lvl, msg in issues if lvl == "error"]
+	assert any("bot_token format invalid" in e for e in errors)
+
+
+def test_validate_good_bot_token_format(tmp_path: Path) -> None:
+	"""Valid Telegram bot_token format does not generate an error."""
+	cfg = _valid_config(tmp_path)
+	cfg.notifications.telegram.on_heartbeat = True
+	cfg.notifications.telegram.bot_token = "123456789:ABCdefGHIjklMNOpqrsTUVwxyz_012345"
+	issues = validate_config(cfg)
+	errors = [msg for lvl, msg in issues if lvl == "error"]
+	assert not any("bot_token" in e for e in errors)
+
+
+def test_validate_suspicious_session_timeout(tmp_path: Path) -> None:
+	"""session_timeout < 60 generates a warning."""
+	cfg = _valid_config(tmp_path)
+	cfg.scheduler.session_timeout = 30
+	issues = validate_config(cfg)
+	warnings = [msg for lvl, msg in issues if lvl == "warning"]
+	assert any("session_timeout" in w for w in warnings)
+
+
+def test_validate_suspicious_num_workers(tmp_path: Path) -> None:
+	"""num_workers > 8 generates a warning."""
+	cfg = _valid_config(tmp_path)
+	cfg.scheduler.parallel.num_workers = 16
+	issues = validate_config(cfg)
+	warnings = [msg for lvl, msg in issues if lvl == "warning"]
+	assert any("num_workers" in w for w in warnings)
+
+
+def test_validate_zero_workers(tmp_path: Path) -> None:
+	"""num_workers == 0 generates a warning."""
+	cfg = _valid_config(tmp_path)
+	cfg.scheduler.parallel.num_workers = 0
+	issues = validate_config(cfg)
+	warnings = [msg for lvl, msg in issues if lvl == "warning"]
+	assert any("num_workers is zero" in w for w in warnings)
+
+
+def test_validate_pool_dir_writable(tmp_path: Path) -> None:
+	"""Non-existent pool_dir generates an error."""
+	cfg = _valid_config(tmp_path)
+	cfg.scheduler.parallel.pool_dir = str(tmp_path / "nonexistent_pool")
+	issues = validate_config(cfg)
+	errors = [msg for lvl, msg in issues if lvl == "error"]
+	assert any("pool_dir" in e for e in errors)
+
+
+def test_validate_pool_dir_exists_writable(tmp_path: Path) -> None:
+	"""Existing writable pool_dir generates no error."""
+	pool = tmp_path / "pool"
+	pool.mkdir()
+	cfg = _valid_config(tmp_path)
+	cfg.scheduler.parallel.pool_dir = str(pool)
+	issues = validate_config(cfg)
+	errors = [msg for lvl, msg in issues if lvl == "error"]
+	assert not any("pool_dir" in e for e in errors)
+
+
+def test_validate_verification_command_not_found(tmp_path: Path) -> None:
+	"""Non-existent verification command first token generates an error."""
+	cfg = _valid_config(tmp_path)
+	cfg.target.verification.command = "totally_nonexistent_binary_xyz --check"
+	issues = validate_config(cfg)
+	errors = [msg for lvl, msg in issues if lvl == "error"]
+	assert any("verification command not found" in e for e in errors)
