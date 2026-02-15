@@ -82,11 +82,6 @@ def build_parser() -> argparse.ArgumentParser:
 	live.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
 	live.add_argument("--port", type=int, default=8080, help="Port to serve on")
 
-	# mc web
-	web = sub.add_parser("web", help="Launch web dashboard (legacy)")
-	web.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
-	web.add_argument("--port", type=int, default=8080, help="Port to serve on")
-
 	# mc register
 	reg = sub.add_parser("register", help="Register a project in the central registry")
 	reg.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
@@ -532,41 +527,6 @@ def cmd_live(args: argparse.Namespace) -> int:
 	return 0
 
 
-def cmd_web(args: argparse.Namespace) -> int:
-	"""Launch the web dashboard."""
-	try:
-		import uvicorn
-
-		from mission_control.dashboard.web.server import create_app
-	except ImportError:
-		print("Dashboard dependencies not installed. Run: pip install -e '.[dashboard]'")
-		return 1
-
-	from mission_control.registry import ProjectRegistry
-
-	registry = ProjectRegistry()
-
-	# Auto-register current project if config exists and not already registered
-	config_path = Path(args.config).resolve()
-	if config_path.exists():
-		try:
-			config = load_config(str(config_path))
-			name = config.target.name
-			db_path = str(config_path.parent / DEFAULT_DB)
-			try:
-				registry.register(name=name, config_path=str(config_path), db_path=db_path)
-				print(f"Auto-registered project '{name}'")
-			except ValueError:
-				pass  # Already registered
-		except Exception:
-			pass
-
-	app = create_app(registry=registry)
-	print(f"Starting web dashboard at http://localhost:{args.port}")
-	uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="warning")
-	return 0
-
-
 def cmd_register(args: argparse.Namespace) -> int:
 	"""Register a project in the central registry."""
 	from mission_control.registry import ProjectRegistry
@@ -659,7 +619,7 @@ COMMANDS = {
 	"init": cmd_init,
 	"dashboard": cmd_dashboard,
 	"live": cmd_live,
-	"web": cmd_web,
+
 	"register": cmd_register,
 	"unregister": cmd_unregister,
 	"projects": cmd_projects,

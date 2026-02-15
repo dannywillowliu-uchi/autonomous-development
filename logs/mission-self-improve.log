@@ -1,0 +1,1023 @@
+16:30:36 INFO mission_control.green_branch: Resetting branch mc/working in source repo to main
+16:30:36 INFO mission_control.green_branch: Resetting branch mc/green in source repo to main
+16:30:37 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+16:31:46 INFO mission_control.overlap: Overlap detected: Add planner retry on parse failure and Add research unit type with merge skip share files {'src/mission_control/recursive_planner.py'}; Add research unit type with merge skip now depends on Add planner retry on parse failure
+16:31:46 INFO mission_control.overlap: Overlap detected: Inject MISSION_STATE.md and file-locking and Add auto-retry with exponential backoff  share files {'tests/test_continuous_controller.py', 'src/mission_control/continuous_controller.py'}; Add auto-retry with exponential backoff  now depends on Inject MISSION_STATE.md and file-locking
+16:31:46 INFO mission_control.overlap: Overlap detected: Inject MISSION_STATE.md and file-locking and Add structured mission summary report at share files {'src/mission_control/continuous_controller.py'}; Add structured mission summary report at now depends on Inject MISSION_STATE.md and file-locking
+16:31:46 INFO mission_control.overlap: Overlap detected: Add research unit type with merge skip and Add structured mission summary report at share files {'src/mission_control/continuous_controller.py'}; Add structured mission summary report at now depends on Add research unit type with merge skip
+16:31:46 INFO mission_control.continuous_planner: Replanned epoch 1: 5 units (1 served, 4 backlogged)
+16:34:58 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-64' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+16:39:44 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-94' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+16:44:52 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-120' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+16:50:55 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+16:50:55 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-146' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+16:51:51 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: PLANNER RELIABILITY: Add retry logic in recursive_planner.py _invoke_planner_llm
+16:52:16 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: RESEARCH CAPABILITY: Add unit_type field to WorkUnit model (models.py), add DB m
+16:52:54 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: ERROR RECOVERY: Add auto-retry for failed work units in continuous_controller.py
+16:53:40 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: WORKER INTELLIGENCE: Improve render_mission_worker_prompt() in worker.py to (1) 
+16:54:17 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: OBSERVABILITY: Add a generate_mission_report() function (new file src/mission_co
+16:54:57 INFO mission_control.overlap: Overlap detected: Add research unit_type to WorkUnit model and Add auto-retry with exponential backoff  share files {'tests/test_continuous_controller.py', 'src/mission_control/continuous_controller.py'}; Add auto-retry with exponential backoff  now depends on Add research unit_type to WorkUnit model
+16:54:57 INFO mission_control.overlap: Overlap detected: Add research unit_type to WorkUnit model and Add mission state and file lock hints to share files {'tests/test_worker.py', 'src/mission_control/worker.py', 'src/mission_control/continuous_controller.py'}; Add mission state and file lock hints to now depends on Add research unit_type to WorkUnit model
+16:54:57 INFO mission_control.overlap: Overlap detected: Add research unit_type to WorkUnit model and Add generate_mission_report() in report. share files {'src/mission_control/continuous_controller.py'}; Add generate_mission_report() in report. now depends on Add research unit_type to WorkUnit model
+16:54:57 INFO mission_control.overlap: Overlap detected: Add auto-retry with exponential backoff  and Add mission state and file lock hints to share files {'src/mission_control/continuous_controller.py'}; Add mission state and file lock hints to now depends on Add auto-retry with exponential backoff 
+16:54:57 INFO mission_control.overlap: Overlap detected: Add auto-retry with exponential backoff  and Add generate_mission_report() in report. share files {'src/mission_control/continuous_controller.py'}; Add generate_mission_report() in report. now depends on Add auto-retry with exponential backoff 
+16:54:57 INFO mission_control.overlap: Overlap detected: Add mission state and file lock hints to and Add generate_mission_report() in report. share files {'src/mission_control/continuous_controller.py'}; Add generate_mission_report() in report. now depends on Add mission state and file lock hints to
+16:54:57 INFO mission_control.continuous_planner: Replanned epoch 2: 5 units (1 served, 4 backlogged)
+16:57:53 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-172' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:01:29 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-222' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:06:57 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-248' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:11:33 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-274' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:17:01 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+17:17:01 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-300' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:17:52 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: ERROR RECOVERY: Add auto-retry with exponential backoff for failed work units in
+17:18:36 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: WORKER INTELLIGENCE: Improve worker prompts in worker.py -- render_mission_worke
+17:19:29 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: OBSERVABILITY: Create a new report.py module that generates a structured mission
+17:20:08 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: PLANNER RELIABILITY: In recursive_planner.py _invoke_planner_llm, add retry logi
+17:20:37 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: RESEARCH CAPABILITY: Add a unit_type field ('task' default, 'research') to WorkU
+17:21:26 INFO mission_control.overlap: Overlap detected: Add retry config and controller retry lo and Wire MISSION_STATE.md reading and overla share files {'src/mission_control/continuous_controller.py'}; Wire MISSION_STATE.md reading and overla now depends on Add retry config and controller retry lo
+17:21:26 INFO mission_control.overlap: Overlap detected: Add retry config and controller retry lo and Integrate report generation into continu share files {'src/mission_control/continuous_controller.py'}; Integrate report generation into continu now depends on Add retry config and controller retry lo
+17:21:26 INFO mission_control.overlap: Overlap detected: Add retry config and controller retry lo and Propagate unit_type in planner and skip  share files {'src/mission_control/continuous_controller.py'}; Propagate unit_type in planner and skip  now depends on Add retry config and controller retry lo
+17:21:26 INFO mission_control.overlap: Overlap detected: Wire MISSION_STATE.md reading and overla and Integrate report generation into continu share files {'src/mission_control/continuous_controller.py'}; Integrate report generation into continu now depends on Wire MISSION_STATE.md reading and overla
+17:21:26 INFO mission_control.overlap: Overlap detected: Wire MISSION_STATE.md reading and overla and Propagate unit_type in planner and skip  share files {'src/mission_control/continuous_controller.py'}; Propagate unit_type in planner and skip  now depends on Wire MISSION_STATE.md reading and overla
+17:21:26 INFO mission_control.overlap: Overlap detected: Integrate report generation into continu and Propagate unit_type in planner and skip  share files {'src/mission_control/continuous_controller.py'}; Propagate unit_type in planner and skip  now depends on Integrate report generation into continu
+17:21:26 INFO mission_control.overlap: Overlap detected: Add parse retry logic to _invoke_planner and Propagate unit_type in planner and skip  share files {'src/mission_control/recursive_planner.py'}; Propagate unit_type in planner and skip  now depends on Add parse retry logic to _invoke_planner
+17:21:26 INFO mission_control.overlap: Overlap detected: Add tests for planner parse retry logic and Propagate unit_type in planner and skip  share files {'tests/test_recursive_planner.py'}; Propagate unit_type in planner and skip  now depends on Add tests for planner parse retry logic
+17:21:26 INFO mission_control.continuous_planner: Replanned epoch 3: 10 units (1 served, 9 backlogged)
+17:22:09 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-326' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:26:46 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-376' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:32:24 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-402' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:35:00 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-428' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:39:21 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-454' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:44:24 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-480' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:46:24 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-506' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:50:57 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-532' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:56:14 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-558' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+17:59:31 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+17:59:31 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-584' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:00:38 INFO mission_control.continuous_planner: Replanned epoch 4: 5 units (1 served, 4 backlogged)
+18:04:22 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-610' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:09:49 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-640' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:13:16 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-666' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:16:48 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-692' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:20:54 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+18:20:54 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-718' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:22:03 INFO mission_control.overlap: Overlap detected: Improve worker prompts with MISSION_STAT and Add auto-retry for failed work units wit share files {'src/mission_control/continuous_controller.py'}; Add auto-retry for failed work units wit now depends on Improve worker prompts with MISSION_STAT
+18:22:03 INFO mission_control.overlap: Overlap detected: Improve worker prompts with MISSION_STAT and Add research unit type and mission summa share files {'src/mission_control/continuous_controller.py'}; Add research unit type and mission summa now depends on Improve worker prompts with MISSION_STAT
+18:22:03 INFO mission_control.overlap: Overlap detected: Add planner LLM retry on parse failure and Add research unit type and mission summa share files {'src/mission_control/recursive_planner.py', 'tests/test_recursive_planner.py'}; Add research unit type and mission summa now depends on Add planner LLM retry on parse failure
+18:22:03 INFO mission_control.continuous_planner: Replanned epoch 5: 5 units (1 served, 4 backlogged)
+18:25:47 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-744' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:29:23 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-774' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:32:45 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-800' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:36:52 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-826' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:42:50 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+18:42:50 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-852' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:43:43 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: PLANNER RELIABILITY: Add retry logic in recursive_planner.py _invoke_planner_llm
+18:44:08 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: ERROR RECOVERY + RESEARCH CAPABILITY (models/config/db layer): Add unit_type fie
+18:44:43 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: WORKER INTELLIGENCE: Improve worker prompts in worker.py -- (1) inject MISSION_S
+18:45:18 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: ERROR RECOVERY + RESEARCH CAPABILITY (controller layer): In continuous_controlle
+18:46:21 INFO mission_control.recursive_planner: Invoking planner LLM at depth 1 for scope: OBSERVABILITY: Add mission_report.py module that generates a structured JSON mis
+18:47:04 INFO mission_control.overlap: Overlap detected: Add unit_type field to WorkUnit model an and Add auto-retry with backoff and research share files {'src/mission_control/models.py'}; Add auto-retry with backoff and research now depends on Add unit_type field to WorkUnit model an
+18:47:04 INFO mission_control.overlap: Overlap detected: Inject MISSION_STATE.md and file-locking and Pass overlap/file-locking hints to worke share files {'src/mission_control/worker.py'}; Pass overlap/file-locking hints to worke now depends on Inject MISSION_STATE.md and file-locking
+18:47:04 INFO mission_control.overlap: Overlap detected: Add auto-retry with backoff and research and Add mission_report.py module with JSON r share files {'src/mission_control/continuous_controller.py'}; Add mission_report.py module with JSON r now depends on Add auto-retry with backoff and research
+18:47:04 INFO mission_control.overlap: Overlap detected: Pass overlap/file-locking hints to worke and Add mission_report.py module with JSON r share files {'src/mission_control/continuous_controller.py'}; Pass overlap/file-locking hints to worke now depends on Add mission_report.py module with JSON r
+18:47:04 INFO mission_control.continuous_planner: Replanned epoch 6: 7 units (1 served, 6 backlogged)
+18:50:03 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-878' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:53:40 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-928' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:56:27 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-954' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+18:57:27 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-980' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+19:00:08 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1006' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+19:04:15 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1032' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+19:07:51 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+19:07:51 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1058' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+19:09:00 INFO mission_control.overlap: Overlap detected: Inject MISSION_STATE.md and overlap hint and Add research unit type with merge skip share files {'src/mission_control/continuous_controller.py'}; Add research unit type with merge skip now depends on Inject MISSION_STATE.md and overlap hint
+19:09:00 INFO mission_control.overlap: Overlap detected: Inject MISSION_STATE.md and overlap hint and Add structured mission summary report at share files {'src/mission_control/continuous_controller.py'}; Add structured mission summary report at now depends on Inject MISSION_STATE.md and overlap hint
+19:09:00 INFO mission_control.continuous_planner: Replanned epoch 7: 5 units (1 served, 4 backlogged)
+19:12:49 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1084' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+19:16:36 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1114' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+19:20:33 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1140' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+19:27:37 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1166' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+20:00:37 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+20:00:37 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1192' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+20:12:11 INFO mission_control.overlap: Overlap detected: Add retry-on-parse-failure to recursive  and Add research unit type support and missi share files {'src/mission_control/recursive_planner.py', 'tests/test_recursive_planner.py'}; Add research unit type support and missi now depends on Add retry-on-parse-failure to recursive 
+20:12:11 INFO mission_control.overlap: Overlap detected: Inject MISSION_STATE.md and file overlap and Add research unit type support and missi share files {'src/mission_control/continuous_controller.py'}; Add research unit type support and missi now depends on Inject MISSION_STATE.md and file overlap
+20:12:11 INFO mission_control.continuous_planner: Replanned epoch 8: 5 units (1 served, 4 backlogged)
+20:32:59 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1218' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    await self.db.locked_call("insert_handoff", handoff)
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    return getattr(self, fn)(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    self.conn.execute(
+    ~~~~~~~~~~~~~~~~~^
+    	"""INSERT INTO handoffs
+     ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    	),
+     ^^
+    )
+    ^
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+20:36:21 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1248' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    )
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    async with self._lock:
+            ^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    def insert_handoff(self, handoff: Handoff) -> None:
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    			handoff.files_changed,
+    
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+20:40:07 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1274' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    )
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    async with self._lock:
+            ^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    def insert_handoff(self, handoff: Handoff) -> None:
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    			handoff.files_changed,
+    
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+20:44:14 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1300' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    )
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    async with self._lock:
+            ^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    def insert_handoff(self, handoff: Handoff) -> None:
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    			handoff.files_changed,
+    
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+20:49:11 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+20:49:11 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1326' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    )
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    async with self._lock:
+            ^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    def insert_handoff(self, handoff: Handoff) -> None:
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    			handoff.files_changed,
+    
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+20:50:19 INFO mission_control.overlap: Overlap detected: Add planner retry on parse failure and Add research unit type and mission summa share files {'src/mission_control/recursive_planner.py'}; Add research unit type and mission summa now depends on Add planner retry on parse failure
+20:50:19 INFO mission_control.overlap: Overlap detected: Improve worker prompts with MISSION_STAT and Add auto-retry with exponential backoff  share files {'src/mission_control/continuous_controller.py'}; Add auto-retry with exponential backoff  now depends on Improve worker prompts with MISSION_STAT
+20:50:19 INFO mission_control.overlap: Overlap detected: Improve worker prompts with MISSION_STAT and Add research unit type and mission summa share files {'src/mission_control/continuous_controller.py'}; Add research unit type and mission summa now depends on Improve worker prompts with MISSION_STAT
+20:50:19 INFO mission_control.continuous_planner: Replanned epoch 9: 4 units (1 served, 3 backlogged)
+20:56:38 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1352' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    )
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    async with self._lock:
+            ^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    def insert_handoff(self, handoff: Handoff) -> None:
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    			handoff.files_changed,
+    
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+21:00:05 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1382' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    )
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    async with self._lock:
+            ^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    def insert_handoff(self, handoff: Handoff) -> None:
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    			handoff.files_changed,
+    
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+21:03:56 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1408' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    )
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    async with self._lock:
+            ^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    def insert_handoff(self, handoff: Handoff) -> None:
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    			handoff.files_changed,
+    
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+21:12:00 INFO mission_control.recursive_planner: Invoking planner LLM at depth 0 for scope: Improve mission-control's capabilities for fully orchestrating the building and 
+21:12:00 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1434' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    )
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    async with self._lock:
+            ^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    def insert_handoff(self, handoff: Handoff) -> None:
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    			handoff.files_changed,
+    
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+21:12:55 INFO mission_control.continuous_planner: Replanned epoch 10: 2 units (1 served, 1 backlogged)
+21:18:07 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1460' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    )
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    async with self._lock:
+            ^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    def insert_handoff(self, handoff: Handoff) -> None:
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    			handoff.files_changed,
+    
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+21:21:59 ERROR asyncio: Task exception was never retrieved
+future: <Task finished name='Task-1490' coro=<ContinuousController._execute_single_unit() done, defined at /Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py:483> exception=IntegrityError('FOREIGN KEY constraint failed')>
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/continuous_controller.py", line 638, in _execute_single_unit
+    )
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 394, in locked_call
+    async with self._lock:
+            ^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/mission_control/db.py", line 1237, in insert_handoff
+    def insert_handoff(self, handoff: Handoff) -> None:
+     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<9 lines>...
+    			handoff.files_changed,
+    
+sqlite3.IntegrityError: FOREIGN KEY constraint failed
+21:21:59 INFO mission_control.continuous_controller: Unit 5f53068ea3e5 execution cancelled
+Mission: 62b38cb51969
+Objective met: False
+Units: 53 dispatched, 0 merged, 0 failed
+Wall time: 14453.9s
+Stopped: wall_time_exceeded
