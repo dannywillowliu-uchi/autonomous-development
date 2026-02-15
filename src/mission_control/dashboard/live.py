@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from mission_control.db import Database
@@ -18,6 +21,16 @@ from mission_control.models import Signal
 logger = logging.getLogger(__name__)
 
 _UI_PATH = Path(__file__).parent / "live_ui.html"
+
+VALID_SIGNAL_TYPES = {"stop", "pause", "resume", "cancel_unit", "adjust_workers"}
+
+_SIGNAL_PAYLOAD_REQUIREMENTS: dict[str, set[str]] = {
+	"adjust_workers": {"num_workers"},
+	"cancel_unit": {"unit_id"},
+}
+
+_RATE_LIMIT_MAX = 10
+_RATE_LIMIT_WINDOW = 60  # seconds
 
 
 class SignalRequest(BaseModel):
@@ -34,15 +47,41 @@ class LiveDashboard:
 	plus REST endpoints for sending control signals and querying state.
 	"""
 
-	def __init__(self, db_path: str) -> None:
+	def __init__(self, db_path: str, auth_token: str = "") -> None:
 		self.db = Database(db_path)
+		self.auth_token = auth_token
 		self.app = FastAPI(title="Mission Control Live")
 		self._connections: set[WebSocket] = set()
 		self._broadcast_task: asyncio.Task[None] | None = None
 		self._ui_mtime: float = _UI_PATH.stat().st_mtime if _UI_PATH.exists() else 0.0
+		self._signal_timestamps: dict[str, list[float]] = defaultdict(list)
 		self._setup_routes()
 
+	def _verify_token(self, credentials: HTTPAuthorizationCredentials) -> None:
+		if self.auth_token and credentials.credentials != self.auth_token:
+			raise HTTPException(status_code=401, detail="Invalid token")
+
+	def _check_rate_limit(self, client_ip: str) -> None:
+		now = time.monotonic()
+		cutoff = now - _RATE_LIMIT_WINDOW
+		timestamps = self._signal_timestamps[client_ip]
+		self._signal_timestamps[client_ip] = [t for t in timestamps if t > cutoff]
+		if len(self._signal_timestamps[client_ip]) >= _RATE_LIMIT_MAX:
+			raise HTTPException(status_code=429, detail="Rate limit exceeded (max 10 signals/min)")
+		self._signal_timestamps[client_ip].append(now)
+
 	def _setup_routes(self) -> None:
+		_security = HTTPBearer(auto_error=False)
+
+		async def verify_token(
+			credentials: HTTPAuthorizationCredentials | None = Depends(_security),
+		) -> None:
+			if not self.auth_token:
+				return
+			if credentials is None:
+				raise HTTPException(status_code=401, detail="Missing authorization header")
+			self._verify_token(credentials)
+
 		@self.app.on_event("startup")
 		async def startup() -> None:
 			self._broadcast_task = asyncio.create_task(self._broadcast_loop())
@@ -58,14 +97,15 @@ class LiveDashboard:
 			self.db.close()
 
 		@self.app.websocket("/ws")
-		async def ws_endpoint(websocket: WebSocket) -> None:
+		async def ws_endpoint(websocket: WebSocket, token: str = Query(default="")) -> None:
+			if self.auth_token and token != self.auth_token:
+				await websocket.close(code=4401, reason="Invalid token")
+				return
 			await websocket.accept()
 			self._connections.add(websocket)
 			try:
-				# Send initial snapshot immediately
 				snapshot = self._build_snapshot()
 				await websocket.send_json(snapshot)
-				# Keep connection alive, listen for client messages
 				while True:
 					await websocket.receive_text()
 			except WebSocketDisconnect:
@@ -79,28 +119,47 @@ class LiveDashboard:
 				return HTMLResponse(_UI_PATH.read_text())
 			return HTMLResponse("<h1>Mission Control Live</h1><p>UI file not found.</p>")
 
-		@self.app.post("/api/signal")
-		async def send_signal(body: SignalRequest) -> dict[str, str]:
+		@self.app.post("/api/signal", dependencies=[Depends(verify_token)])
+		async def send_signal(body: SignalRequest, request: Request) -> dict[str, str]:
+			if body.signal_type not in VALID_SIGNAL_TYPES:
+				raise HTTPException(
+					status_code=422,
+					detail=f"Unknown signal_type '{body.signal_type}'. Valid: {sorted(VALID_SIGNAL_TYPES)}",
+				)
+
+			required_keys = _SIGNAL_PAYLOAD_REQUIREMENTS.get(body.signal_type, set())
+			missing = required_keys - set(body.payload.keys())
+			if missing:
+				raise HTTPException(
+					status_code=422,
+					detail=f"signal_type '{body.signal_type}' requires payload keys: {sorted(missing)}",
+				)
+
+			client_ip = request.client.host if request.client else "unknown"
+			self._check_rate_limit(client_ip)
+
 			mission = self.db.get_active_mission() or self.db.get_latest_mission()
 			if mission is None:
 				return {"status": "error", "message": "No mission found"}
 
+			# Map adjust_workers -> adjust for controller compatibility
+			db_signal_type = "adjust" if body.signal_type == "adjust_workers" else body.signal_type
 			signal = Signal(
 				mission_id=mission.id,
-				signal_type=body.signal_type,
+				signal_type=db_signal_type,
 				payload=json.dumps(body.payload) if body.payload else "",
 			)
 			self.db.insert_signal(signal)
 			return {"status": "ok", "signal_id": signal.id}
 
-		@self.app.get("/api/mission")
+		@self.app.get("/api/mission", dependencies=[Depends(verify_token)])
 		async def get_mission() -> dict[str, Any]:
 			mission = self.db.get_active_mission() or self.db.get_latest_mission()
 			if mission is None:
 				return {"status": "no_mission"}
 			return _serialize_mission(mission)
 
-		@self.app.get("/api/units")
+		@self.app.get("/api/units", dependencies=[Depends(verify_token)])
 		async def get_units() -> list[dict[str, Any]]:
 			mission = self.db.get_active_mission() or self.db.get_latest_mission()
 			if mission is None:
@@ -108,7 +167,7 @@ class LiveDashboard:
 			units = self.db.get_work_units_for_mission(mission.id)
 			return [_serialize_unit(u) for u in units]
 
-		@self.app.get("/api/events")
+		@self.app.get("/api/events", dependencies=[Depends(verify_token)])
 		async def get_events() -> list[dict[str, Any]]:
 			mission = self.db.get_active_mission() or self.db.get_latest_mission()
 			if mission is None:
@@ -116,19 +175,19 @@ class LiveDashboard:
 			events = self.db.get_unit_events_for_mission(mission.id, limit=200)
 			return [_serialize_event(e) for e in events]
 
-		@self.app.get("/api/plan-tree")
+		@self.app.get("/api/plan-tree", dependencies=[Depends(verify_token)])
 		async def get_plan_tree() -> list[dict[str, Any]]:
 			mission = self.db.get_active_mission() or self.db.get_latest_mission()
 			if mission is None:
 				return []
 			return self._build_plan_tree(mission.id)
 
-		@self.app.get("/api/workers")
+		@self.app.get("/api/workers", dependencies=[Depends(verify_token)])
 		async def get_workers() -> list[dict[str, Any]]:
 			workers = self.db.get_all_workers()
 			return [_serialize_worker(w) for w in workers]
 
-		@self.app.get("/api/summary")
+		@self.app.get("/api/summary", dependencies=[Depends(verify_token)])
 		async def get_summary() -> dict[str, Any]:
 			mission = self.db.get_active_mission() or self.db.get_latest_mission()
 			if mission is None:
