@@ -1157,6 +1157,78 @@ class Database:
 			return None
 		return self._row_to_mission(row)
 
+	def get_all_missions(self, limit: int = 20) -> list[Mission]:
+		rows = self.conn.execute(
+			"SELECT * FROM missions ORDER BY started_at DESC LIMIT ?", (limit,)
+		).fetchall()
+		return [self._row_to_mission(r) for r in rows]
+
+	def get_mission_summary(self, mission_id: str) -> dict[str, Any]:
+		"""Aggregate summary stats for a mission.
+
+		Returns dict with unit counts by status, total cost/tokens, epoch
+		breakdown, and event type distribution.
+		"""
+		# Unit counts by status
+		unit_rows = self.conn.execute(
+			"""SELECT wu.status, COUNT(*) AS cnt
+			FROM work_units wu
+			JOIN epochs e ON wu.epoch_id = e.id
+			WHERE e.mission_id = ?
+			GROUP BY wu.status""",
+			(mission_id,),
+		).fetchall()
+		units_by_status: dict[str, int] = {r["status"]: int(r["cnt"]) for r in unit_rows}
+
+		# Token/cost totals
+		totals_row = self.conn.execute(
+			"""SELECT
+				COALESCE(SUM(wu.input_tokens), 0) AS total_input_tokens,
+				COALESCE(SUM(wu.output_tokens), 0) AS total_output_tokens,
+				COALESCE(SUM(wu.cost_usd), 0.0) AS total_cost_usd
+			FROM work_units wu
+			JOIN epochs e ON wu.epoch_id = e.id
+			WHERE e.mission_id = ?""",
+			(mission_id,),
+		).fetchone()
+
+		# Event type distribution
+		event_rows = self.conn.execute(
+			"""SELECT event_type, COUNT(*) AS cnt
+			FROM unit_events
+			WHERE mission_id = ?
+			GROUP BY event_type""",
+			(mission_id,),
+		).fetchall()
+		events_by_type: dict[str, int] = {r["event_type"]: int(r["cnt"]) for r in event_rows}
+
+		# Epoch breakdown
+		epoch_rows = self.conn.execute(
+			"""SELECT number, units_planned, units_completed, units_failed
+			FROM epochs
+			WHERE mission_id = ?
+			ORDER BY number ASC""",
+			(mission_id,),
+		).fetchall()
+		epochs = [
+			{
+				"number": int(r["number"]),
+				"units_planned": int(r["units_planned"]),
+				"units_completed": int(r["units_completed"]),
+				"units_failed": int(r["units_failed"]),
+			}
+			for r in epoch_rows
+		]
+
+		return {
+			"units_by_status": units_by_status,
+			"total_input_tokens": int(totals_row["total_input_tokens"]) if totals_row else 0,
+			"total_output_tokens": int(totals_row["total_output_tokens"]) if totals_row else 0,
+			"total_cost_usd": float(totals_row["total_cost_usd"]) if totals_row else 0.0,
+			"events_by_type": events_by_type,
+			"epochs": epochs,
+		}
+
 	@staticmethod
 	def _row_to_mission(row: sqlite3.Row) -> Mission:
 		return Mission(

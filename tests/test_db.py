@@ -10,11 +10,14 @@ import pytest
 from mission_control.db import Database
 from mission_control.models import (
 	Decision,
+	Epoch,
 	MergeRequest,
+	Mission,
 	Plan,
 	Session,
 	Snapshot,
 	TaskRecord,
+	UnitEvent,
 	Worker,
 	WorkUnit,
 )
@@ -530,3 +533,92 @@ class TestAsyncLock:
 		fresh = db.get_work_unit("wu1")
 		assert fresh is not None
 		assert fresh.attempt == 1
+
+
+class TestMissionSummary:
+	def _setup_mission_data(self, db: Database) -> str:
+		"""Insert a mission with epochs, units, and events. Returns mission_id."""
+		mission = Mission(id="m1", objective="Build API", status="completed", total_cost_usd=12.50)
+		db.insert_mission(mission)
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1, units_planned=3, units_completed=2, units_failed=1)
+		db.insert_epoch(epoch)
+
+		units = [
+			WorkUnit(
+				id="wu1", plan_id="p1", title="Unit 1", status="completed",
+				epoch_id="ep1", cost_usd=3.0, input_tokens=1000, output_tokens=500,
+			),
+			WorkUnit(
+				id="wu2", plan_id="p1", title="Unit 2", status="completed",
+				epoch_id="ep1", cost_usd=4.0, input_tokens=2000, output_tokens=800,
+			),
+			WorkUnit(
+				id="wu3", plan_id="p1", title="Unit 3", status="failed",
+				epoch_id="ep1", cost_usd=1.5, input_tokens=500, output_tokens=200,
+			),
+		]
+		db.insert_plan(Plan(id="p1", objective="Build API"))
+		for u in units:
+			db.insert_work_unit(u)
+
+		events = [
+			UnitEvent(id="ev1", mission_id="m1", epoch_id="ep1", work_unit_id="wu1", event_type="dispatched"),
+			UnitEvent(id="ev2", mission_id="m1", epoch_id="ep1", work_unit_id="wu1", event_type="merged"),
+			UnitEvent(id="ev3", mission_id="m1", epoch_id="ep1", work_unit_id="wu2", event_type="dispatched"),
+			UnitEvent(id="ev4", mission_id="m1", epoch_id="ep1", work_unit_id="wu2", event_type="merged"),
+			UnitEvent(id="ev5", mission_id="m1", epoch_id="ep1", work_unit_id="wu3", event_type="dispatched"),
+			UnitEvent(id="ev6", mission_id="m1", epoch_id="ep1", work_unit_id="wu3", event_type="failed"),
+		]
+		for e in events:
+			db.insert_unit_event(e)
+
+		return "m1"
+
+	def test_get_all_missions(self, db: Database) -> None:
+		db.insert_mission(Mission(id="m1", objective="First"))
+		db.insert_mission(Mission(id="m2", objective="Second"))
+		missions = db.get_all_missions()
+		assert len(missions) == 2
+
+	def test_get_all_missions_limit(self, db: Database) -> None:
+		for i in range(5):
+			db.insert_mission(Mission(id=f"m{i}", objective=f"Mission {i}"))
+		missions = db.get_all_missions(limit=3)
+		assert len(missions) == 3
+
+	def test_get_mission_summary_unit_counts(self, db: Database) -> None:
+		self._setup_mission_data(db)
+		summary = db.get_mission_summary("m1")
+		assert summary["units_by_status"]["completed"] == 2
+		assert summary["units_by_status"]["failed"] == 1
+
+	def test_get_mission_summary_tokens(self, db: Database) -> None:
+		self._setup_mission_data(db)
+		summary = db.get_mission_summary("m1")
+		assert summary["total_input_tokens"] == 3500
+		assert summary["total_output_tokens"] == 1500
+		assert summary["total_cost_usd"] == 8.5
+
+	def test_get_mission_summary_events(self, db: Database) -> None:
+		self._setup_mission_data(db)
+		summary = db.get_mission_summary("m1")
+		assert summary["events_by_type"]["dispatched"] == 3
+		assert summary["events_by_type"]["merged"] == 2
+		assert summary["events_by_type"]["failed"] == 1
+
+	def test_get_mission_summary_epochs(self, db: Database) -> None:
+		self._setup_mission_data(db)
+		summary = db.get_mission_summary("m1")
+		assert len(summary["epochs"]) == 1
+		assert summary["epochs"][0]["number"] == 1
+		assert summary["epochs"][0]["units_planned"] == 3
+		assert summary["epochs"][0]["units_completed"] == 2
+
+	def test_get_mission_summary_empty(self, db: Database) -> None:
+		db.insert_mission(Mission(id="empty", objective="Empty"))
+		summary = db.get_mission_summary("empty")
+		assert summary["units_by_status"] == {}
+		assert summary["total_input_tokens"] == 0
+		assert summary["events_by_type"] == {}
+		assert summary["epochs"] == []

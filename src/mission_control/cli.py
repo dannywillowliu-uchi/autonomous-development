@@ -82,6 +82,13 @@ def build_parser() -> argparse.ArgumentParser:
 	live.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
 	live.add_argument("--port", type=int, default=8080, help="Port to serve on")
 
+	# mc summary
+	summary = sub.add_parser("summary", help="Show mission summary")
+	summary.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	summary.add_argument("--all", action="store_true", dest="show_all", help="Show table of all missions")
+	summary.add_argument("--mission-id", default=None, help="Specific mission ID")
+	summary.add_argument("--json", action="store_true", dest="json_output", help="JSON output")
+
 	# mc register
 	reg = sub.add_parser("register", help="Register a project in the central registry")
 	reg.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
@@ -401,6 +408,113 @@ def cmd_mission(args: argparse.Namespace) -> int:
 		db.close()
 
 
+def cmd_summary(args: argparse.Namespace) -> int:
+	"""Show mission summary."""
+	import json as json_mod
+
+	db_path = _get_db_path(args.config)
+	if not db_path.exists():
+		print("No database found. Run 'mc mission' first.")
+		return 1
+
+	db = Database(db_path)
+	try:
+		if args.show_all:
+			missions = db.get_all_missions()
+			if not missions:
+				print("No missions found.")
+				return 0
+			if args.json_output:
+				data = [
+					{
+						"id": m.id, "objective": m.objective[:60],
+						"status": m.status, "started_at": m.started_at,
+						"total_cost_usd": m.total_cost_usd,
+					}
+					for m in missions
+				]
+				print(json_mod.dumps(data, indent=2))
+			else:
+				print(f"\n{'ID':<12} {'Status':<10} {'Cost':>8} {'Objective':<40}")
+				print("-" * 72)
+				for m in missions:
+					obj = m.objective[:38] + ".." if len(m.objective) > 40 else m.objective
+					print(f"{m.id[:10]:<12} {m.status:<10} ${m.total_cost_usd:>6.2f} {obj:<40}")
+			return 0
+
+		# Single mission
+		if args.mission_id:
+			mission = db.get_mission(args.mission_id)
+		else:
+			mission = db.get_latest_mission()
+
+		if mission is None:
+			print("No mission found.")
+			return 1
+
+		summary = db.get_mission_summary(mission.id)
+
+		if args.json_output:
+			data = {
+				"id": mission.id,
+				"objective": mission.objective,
+				"status": mission.status,
+				"started_at": mission.started_at,
+				"finished_at": mission.finished_at,
+				"total_cost_usd": mission.total_cost_usd,
+				"stopped_reason": mission.stopped_reason,
+				**summary,
+			}
+			print(json_mod.dumps(data, indent=2))
+			return 0
+
+		# Narrative output
+		print(f"\nMission: {mission.id}")
+		print(f"Status: {mission.status}")
+		print(f"Objective: {mission.objective}")
+		print(f"Cost: ${mission.total_cost_usd:.2f}")
+		if mission.started_at and mission.finished_at:
+			print(f"Started: {mission.started_at}")
+			print(f"Finished: {mission.finished_at}")
+		if mission.stopped_reason:
+			print(f"Stopped: {mission.stopped_reason}")
+
+		# Unit counts
+		units = summary["units_by_status"]
+		if units:
+			print("\nUnits by status:")
+			for status, count in sorted(units.items()):
+				print(f"  {status}: {count}")
+
+		# Epoch breakdown
+		epochs = summary["epochs"]
+		if epochs:
+			print(f"\n{'Epoch':>5} {'Planned':>8} {'Done':>8} {'Failed':>8}")
+			print("-" * 31)
+			for ep in epochs:
+				print(
+					f"{ep['number']:>5} {ep['units_planned']:>8} "
+					f"{ep['units_completed']:>8} {ep['units_failed']:>8}"
+				)
+
+		# Event distribution
+		events = summary["events_by_type"]
+		if events:
+			print("\nEvents:")
+			for etype, count in sorted(events.items()):
+				print(f"  {etype}: {count}")
+
+		# Token usage
+		if summary["total_input_tokens"] or summary["total_output_tokens"]:
+			inp = summary["total_input_tokens"]
+			out = summary["total_output_tokens"]
+			print(f"\nTokens: {inp:,} input, {out:,} output")
+
+		return 0
+	finally:
+		db.close()
+
+
 INIT_TEMPLATE = """\
 [target]
 name = "{name}"
@@ -619,6 +733,7 @@ COMMANDS = {
 	"init": cmd_init,
 	"dashboard": cmd_dashboard,
 	"live": cmd_live,
+	"summary": cmd_summary,
 
 	"register": cmd_register,
 	"unregister": cmd_unregister,
