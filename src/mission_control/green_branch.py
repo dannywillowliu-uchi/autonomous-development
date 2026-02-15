@@ -73,6 +73,36 @@ class GreenBranchManager:
 			elif gb.reset_on_init:
 				await self._run_git("update-ref", f"refs/heads/{branch}", base)
 
+		# Run setup command if configured (e.g., npm install)
+		setup_cmd = self.config.target.verification.setup_command
+		if setup_cmd:
+			setup_timeout = self.config.target.verification.setup_timeout
+			logger.info("Running workspace setup: %s", setup_cmd)
+			proc = await asyncio.create_subprocess_shell(
+				setup_cmd,
+				cwd=self.workspace,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.STDOUT,
+			)
+			try:
+				stdout, _ = await asyncio.wait_for(
+					proc.communicate(), timeout=setup_timeout,
+				)
+			except asyncio.TimeoutError:
+				try:
+					proc.kill()
+					await proc.wait()
+				except ProcessLookupError:
+					pass
+				raise RuntimeError(
+					f"Workspace setup timed out after {setup_timeout}s: {setup_cmd}"
+				)
+			if proc.returncode != 0:
+				output = stdout.decode() if stdout else ""
+				raise RuntimeError(
+					f"Workspace setup failed (exit {proc.returncode}): {output[:500]}"
+				)
+
 	async def merge_unit(
 		self,
 		worker_workspace: str,
