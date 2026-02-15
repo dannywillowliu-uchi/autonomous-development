@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +12,7 @@ import pytest
 
 from mission_control.backends.base import WorkerHandle
 from mission_control.backends.container import ContainerBackend
-from mission_control.backends.local import LocalBackend
+from mission_control.backends.local import _MB, LocalBackend
 from mission_control.backends.ssh import SSHBackend
 from mission_control.config import SSHHostConfig
 
@@ -415,6 +416,124 @@ class TestLocalBackend:
 		assert backend._processes == {}
 		assert backend._stdout_bufs == {}
 		backend._pool.cleanup.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Worker output overflow
+# ---------------------------------------------------------------------------
+
+class TestWorkerOutputOverflow:
+	"""Tests for output size limits in LocalBackend."""
+
+	@pytest.fixture()
+	def backend(self) -> LocalBackend:
+		"""LocalBackend with 1MB output limit for fast testing."""
+		with patch("mission_control.backends.local.WorkspacePool") as mock_pool_cls:
+			mock_pool_instance = MagicMock()
+			mock_pool_cls.return_value = mock_pool_instance
+			mock_pool_instance.acquire = AsyncMock()
+			mock_pool_instance.release = AsyncMock()
+			mock_pool_instance.cleanup = AsyncMock()
+			mock_pool_instance.initialize = AsyncMock()
+			b = LocalBackend(
+				source_repo="/repo",
+				pool_dir="/pool",
+				max_clones=5,
+				base_branch="main",
+				max_output_mb=1,
+			)
+		return b
+
+	async def test_output_accumulates_normally_below_limit(self, backend: LocalBackend) -> None:
+		"""Output under the limit accumulates without truncation or killing."""
+		mock_proc = MagicMock()
+		mock_proc.returncode = None
+		mock_proc.pid = 100
+		mock_stdout = AsyncMock()
+		# 500KB chunk -- well under 1MB limit
+		chunk = b"x" * (500 * 1024)
+		mock_stdout.read = AsyncMock(return_value=chunk)
+		mock_proc.stdout = mock_stdout
+		mock_proc.kill = MagicMock()
+
+		backend._processes["w1"] = mock_proc
+		backend._stdout_bufs["w1"] = b""
+		backend._output_warnings_fired["w1"] = set()
+
+		handle = WorkerHandle(worker_id="w1", pid=100)
+		output = await backend.get_output(handle)
+
+		assert len(output) == 500 * 1024
+		mock_proc.kill.assert_not_called()
+
+	async def test_warning_logged_at_thresholds(self, backend: LocalBackend, caplog: pytest.LogCaptureFixture) -> None:
+		"""Warnings are logged when output crosses threshold boundaries."""
+		mock_proc = MagicMock()
+		mock_proc.returncode = 0  # finished
+		mock_proc.pid = 200
+		mock_stdout = AsyncMock()
+		mock_stdout.read = AsyncMock(return_value=b"")
+		mock_proc.stdout = mock_stdout
+
+		backend._processes["w1"] = mock_proc
+		# Pre-fill buffer to 11MB to cross the 10MB threshold
+		backend._stdout_bufs["w1"] = b"x" * (11 * _MB)
+		backend._output_warnings_fired["w1"] = set()
+		backend._stdout_collected.add("w1")  # already collected
+
+		handle = WorkerHandle(worker_id="w1", pid=200)
+		with caplog.at_level(logging.WARNING, logger="mission_control.backends.local"):
+			await backend.get_output(handle)
+
+		assert any("10MB" in msg for msg in caplog.messages)
+
+	async def test_worker_killed_and_output_truncated_at_limit(
+		self, backend: LocalBackend, caplog: pytest.LogCaptureFixture,
+	) -> None:
+		"""Worker is killed and output truncated when output exceeds max_output_mb."""
+		mock_proc = MagicMock()
+		mock_proc.returncode = None  # still running
+		mock_proc.pid = 300
+		mock_stdout = AsyncMock()
+		# Return a chunk that pushes over 1MB limit
+		mock_stdout.read = AsyncMock(return_value=b"y" * (100 * 1024))
+		mock_proc.stdout = mock_stdout
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+
+		backend._processes["w1"] = mock_proc
+		# Pre-fill to just under 1MB
+		backend._stdout_bufs["w1"] = b"x" * (1 * _MB - 10 * 1024)
+		backend._output_warnings_fired["w1"] = set()
+
+		handle = WorkerHandle(worker_id="w1", pid=300)
+		with caplog.at_level(logging.ERROR, logger="mission_control.backends.local"):
+			output = await backend.get_output(handle)
+
+		# Output should be truncated to exactly max_output_bytes
+		assert len(output.encode()) == 1 * _MB
+		mock_proc.kill.assert_called_once()
+		mock_proc.wait.assert_awaited_once()
+		assert any("exceeded limit" in msg for msg in caplog.messages)
+
+	async def test_finished_process_output_truncated(self, backend: LocalBackend) -> None:
+		"""Output from a finished process is truncated if final read pushes over limit."""
+		mock_proc = MagicMock()
+		mock_proc.returncode = 0
+		mock_proc.pid = 400
+		mock_stdout = AsyncMock()
+		# Return large remaining output
+		mock_stdout.read = AsyncMock(return_value=b"z" * (2 * _MB))
+		mock_proc.stdout = mock_stdout
+
+		backend._processes["w1"] = mock_proc
+		backend._stdout_bufs["w1"] = b""
+		backend._output_warnings_fired["w1"] = set()
+
+		handle = WorkerHandle(worker_id="w1", pid=400)
+		output = await backend.get_output(handle)
+
+		assert len(output.encode()) == 1 * _MB
 
 
 # ---------------------------------------------------------------------------

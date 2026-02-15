@@ -168,6 +168,7 @@ class BackendConfig:
 	"""Worker backend settings."""
 
 	type: str = "local"  # local/ssh/container
+	max_output_mb: int = 50  # max stdout size per worker in MB
 	ssh_hosts: list[SSHHostConfig] = field(default_factory=list)
 
 
@@ -372,6 +373,8 @@ def _build_backend(data: dict[str, Any]) -> BackendConfig:
 	bc = BackendConfig()
 	if "type" in data:
 		bc.type = str(data["type"])
+	if "max_output_mb" in data:
+		bc.max_output_mb = int(data["max_output_mb"])
 	if "ssh" in data:
 		ssh_data = data["ssh"]
 		hosts = ssh_data.get("hosts", [])
