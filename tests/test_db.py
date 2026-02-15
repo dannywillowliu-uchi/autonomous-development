@@ -629,6 +629,59 @@ class TestBusyTimeout:
 		assert row[0] == 5000
 		db.close()
 
+class TestMigrationResilience:
+	def test_duplicate_column_passes_silently(self, db: Database) -> None:
+		"""Re-running migrations with already-existing columns should not raise."""
+		db._migrate_epoch_columns()
+		db._migrate_token_columns()
+		db._migrate_unit_type_column()
+
+	def test_non_duplicate_operational_error_is_reraised(self) -> None:
+		"""OperationalError that is NOT 'duplicate column name' should be re-raised."""
+		db = Database(":memory:")
+		# Drop the work_units table so ALTER TABLE fails with 'no such table'
+		db.conn.execute("DROP TABLE work_units")
+		with pytest.raises(sqlite3.OperationalError, match="no such table"):
+			db._migrate_unit_type_column()
+		db.close()
+
+	def test_epoch_migration_reraised_on_non_duplicate(self) -> None:
+		"""_migrate_epoch_columns re-raises non-duplicate OperationalError."""
+		db = Database(":memory:")
+		db.conn.execute("DROP TABLE work_units")
+		with pytest.raises(sqlite3.OperationalError, match="no such table"):
+			db._migrate_epoch_columns()
+		db.close()
+
+	def test_token_migration_reraised_on_non_duplicate(self) -> None:
+		"""_migrate_token_columns re-raises non-duplicate OperationalError."""
+		db = Database(":memory:")
+		db.conn.execute("DROP TABLE work_units")
+		with pytest.raises(sqlite3.OperationalError, match="no such table"):
+			db._migrate_token_columns()
+		db.close()
+
+
+class TestContextManager:
+	def test_context_manager_opens_and_closes(self) -> None:
+		"""Database used as context manager should close on exit."""
+		with Database(":memory:") as db:
+			db.insert_session(Session(id="cm1", target_name="proj"))
+			result = db.get_session("cm1")
+			assert result is not None
+			assert result.id == "cm1"
+		# After exiting, the connection should be closed
+		with pytest.raises(sqlite3.ProgrammingError):
+			db.conn.execute("SELECT 1")
+
+	def test_context_manager_returns_self(self) -> None:
+		"""__enter__ should return the Database instance."""
+		db = Database(":memory:")
+		ctx = db.__enter__()
+		assert ctx is db
+		db.__exit__(None, None, None)
+
+
 class TestValidateIdentifier:
 	def test_valid_names(self) -> None:
 		"""Valid SQL identifiers should pass without error."""
