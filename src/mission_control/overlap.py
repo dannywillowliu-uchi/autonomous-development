@@ -8,6 +8,7 @@ sequentially rather than in parallel.
 from __future__ import annotations
 
 import logging
+from collections import deque
 
 from mission_control.models import WorkUnit
 
@@ -81,4 +82,89 @@ def resolve_file_overlaps(units: list[WorkUnit]) -> list[WorkUnit]:
 					overlap, dependent.title[:40], dependency.title[:40],
 				)
 
+	_break_cycles(units)
 	return units
+
+
+def _parse_depends_on(dep_str: str) -> set[str]:
+	"""Parse a comma-separated depends_on string into a set of IDs."""
+	if not dep_str or not dep_str.strip():
+		return set()
+	return {d.strip() for d in dep_str.split(",") if d.strip()}
+
+
+def _break_cycles(units: list[WorkUnit]) -> None:
+	"""Detect and break circular dependencies using topological sort.
+
+	Uses Kahn's algorithm to find cycles. When a cycle is detected,
+	breaks it by removing the edge from the lowest-priority unit
+	(highest priority number) in the cycle.
+	"""
+	if len(units) <= 1:
+		return
+
+	unit_map: dict[str, WorkUnit] = {u.id: u for u in units}
+	unit_ids = set(unit_map.keys())
+
+	while True:
+		# Build adjacency and in-degree from current depends_on state
+		in_degree: dict[str, int] = {uid: 0 for uid in unit_ids}
+		adjacency: dict[str, list[str]] = {uid: [] for uid in unit_ids}
+
+		for u in units:
+			for dep_id in _parse_depends_on(u.depends_on):
+				if dep_id in unit_ids:
+					adjacency[dep_id].append(u.id)
+					in_degree[u.id] += 1
+
+		# Kahn's algorithm
+		queue: deque[str] = deque()
+		for uid, deg in in_degree.items():
+			if deg == 0:
+				queue.append(uid)
+
+		visited = 0
+		while queue:
+			node = queue.popleft()
+			visited += 1
+			for neighbor in adjacency[node]:
+				in_degree[neighbor] -= 1
+				if in_degree[neighbor] == 0:
+					queue.append(neighbor)
+
+		if visited == len(unit_ids):
+			return
+
+		# Cycle exists -- find units still in the cycle (in_degree > 0)
+		cycle_ids = {uid for uid, deg in in_degree.items() if deg > 0}
+
+		# Find the lowest-priority unit in the cycle (highest priority number).
+		# Ties broken by later position in the original list.
+		worst_unit: WorkUnit | None = None
+		worst_idx = -1
+		for i, u in enumerate(units):
+			if u.id not in cycle_ids:
+				continue
+			if worst_unit is None or u.priority > worst_unit.priority or (
+				u.priority == worst_unit.priority and i > worst_idx
+			):
+				worst_unit = u
+				worst_idx = i
+
+		assert worst_unit is not None
+
+		# Remove one incoming edge from worst_unit that is part of the cycle
+		deps = _parse_depends_on(worst_unit.depends_on)
+		cycle_dep = None
+		for dep_id in deps:
+			if dep_id in cycle_ids:
+				cycle_dep = dep_id
+				break
+
+		assert cycle_dep is not None
+		deps.discard(cycle_dep)
+		worst_unit.depends_on = ",".join(sorted(deps)) if deps else ""
+		logger.info(
+			"Cycle broken: removed dependency %s -> %s from %s (priority=%d)",
+			worst_unit.id, cycle_dep, worst_unit.title[:40], worst_unit.priority,
+		)
