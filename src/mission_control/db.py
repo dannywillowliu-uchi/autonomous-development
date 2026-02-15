@@ -929,6 +929,7 @@ class Database:
 			unit_type=row["unit_type"] if "unit_type" in keys else "implementation",
 			timeout=row["timeout"],
 			verification_command=row["verification_command"],
+			epoch_id=row["epoch_id"] if "epoch_id" in keys else None,
 			input_tokens=row["input_tokens"] if "input_tokens" in keys else 0,
 			output_tokens=row["output_tokens"] if "output_tokens" in keys else 0,
 			cost_usd=row["cost_usd"] if "cost_usd" in keys else 0.0,
