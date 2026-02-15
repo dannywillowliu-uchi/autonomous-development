@@ -59,6 +59,15 @@ def _parse_planner_output(output: str) -> PlannerResult:
 	return result
 
 
+def _is_parse_fallback(result: PlannerResult) -> bool:
+	"""Return True if result is the fallback produced by _parse_planner_output on unparseable input."""
+	return (
+		result.type == "leaves"
+		and len(result.units) == 1
+		and result.units[0].get("title") == "Execute scope"
+	)
+
+
 class RecursivePlanner:
 	"""Recursively decomposes objectives into a tree of plan nodes and leaf work units."""
 
@@ -294,7 +303,38 @@ IMPORTANT: The PLAN_RESULT line must be the LAST line of your output. Put all re
 			fallback = {"title": "Execute scope", "description": node.scope, "files_hint": "", "priority": 1}
 			return PlannerResult(type="leaves", units=[fallback])
 
-		return _parse_planner_output(output)
+		result = _parse_planner_output(output)
+
+		# Retry once if the LLM returned unparseable output
+		if _is_parse_fallback(result):
+			log.info("Parse fallback at depth %d, retrying once", node.depth)
+			try:
+				proc2 = await asyncio.create_subprocess_exec(
+					"claude", "-p",
+					"--output-format", "text",
+					"--max-budget-usd", str(budget),
+					"--model", model,
+					stdin=asyncio.subprocess.PIPE,
+					stdout=asyncio.subprocess.PIPE,
+					stderr=asyncio.subprocess.PIPE,
+					env=claude_subprocess_env(),
+					cwd=str(self.config.target.resolved_path),
+				)
+				stdout2, stderr2 = await asyncio.wait_for(
+					proc2.communicate(input=prompt.encode()),
+					timeout=timeout,
+				)
+				output2 = stdout2.decode() if stdout2 else ""
+			except (asyncio.TimeoutError, OSError):
+				log.warning("Retry attempt failed, using original fallback")
+				return result
+
+			if proc2.returncode != 0:
+				return result
+
+			result = _parse_planner_output(output2)
+
+		return result
 
 	def _force_create_leaf(self, node: PlanNode, plan: Plan) -> None:
 		"""Convert a node at max depth into a leaf with a single work unit."""

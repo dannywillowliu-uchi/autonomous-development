@@ -13,6 +13,7 @@ from mission_control.models import Plan, PlanNode
 from mission_control.recursive_planner import (
 	PlannerResult,
 	RecursivePlanner,
+	_is_parse_fallback,
 	_parse_planner_output,
 )
 
@@ -539,3 +540,144 @@ class TestInvokePlannerLlm:
 		assert comm_call[1].get("input") is not None or (comm_call[0] and comm_call[0][0] is not None)
 		assert result.type == "leaves"
 		assert result.units[0]["title"] == "Safe task"
+
+
+# -- Planner retry logic tests --
+
+
+class TestPlannerRetry:
+	@pytest.mark.asyncio
+	async def test_retry_on_parse_fallback_succeeds(self) -> None:
+		"""When first call returns unparseable output, retry once and return valid result."""
+		planner = _planner()
+		node = PlanNode(depth=0, scope="Test scope", node_type="branch")
+
+		valid_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Real task", "description": "Valid", "files_hint": "x.py", "priority": 1}],
+		})
+
+		# First call: unparseable output (returncode=0 but garbage text)
+		mock_proc1 = AsyncMock()
+		mock_proc1.returncode = 0
+		mock_proc1.communicate.return_value = (b"This is not valid JSON at all {{{", b"")
+
+		# Second call: valid PLAN_RESULT
+		mock_proc2 = AsyncMock()
+		mock_proc2.returncode = 0
+		mock_proc2.communicate.return_value = (valid_json.encode(), b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			side_effect=[mock_proc1, mock_proc2],
+		) as mock_exec:
+			result = await planner._invoke_planner_llm(node, "obj", "hash", [])
+
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "Real task"
+		assert mock_exec.call_count == 2
+
+	@pytest.mark.asyncio
+	async def test_retry_on_parse_fallback_also_fails(self) -> None:
+		"""When both calls return unparseable output, return fallback after two attempts."""
+		planner = _planner()
+		node = PlanNode(depth=0, scope="Test scope", node_type="branch")
+
+		# Both calls: unparseable output
+		mock_proc1 = AsyncMock()
+		mock_proc1.returncode = 0
+		mock_proc1.communicate.return_value = (b"garbage output 1", b"")
+
+		mock_proc2 = AsyncMock()
+		mock_proc2.returncode = 0
+		mock_proc2.communicate.return_value = (b"garbage output 2", b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			side_effect=[mock_proc1, mock_proc2],
+		) as mock_exec:
+			result = await planner._invoke_planner_llm(node, "obj", "hash", [])
+
+		assert result.type == "leaves"
+		assert len(result.units) == 1
+		assert result.units[0]["title"] == "Execute scope"
+		assert mock_exec.call_count == 2
+
+	@pytest.mark.asyncio
+	async def test_no_retry_on_subprocess_failure(self) -> None:
+		"""When subprocess fails (returncode != 0), no retry -- return fallback immediately."""
+		planner = _planner()
+		node = PlanNode(depth=0, scope="Test scope", node_type="branch")
+
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 1
+		mock_proc.communicate.return_value = (b"", b"Error occurred")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		) as mock_exec:
+			result = await planner._invoke_planner_llm(node, "obj", "hash", [])
+
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "Execute scope"
+		assert mock_exec.call_count == 1
+
+	@pytest.mark.asyncio
+	async def test_no_retry_on_timeout(self) -> None:
+		"""When subprocess times out, no retry -- return fallback immediately."""
+		planner = _planner()
+		planner.config.target.verification.timeout = 10
+		node = PlanNode(depth=0, scope="Slow scope", node_type="branch")
+
+		mock_proc = AsyncMock()
+		mock_proc.communicate.side_effect = asyncio.TimeoutError()
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		) as mock_exec:
+			result = await planner._invoke_planner_llm(node, "obj", "hash", [])
+
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "Execute scope"
+		assert mock_exec.call_count == 1
+
+	def test_is_parse_fallback_detection(self) -> None:
+		"""Unit test for _is_parse_fallback helper."""
+		# Positive: matches the fallback pattern from _parse_planner_output
+		fallback = PlannerResult(
+			type="leaves",
+			units=[{"title": "Execute scope", "description": "some text", "files_hint": "", "priority": 1}],
+		)
+		assert _is_parse_fallback(fallback) is True
+
+		# Negative: valid leaves result with a real title
+		valid = PlannerResult(
+			type="leaves",
+			units=[{"title": "Add tests", "description": "Write tests", "files_hint": "tests/", "priority": 1}],
+		)
+		assert _is_parse_fallback(valid) is False
+
+		# Negative: subdivide result
+		subdivide = PlannerResult(
+			type="subdivide",
+			children=[{"scope": "Backend"}],
+		)
+		assert _is_parse_fallback(subdivide) is False
+
+		# Negative: multiple units (even if first is "Execute scope")
+		multi = PlannerResult(
+			type="leaves",
+			units=[
+				{"title": "Execute scope", "description": "x", "files_hint": "", "priority": 1},
+				{"title": "Another", "description": "y", "files_hint": "", "priority": 2},
+			],
+		)
+		assert _is_parse_fallback(multi) is False
+
+		# Negative: empty units
+		empty = PlannerResult(type="leaves", units=[])
+		assert _is_parse_fallback(empty) is False
