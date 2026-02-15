@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mission Control Live</title>
+<style>
+:root {
+	--bg: #0d1117;
+	--surface: #161b22;
+	--border: #30363d;
+	--text: #e6edf3;
+	--text-muted: #8b949e;
+	--green: #3fb950;
+	--yellow: #d29922;
+	--red: #f85149;
+	--blue: #58a6ff;
+	--purple: #bc8cff;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+	background: var(--bg);
+	color: var(--text);
+	font-size: 14px;
+	line-height: 1.5;
+}
+
+.layout {
+	display: grid;
+	grid-template-rows: auto 1fr auto;
+	height: 100vh;
+}
+
+/* Header */
+.header {
+	background: var(--surface);
+	border-bottom: 1px solid var(--border);
+	padding: 12px 20px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+
+.header-left {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+}
+
+.header h1 {
+	font-size: 16px;
+	font-weight: 600;
+}
+
+.status-badge {
+	padding: 2px 10px;
+	border-radius: 12px;
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+}
+.status-badge.running { background: var(--green); color: #000; }
+.status-badge.stopped { background: var(--red); color: #fff; }
+.status-badge.completed { background: var(--blue); color: #000; }
+.status-badge.paused { background: var(--yellow); color: #000; }
+.status-badge.no-mission { background: var(--border); color: var(--text-muted); }
+
+.header-stats {
+	display: flex;
+	gap: 20px;
+	font-size: 13px;
+	color: var(--text-muted);
+}
+
+.header-stats .stat-value {
+	color: var(--text);
+	font-weight: 600;
+}
+
+/* Main content */
+.main {
+	display: grid;
+	grid-template-columns: 260px 1fr 300px;
+	overflow: hidden;
+}
+
+/* Plan tree panel */
+.plan-tree {
+	border-right: 1px solid var(--border);
+	overflow-y: auto;
+	padding: 12px;
+}
+
+.plan-tree h2 {
+	font-size: 13px;
+	text-transform: uppercase;
+	color: var(--text-muted);
+	margin-bottom: 8px;
+	letter-spacing: 0.5px;
+}
+
+.epoch-node {
+	margin-bottom: 8px;
+}
+
+.epoch-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	cursor: pointer;
+	padding: 4px 6px;
+	border-radius: 4px;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.epoch-header:hover { background: var(--border); }
+
+.epoch-header .toggle { width: 16px; color: var(--text-muted); }
+
+.unit-node {
+	margin-left: 22px;
+	padding: 4px 8px;
+	border-radius: 4px;
+	font-size: 12px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	cursor: pointer;
+}
+
+.unit-node:hover { background: rgba(255,255,255,0.05); }
+
+.unit-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+.unit-dot.running { background: var(--yellow); }
+.unit-dot.completed, .unit-dot.merged { background: var(--green); }
+.unit-dot.failed { background: var(--red); }
+.unit-dot.pending { background: var(--text-muted); }
+.unit-dot.blocked { background: var(--purple); }
+
+/* Worker cards panel */
+.workers {
+	overflow-y: auto;
+	padding: 16px;
+}
+
+.workers h2 {
+	font-size: 13px;
+	text-transform: uppercase;
+	color: var(--text-muted);
+	margin-bottom: 12px;
+	letter-spacing: 0.5px;
+}
+
+.worker-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+	gap: 12px;
+}
+
+.worker-card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 12px;
+	cursor: pointer;
+	transition: border-color 0.15s;
+}
+
+.worker-card:hover { border-color: var(--blue); }
+
+.worker-card.running { border-left: 3px solid var(--yellow); }
+.worker-card.completed { border-left: 3px solid var(--green); }
+.worker-card.failed { border-left: 3px solid var(--red); }
+.worker-card.pending { border-left: 3px solid var(--text-muted); }
+
+.card-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 6px;
+}
+
+.card-title {
+	font-weight: 600;
+	font-size: 13px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 200px;
+}
+
+.card-status {
+	font-size: 11px;
+	padding: 1px 6px;
+	border-radius: 8px;
+	font-weight: 600;
+}
+.card-status.running { background: rgba(210, 153, 34, 0.2); color: var(--yellow); }
+.card-status.completed { background: rgba(63, 185, 80, 0.2); color: var(--green); }
+.card-status.failed { background: rgba(248, 81, 73, 0.2); color: var(--red); }
+.card-status.pending { background: rgba(139, 148, 158, 0.2); color: var(--text-muted); }
+
+.card-meta {
+	font-size: 12px;
+	color: var(--text-muted);
+	margin-bottom: 4px;
+}
+
+.card-summary {
+	font-size: 12px;
+	color: var(--text-muted);
+	margin-top: 6px;
+	display: none;
+}
+
+.worker-card.expanded .card-summary { display: block; }
+
+.card-actions {
+	display: none;
+	margin-top: 8px;
+	gap: 6px;
+}
+
+.worker-card.expanded .card-actions { display: flex; }
+
+.card-actions button {
+	font-size: 11px;
+	padding: 3px 10px;
+	border-radius: 4px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--text);
+	cursor: pointer;
+}
+.card-actions button:hover { background: var(--border); }
+.card-actions button.danger { border-color: var(--red); color: var(--red); }
+.card-actions button.danger:hover { background: rgba(248, 81, 73, 0.15); }
+
+/* Event log panel */
+.event-log {
+	border-left: 1px solid var(--border);
+	overflow-y: auto;
+	padding: 12px;
+}
+
+.event-log h2 {
+	font-size: 13px;
+	text-transform: uppercase;
+	color: var(--text-muted);
+	margin-bottom: 8px;
+	letter-spacing: 0.5px;
+}
+
+.event-item {
+	padding: 4px 0;
+	font-size: 12px;
+	display: flex;
+	gap: 8px;
+	border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+}
+
+.event-time {
+	color: var(--text-muted);
+	flex-shrink: 0;
+	width: 50px;
+}
+
+.event-type {
+	font-weight: 600;
+	flex-shrink: 0;
+	width: 80px;
+}
+.event-type.dispatched { color: var(--blue); }
+.event-type.merged, .event-type.research_completed { color: var(--green); }
+.event-type.failed, .event-type.rejected, .event-type.merge_failed { color: var(--red); }
+.event-type.retry_queued { color: var(--yellow); }
+
+.event-unit {
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* Control bar */
+.controls {
+	background: var(--surface);
+	border-top: 1px solid var(--border);
+	padding: 10px 20px;
+	display: flex;
+	gap: 10px;
+	align-items: center;
+}
+
+.controls button {
+	padding: 6px 16px;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--text);
+	cursor: pointer;
+	font-size: 13px;
+	font-weight: 500;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.controls button:hover { background: var(--border); }
+.controls button.primary { background: var(--blue); color: #000; border-color: var(--blue); }
+.controls button.primary:hover { opacity: 0.9; }
+.controls button.danger { border-color: var(--red); color: var(--red); }
+.controls button.danger:hover { background: rgba(248, 81, 73, 0.15); }
+.controls button.warning { border-color: var(--yellow); color: var(--yellow); }
+.controls button.warning:hover { background: rgba(210, 153, 34, 0.15); }
+
+.controls .spacer { flex: 1; }
+.controls .ws-status {
+	font-size: 12px;
+	color: var(--text-muted);
+}
+.controls .ws-status.connected { color: var(--green); }
+.controls .ws-status.disconnected { color: var(--red); }
+
+/* Modal */
+.modal-overlay {
+	display: none;
+	position: fixed;
+	inset: 0;
+	background: rgba(0,0,0,0.6);
+	z-index: 100;
+	justify-content: center;
+	align-items: center;
+}
+
+.modal-overlay.active { display: flex; }
+
+.modal {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 24px;
+	width: 400px;
+	max-width: 90vw;
+}
+
+.modal h3 {
+	margin-bottom: 12px;
+	font-size: 16px;
+}
+
+.modal textarea {
+	width: 100%;
+	height: 100px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text);
+	padding: 8px;
+	font-size: 13px;
+	font-family: inherit;
+	resize: vertical;
+}
+
+.modal .modal-actions {
+	margin-top: 12px;
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.modal .modal-actions button {
+	padding: 6px 16px;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--text);
+	cursor: pointer;
+	font-size: 13px;
+}
+.modal .modal-actions button.primary { background: var(--blue); color: #000; border-color: var(--blue); }
+
+/* Empty state */
+.empty-state {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	height: 100%;
+	color: var(--text-muted);
+	font-size: 14px;
+}
+</style>
+</head>
+<body>
+
+<div class="layout">
+	<!-- Header -->
+	<div class="header">
+		<div class="header-left">
+			<h1>Mission Control</h1>
+			<span class="status-badge no-mission" id="mission-status">NO MISSION</span>
+		</div>
+		<div class="header-stats">
+			<span>Elapsed: <span class="stat-value" id="elapsed">--</span></span>
+			<span>Cost: <span class="stat-value" id="cost">$0.00</span></span>
+			<span>Merged: <span class="stat-value" id="merged">0</span></span>
+			<span>Failed: <span class="stat-value" id="failed-count">0</span></span>
+			<span>Running: <span class="stat-value" id="running-count">0</span></span>
+			<span>Pending: <span class="stat-value" id="pending-count">0</span></span>
+		</div>
+	</div>
+
+	<!-- Main content -->
+	<div class="main">
+		<!-- Plan tree -->
+		<div class="plan-tree">
+			<h2>Plan Tree</h2>
+			<div id="plan-tree-content"></div>
+		</div>
+
+		<!-- Worker cards -->
+		<div class="workers">
+			<h2>Work Units</h2>
+			<div class="worker-grid" id="worker-grid"></div>
+		</div>
+
+		<!-- Event log -->
+		<div class="event-log">
+			<h2>Event Log</h2>
+			<div id="event-log-content"></div>
+		</div>
+	</div>
+
+	<!-- Control bar -->
+	<div class="controls">
+		<button class="warning" id="btn-pause" onclick="togglePause()">Pause</button>
+		<button class="danger" id="btn-stop" onclick="sendStop()">Stop</button>
+		<button onclick="openAddObjective()">+ Objective</button>
+		<div class="spacer"></div>
+		<span class="ws-status disconnected" id="ws-status">Disconnected</span>
+	</div>
+</div>
+
+<!-- Add Objective Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+	<div class="modal">
+		<h3>Add Objective</h3>
+		<textarea id="objective-input" placeholder="Describe the additional objective..."></textarea>
+		<div class="modal-actions">
+			<button onclick="closeModal()">Cancel</button>
+			<button class="primary" onclick="submitObjective()">Add</button>
+		</div>
+	</div>
+</div>
+
+<script>
+let ws = null;
+let isPaused = false;
+let unitTitles = {}; // unit_id -> title cache for event log
+let expandedCards = new Set();
+
+function connect() {
+	const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+	ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+	ws.onopen = () => {
+		document.getElementById("ws-status").textContent = "Connected";
+		document.getElementById("ws-status").className = "ws-status connected";
+	};
+
+	ws.onclose = () => {
+		document.getElementById("ws-status").textContent = "Disconnected";
+		document.getElementById("ws-status").className = "ws-status disconnected";
+		setTimeout(connect, 2000);
+	};
+
+	ws.onerror = () => ws.close();
+
+	ws.onmessage = (e) => {
+		const snapshot = JSON.parse(e.data);
+		updateAll(snapshot);
+	};
+}
+
+function updateAll(snapshot) {
+	updateHeader(snapshot.mission);
+	updatePlanTree(snapshot.plan_tree);
+	updateWorkerCards(snapshot.units);
+	updateEventLog(snapshot.events);
+}
+
+function updateHeader(mission) {
+	const badge = document.getElementById("mission-status");
+	const elapsed = document.getElementById("elapsed");
+	const cost = document.getElementById("cost");
+
+	if (!mission) {
+		badge.textContent = "NO MISSION";
+		badge.className = "status-badge no-mission";
+		return;
+	}
+
+	const status = isPaused ? "paused" : mission.status;
+	badge.textContent = status.toUpperCase();
+	badge.className = `status-badge ${status}`;
+
+	cost.textContent = `$${(mission.total_cost_usd || 0).toFixed(2)}`;
+
+	if (mission.started_at) {
+		const start = new Date(mission.started_at);
+		const now = mission.finished_at ? new Date(mission.finished_at) : new Date();
+		const diffMs = now - start;
+		const mins = Math.floor(diffMs / 60000);
+		const secs = Math.floor((diffMs % 60000) / 1000);
+		elapsed.textContent = `${mins}m ${secs}s`;
+	}
+}
+
+function updatePlanTree(tree) {
+	const container = document.getElementById("plan-tree-content");
+	if (!tree || tree.length === 0) {
+		container.innerHTML = '<div class="empty-state">No plan data</div>';
+		return;
+	}
+
+	let html = "";
+	for (const epoch of tree) {
+		const children = epoch.children || [];
+		const merged = children.filter(c => c.status === "completed").length;
+		const running = children.filter(c => c.status === "running").length;
+		const failed = children.filter(c => c.status === "failed").length;
+
+		html += `<div class="epoch-node">`;
+		html += `<div class="epoch-header" onclick="this.parentElement.classList.toggle('collapsed')">`;
+		html += `<span class="toggle">&#9662;</span>`;
+		html += `<span>Epoch ${epoch.number}</span>`;
+		html += `<span style="color:var(--text-muted);font-size:11px;margin-left:auto">`;
+		if (merged) html += `<span style="color:var(--green)">${merged}m</span> `;
+		if (running) html += `<span style="color:var(--yellow)">${running}r</span> `;
+		if (failed) html += `<span style="color:var(--red)">${failed}f</span>`;
+		html += `</span>`;
+		html += `</div>`;
+
+		for (const unit of children) {
+			unitTitles[unit.id] = unit.title;
+			const dotClass = unit.status === "completed" ? "completed" : unit.status;
+			html += `<div class="unit-node" onclick="scrollToCard('${unit.id}')" title="${escapeHtml(unit.title)}">`;
+			html += `<span class="unit-dot ${dotClass}"></span>`;
+			html += `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(unit.title)}</span>`;
+			html += `</div>`;
+		}
+		html += `</div>`;
+	}
+	container.innerHTML = html;
+}
+
+function updateWorkerCards(units) {
+	const grid = document.getElementById("worker-grid");
+	const mergedEl = document.getElementById("merged");
+	const failedEl = document.getElementById("failed-count");
+	const runningEl = document.getElementById("running-count");
+	const pendingEl = document.getElementById("pending-count");
+
+	if (!units || units.length === 0) {
+		grid.innerHTML = '<div class="empty-state">No work units</div>';
+		return;
+	}
+
+	// Sort: running first, then pending, then completed, then failed
+	const order = { running: 0, pending: 1, claimed: 1, completed: 3, failed: 4 };
+	const sorted = [...units].sort((a, b) => (order[a.status] || 2) - (order[b.status] || 2));
+
+	let merged = 0, failed = 0, running = 0, pending = 0;
+	let html = "";
+
+	for (const unit of sorted) {
+		unitTitles[unit.id] = unit.title;
+
+		if (unit.status === "completed") merged++;
+		else if (unit.status === "failed") failed++;
+		else if (unit.status === "running") running++;
+		else if (unit.status === "pending" || unit.status === "claimed") pending++;
+
+		const expanded = expandedCards.has(unit.id) ? "expanded" : "";
+		const elapsed = unit.started_at && unit.status === "running"
+			? formatElapsed(unit.started_at)
+			: "";
+
+		html += `<div class="worker-card ${unit.status} ${expanded}" id="card-${unit.id}" onclick="toggleCard('${unit.id}')">`;
+		html += `<div class="card-header">`;
+		html += `<span class="card-title" title="${escapeHtml(unit.title)}">${escapeHtml(unit.title)}</span>`;
+		html += `<span class="card-status ${unit.status}">${unit.status}</span>`;
+		html += `</div>`;
+		html += `<div class="card-meta">`;
+		html += `${unit.id.substring(0, 8)}`;
+		if (unit.attempt > 0) html += ` | attempt ${unit.attempt}/${unit.max_attempts}`;
+		if (elapsed) html += ` | ${elapsed}`;
+		if (unit.cost_usd > 0) html += ` | $${unit.cost_usd.toFixed(2)}`;
+		html += `</div>`;
+
+		if (unit.files_hint) {
+			html += `<div class="card-meta">files: ${escapeHtml(unit.files_hint.substring(0, 60))}</div>`;
+		}
+
+		html += `<div class="card-summary">`;
+		if (unit.output_summary) html += `<p>${escapeHtml(unit.output_summary)}</p>`;
+		if (unit.description) html += `<p style="margin-top:4px;color:var(--text-muted)">${escapeHtml(unit.description)}</p>`;
+		html += `</div>`;
+
+		html += `<div class="card-actions">`;
+		if (unit.status === "running") {
+			html += `<button class="danger" onclick="event.stopPropagation();cancelUnit('${unit.id}')">Cancel</button>`;
+		}
+		if (unit.status === "failed") {
+			html += `<button onclick="event.stopPropagation();forceRetry('${unit.id}')">Force Retry</button>`;
+		}
+		html += `</div>`;
+
+		html += `</div>`;
+	}
+
+	grid.innerHTML = html;
+	mergedEl.textContent = merged;
+	failedEl.textContent = failed;
+	runningEl.textContent = running;
+	pendingEl.textContent = pending;
+}
+
+function updateEventLog(events) {
+	const container = document.getElementById("event-log-content");
+	if (!events || events.length === 0) {
+		container.innerHTML = '<div class="empty-state">No events</div>';
+		return;
+	}
+
+	// Show newest first
+	const reversed = [...events].reverse();
+	let html = "";
+	for (const event of reversed.slice(0, 100)) {
+		const time = event.timestamp ? formatTime(event.timestamp) : "--:--";
+		const unitTitle = unitTitles[event.work_unit_id] || event.work_unit_id.substring(0, 8);
+
+		html += `<div class="event-item">`;
+		html += `<span class="event-time">${time}</span>`;
+		html += `<span class="event-type ${event.event_type}">${event.event_type}</span>`;
+		html += `<span class="event-unit" title="${escapeHtml(unitTitle)}">${escapeHtml(unitTitle)}</span>`;
+		html += `</div>`;
+	}
+	container.innerHTML = html;
+}
+
+// Control actions
+async function sendSignal(type, payload = {}) {
+	try {
+		await fetch("/api/signal", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ signal_type: type, payload }),
+		});
+	} catch (e) {
+		console.error("Failed to send signal:", e);
+	}
+}
+
+function togglePause() {
+	if (isPaused) {
+		sendSignal("resume");
+		isPaused = false;
+		document.getElementById("btn-pause").textContent = "Pause";
+	} else {
+		sendSignal("pause");
+		isPaused = true;
+		document.getElementById("btn-pause").textContent = "Resume";
+	}
+}
+
+function sendStop() {
+	if (confirm("Stop the mission?")) {
+		sendSignal("stop");
+	}
+}
+
+function cancelUnit(unitId) {
+	sendSignal("cancel_unit", { unit_id: unitId });
+}
+
+function forceRetry(unitId) {
+	sendSignal("force_retry", { unit_id: unitId });
+}
+
+function openAddObjective() {
+	document.getElementById("modal-overlay").classList.add("active");
+	document.getElementById("objective-input").focus();
+}
+
+function closeModal(event) {
+	if (!event || event.target === document.getElementById("modal-overlay")) {
+		document.getElementById("modal-overlay").classList.remove("active");
+		document.getElementById("objective-input").value = "";
+	}
+}
+
+function submitObjective() {
+	const text = document.getElementById("objective-input").value.trim();
+	if (text) {
+		sendSignal("add_objective", { objective: text });
+		closeModal();
+	}
+}
+
+// Helpers
+function toggleCard(id) {
+	if (expandedCards.has(id)) {
+		expandedCards.delete(id);
+	} else {
+		expandedCards.add(id);
+	}
+	const card = document.getElementById(`card-${id}`);
+	if (card) card.classList.toggle("expanded");
+}
+
+function scrollToCard(id) {
+	const card = document.getElementById(`card-${id}`);
+	if (card) {
+		card.scrollIntoView({ behavior: "smooth", block: "center" });
+		if (!expandedCards.has(id)) toggleCard(id);
+		card.style.borderColor = "var(--blue)";
+		setTimeout(() => card.style.borderColor = "", 2000);
+	}
+}
+
+function formatElapsed(isoString) {
+	const start = new Date(isoString);
+	const diff = Date.now() - start.getTime();
+	const mins = Math.floor(diff / 60000);
+	if (mins < 1) return "<1m";
+	return `${mins}m`;
+}
+
+function formatTime(isoString) {
+	try {
+		const d = new Date(isoString);
+		return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+	} catch {
+		return "--:--";
+	}
+}
+
+function escapeHtml(text) {
+	if (!text) return "";
+	const div = document.createElement("div");
+	div.textContent = text;
+	return div.innerHTML;
+}
+
+// Start
+connect();
+</script>
+</body>
+</html>
