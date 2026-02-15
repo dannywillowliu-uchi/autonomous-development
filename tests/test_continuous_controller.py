@@ -1119,3 +1119,126 @@ class TestPostMissionDiscovery:
 		):
 			# Should not raise
 			await ctrl._run_post_mission_discovery()
+
+
+class TestWorkerRecordPersistence:
+	"""Tests that Worker DB records are created/updated during _execute_single_unit."""
+
+	def _setup(self) -> tuple:
+		db = _db()
+		db.insert_mission(Mission(id="m1", objective="test"))
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		config = _config()
+		config.target.path = "/tmp/test"
+		ctrl = ContinuousController(config, db)
+
+		async def mock_locked_call(method: str, *args: object) -> object:
+			return getattr(db, method)(*args)
+		db.locked_call = mock_locked_call  # type: ignore[attr-defined]
+
+		return db, config, ctrl, epoch
+
+	@pytest.mark.asyncio
+	async def test_worker_created_on_spawn(self) -> None:
+		"""Worker record is inserted after backend.spawn() succeeds."""
+		db, config, ctrl, epoch = self._setup()
+
+		mock_backend = AsyncMock()
+		mock_handle = MagicMock()
+		mock_handle.pid = 42
+		mock_handle.workspace_path = "/tmp/ws/wu1"
+		mock_backend.spawn.return_value = mock_handle
+		mock_backend.check_status.return_value = "completed"
+		mock_backend.get_output.return_value = ""
+		ctrl._backend = mock_backend
+
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+		semaphore = asyncio.Semaphore(1)
+
+		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"), semaphore)
+
+		worker = db.get_worker("wu1")
+		assert worker is not None
+		assert worker.workspace_path == "/tmp/ws/wu1"
+		assert worker.backend_type == "local"
+
+	@pytest.mark.asyncio
+	async def test_worker_idle_on_completion(self) -> None:
+		"""Worker status set to idle after successful completion."""
+		db, config, ctrl, epoch = self._setup()
+
+		mc_result = json.dumps({
+			"status": "completed", "commits": ["abc123"],
+			"summary": "Done", "files_changed": [], "discoveries": [], "concerns": [],
+		})
+		output = f"MC_RESULT:{mc_result}"
+
+		mock_backend = AsyncMock()
+		mock_handle = MagicMock()
+		mock_handle.pid = 42
+		mock_handle.workspace_path = "/tmp/ws"
+		mock_backend.spawn.return_value = mock_handle
+		mock_backend.check_status.return_value = "completed"
+		mock_backend.get_output.return_value = output
+		ctrl._backend = mock_backend
+
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+		semaphore = asyncio.Semaphore(1)
+
+		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"), semaphore)
+
+		worker = db.get_worker("wu1")
+		assert worker is not None
+		assert worker.status == "idle"
+		assert worker.current_unit_id is None
+		assert worker.pid is None
+		assert worker.units_completed == 1
+		assert worker.units_failed == 0
+
+	@pytest.mark.asyncio
+	async def test_worker_dead_on_infrastructure_error(self) -> None:
+		"""Worker status set to dead on infrastructure error."""
+		db, config, ctrl, epoch = self._setup()
+
+		mock_backend = AsyncMock()
+		mock_handle = MagicMock()
+		mock_handle.pid = 42
+		mock_handle.workspace_path = "/tmp/ws"
+		mock_backend.spawn.return_value = mock_handle
+		mock_backend.check_status.side_effect = RuntimeError("Connection lost")
+		ctrl._backend = mock_backend
+
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+		semaphore = asyncio.Semaphore(1)
+
+		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"), semaphore)
+
+		worker = db.get_worker("wu1")
+		assert worker is not None
+		assert worker.status == "dead"
+		assert worker.units_failed == 1
+
+	@pytest.mark.asyncio
+	async def test_no_worker_on_provision_failure(self) -> None:
+		"""No Worker record when workspace provisioning fails (before spawn)."""
+		db, config, ctrl, epoch = self._setup()
+
+		mock_backend = AsyncMock()
+		mock_backend.provision_workspace.side_effect = RuntimeError("Pool full")
+		ctrl._backend = mock_backend
+
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+		semaphore = asyncio.Semaphore(1)
+
+		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"), semaphore)
+
+		worker = db.get_worker("wu1")
+		assert worker is None

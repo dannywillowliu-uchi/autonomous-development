@@ -25,6 +25,7 @@ from mission_control.models import (
 	PlanNode,
 	Signal,
 	UnitEvent,
+	Worker,
 	WorkUnit,
 	_now_iso,
 )
@@ -742,6 +743,7 @@ class ContinuousController:
 		source_repo = str(self.config.target.resolved_path)
 		base_branch = self.config.green_branch.green_branch
 		workspace = ""
+		worker: Worker | None = None
 
 		try:
 			try:
@@ -832,12 +834,27 @@ class ContinuousController:
 				timeout=effective_timeout,
 			)
 
+			# Track worker subprocess lifecycle
+			worker = Worker(
+				id=unit.id,
+				workspace_path=handle.workspace_path or workspace,
+				status="working",
+				current_unit_id=unit.id,
+				pid=handle.pid,
+				backend_type=self.config.backend.type,
+			)
+			try:
+				await self.db.locked_call("insert_worker", worker)
+			except Exception:
+				logger.debug("Worker record insert failed for %s", unit.id)
+
 			# Wait for completion
 			poll_deadline = int(
 				effective_timeout * self.config.continuous.timeout_multiplier,
 			)
 			monitor_interval = self.config.scheduler.monitor_interval
 			start = time.monotonic()
+			poll_iter = 0
 			while time.monotonic() - start < poll_deadline:
 				status = await self._backend.check_status(handle)
 				if status != "running":
@@ -849,13 +866,28 @@ class ContinuousController:
 					unit.output_summary = "Stopped by signal"
 					unit.finished_at = _now_iso()
 					await self.db.locked_call("update_work_unit", unit)
+					worker.status = "dead"
+					worker.units_failed += 1
+					try:
+						await self.db.locked_call("update_worker", worker)
+					except Exception:
+						pass
 					await self._completion_queue.put(
 						WorkerCompletion(
 							unit=unit, handoff=None, workspace=workspace, epoch=epoch,
 						),
 					)
 					return
-				await self._backend.get_output(handle)
+				output_so_far = await self._backend.get_output(handle)
+				poll_iter += 1
+				if poll_iter % 5 == 0:
+					worker.last_heartbeat = _now_iso()
+					excerpt = (output_so_far or "")[-500:]
+					worker.backend_metadata = json.dumps({"output_excerpt": excerpt})
+					try:
+						await self.db.locked_call("update_worker", worker)
+					except Exception:
+						pass
 				await asyncio.sleep(monitor_interval)
 			else:
 				await self._backend.kill(handle)
@@ -864,6 +896,12 @@ class ContinuousController:
 				unit.output_summary = f"Timed out after {effective_timeout}s"
 				unit.finished_at = _now_iso()
 				await self.db.locked_call("update_work_unit", unit)
+				worker.status = "dead"
+				worker.units_failed += 1
+				try:
+					await self.db.locked_call("update_worker", worker)
+				except Exception:
+					pass
 				await self._completion_queue.put(
 					WorkerCompletion(
 						unit=unit, handoff=None, workspace=workspace, epoch=epoch,
@@ -936,6 +974,21 @@ class ContinuousController:
 			unit.finished_at = _now_iso()
 			await self.db.locked_call("update_work_unit", unit)
 
+			# Update worker record on completion
+			if worker is not None:
+				if unit.status == "failed":
+					worker.units_failed += 1
+				else:
+					worker.units_completed += 1
+				worker.status = "idle"
+				worker.current_unit_id = None
+				worker.pid = None
+				worker.total_cost_usd += unit.cost_usd
+				try:
+					await self.db.locked_call("update_worker", worker)
+				except Exception:
+					pass
+
 			# Put on completion queue for verify+merge
 			await self._completion_queue.put(
 				WorkerCompletion(
@@ -950,6 +1003,13 @@ class ContinuousController:
 			unit.output_summary = f"Infrastructure error: {e}"
 			unit.finished_at = _now_iso()
 			await self.db.locked_call("update_work_unit", unit)
+			if worker is not None:
+				worker.status = "dead"
+				worker.units_failed += 1
+				try:
+					await self.db.locked_call("update_worker", worker)
+				except Exception:
+					pass
 			await self._completion_queue.put(
 				WorkerCompletion(
 					unit=unit, handoff=None, workspace=workspace, epoch=epoch,
@@ -962,6 +1022,13 @@ class ContinuousController:
 			unit.output_summary = "Cancelled"
 			unit.finished_at = _now_iso()
 			await self.db.locked_call("update_work_unit", unit)
+			if worker is not None:
+				worker.status = "dead"
+				worker.units_failed += 1
+				try:
+					await self.db.locked_call("update_worker", worker)
+				except Exception:
+					pass
 			# Don't put on queue -- controller is shutting down
 		except (ValueError, KeyError, json.JSONDecodeError, sqlite3.IntegrityError) as e:
 			logger.error("Data error executing unit %s: %s", unit.id, e)
@@ -970,12 +1037,28 @@ class ContinuousController:
 			unit.output_summary = f"Data error: {e}"
 			unit.finished_at = _now_iso()
 			await self.db.locked_call("update_work_unit", unit)
+			if worker is not None:
+				worker.status = "dead"
+				worker.units_failed += 1
+				try:
+					await self.db.locked_call("update_worker", worker)
+				except Exception:
+					pass
 			await self._completion_queue.put(
 				WorkerCompletion(
 					unit=unit, handoff=None, workspace=workspace, epoch=epoch,
 				),
 			)
 		finally:
+			# Safety net: ensure worker marked idle if not already cleaned up
+			if worker is not None and worker.status == "working":
+				worker.status = "idle"
+				worker.current_unit_id = None
+				worker.pid = None
+				try:
+					await self.db.locked_call("update_worker", worker)
+				except Exception:
+					pass
 			if workspace:
 				await self._backend.release_workspace(workspace)
 			semaphore.release()
