@@ -277,6 +277,31 @@ budget_per_call_usd = 0.5
 	assert cfg.planner.budget_per_call_usd == 0.5
 
 
+def test_verification_setup_command_defaults() -> None:
+	"""VerificationConfig setup fields default to empty/120."""
+	cfg = MissionConfig()
+	assert cfg.target.verification.setup_command == ""
+	assert cfg.target.verification.setup_timeout == 120
+
+
+def test_verification_setup_command_from_toml(tmp_path: Path) -> None:
+	"""setup_command and setup_timeout parsed from TOML."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[target.verification]
+command = "cd app && npx tsc --noEmit"
+setup_command = "cd app && npm install --silent"
+setup_timeout = 60
+""")
+	cfg = load_config(toml)
+	assert cfg.target.verification.setup_command == "cd app && npm install --silent"
+	assert cfg.target.verification.setup_timeout == 60
+
+
 def test_green_branch_defaults() -> None:
 	"""GreenBranchConfig defaults."""
 	cfg = MissionConfig()

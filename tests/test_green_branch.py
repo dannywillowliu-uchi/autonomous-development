@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from mission_control.config import (
 	GreenBranchConfig,
 	MissionConfig,
@@ -179,6 +181,80 @@ class TestRunCommandTimeout:
 		assert "timed out" in output
 		mock_proc.kill.assert_called_once()
 		mock_proc.wait.assert_called_once()
+
+
+class TestInitializeSetupCommand:
+	"""Tests for running setup_command during initialize()."""
+
+	async def test_setup_command_runs_on_init(self) -> None:
+		"""When setup_command is configured, it runs at the end of initialize()."""
+		config = _config()
+		config.target.verification.setup_command = "npm install"
+		config.target.verification.setup_timeout = 30
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate = AsyncMock(return_value=(b"ok", None))
+
+		with patch.object(mgr, "_run_git_in", AsyncMock(return_value=(False, ""))), \
+			patch.object(mgr, "_run_git", AsyncMock(return_value=(True, ""))), \
+			patch("mission_control.green_branch.asyncio.create_subprocess_shell", return_value=mock_proc) as mock_shell:
+			await mgr.initialize("/tmp/workspace")
+
+		mock_shell.assert_called_once()
+		assert "npm install" in mock_shell.call_args[0][0]
+
+	async def test_setup_command_failure_raises(self) -> None:
+		"""Setup command failure raises RuntimeError."""
+		config = _config()
+		config.target.verification.setup_command = "npm install"
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 1
+		mock_proc.communicate = AsyncMock(return_value=(b"ERR: not found", None))
+
+		with patch.object(mgr, "_run_git_in", AsyncMock(return_value=(False, ""))), \
+			patch.object(mgr, "_run_git", AsyncMock(return_value=(True, ""))), \
+			patch("mission_control.green_branch.asyncio.create_subprocess_shell", return_value=mock_proc):
+			with pytest.raises(RuntimeError, match="Workspace setup failed"):
+				await mgr.initialize("/tmp/workspace")
+
+	async def test_setup_command_timeout_raises(self) -> None:
+		"""Setup command timeout raises RuntimeError."""
+		config = _config()
+		config.target.verification.setup_command = "npm install"
+		config.target.verification.setup_timeout = 1
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		mock_proc = AsyncMock()
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+
+		with patch.object(mgr, "_run_git_in", AsyncMock(return_value=(False, ""))), \
+			patch.object(mgr, "_run_git", AsyncMock(return_value=(True, ""))), \
+			patch("mission_control.green_branch.asyncio.create_subprocess_shell", return_value=mock_proc), \
+			patch("mission_control.green_branch.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+			with pytest.raises(RuntimeError, match="timed out"):
+				await mgr.initialize("/tmp/workspace")
+
+	async def test_no_setup_command_skips(self) -> None:
+		"""When setup_command is empty, no subprocess is spawned."""
+		config = _config()
+		config.target.verification.setup_command = ""
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+
+		with patch.object(mgr, "_run_git_in", AsyncMock(return_value=(False, ""))), \
+			patch.object(mgr, "_run_git", AsyncMock(return_value=(True, ""))), \
+			patch("mission_control.green_branch.asyncio.create_subprocess_shell") as mock_shell:
+			await mgr.initialize("/tmp/workspace")
+
+		mock_shell.assert_not_called()
 
 
 class TestInitializeResetOnInit:

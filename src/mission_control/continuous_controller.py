@@ -319,6 +319,36 @@ class ContinuousController:
 			if source_venv.exists() and not workspace_venv.exists():
 				workspace_venv.symlink_to(source_venv)
 				logger.info("Symlinked .venv into green branch workspace")
+
+			# Run setup command if configured (e.g., npm install for non-Python projects)
+			setup_cmd = self.config.target.verification.setup_command
+			if setup_cmd:
+				setup_timeout = self.config.target.verification.setup_timeout
+				logger.info("Running verification setup: %s", setup_cmd)
+				proc = await asyncio.create_subprocess_shell(
+					setup_cmd,
+					cwd=gb_workspace,
+					stdout=asyncio.subprocess.PIPE,
+					stderr=asyncio.subprocess.STDOUT,
+				)
+				try:
+					stdout, _ = await asyncio.wait_for(
+						proc.communicate(), timeout=setup_timeout,
+					)
+				except asyncio.TimeoutError:
+					try:
+						proc.kill()
+						await proc.wait()
+					except ProcessLookupError:
+						pass
+					raise RuntimeError(
+						f"Verification setup timed out after {setup_timeout}s: {setup_cmd}"
+					)
+				if proc.returncode != 0:
+					output = stdout.decode() if stdout else ""
+					raise RuntimeError(
+						f"Verification setup failed (exit {proc.returncode}): {output[:500]}"
+					)
 		else:
 			raise NotImplementedError(
 				"Continuous mode requires a local workspace for green branch "

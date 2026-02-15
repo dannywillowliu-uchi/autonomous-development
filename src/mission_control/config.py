@@ -15,6 +15,8 @@ class VerificationConfig:
 
 	command: str = "pytest -q"
 	timeout: int = 300
+	setup_command: str = ""
+	setup_timeout: int = 120
 
 
 @dataclass
@@ -223,6 +225,10 @@ def _build_verification(data: dict[str, Any]) -> VerificationConfig:
 		vc.command = str(data["command"])
 	if "timeout" in data:
 		vc.timeout = int(data["timeout"])
+	if "setup_command" in data:
+		vc.setup_command = str(data["setup_command"])
+	if "setup_timeout" in data:
+		vc.setup_timeout = int(data["setup_timeout"])
 	return vc
 
 
