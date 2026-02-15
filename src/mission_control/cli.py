@@ -348,6 +348,15 @@ def cmd_mission(args: argparse.Namespace) -> int:
 		per_run = config.scheduler.budget.max_per_run_usd
 		print(f"Budget: ${per_session}/session, ${per_run}/run")
 		print(f"Database: {db_path}")
+
+		if config.target.objective:
+			db = Database(db_path)
+			try:
+				from mission_control.continuous_controller import ContinuousController
+				controller = ContinuousController(config, db)
+				asyncio.run(controller.run(dry_run=True))
+			finally:
+				db.close()
 		return 0
 
 	# Auto-discover mode: run discovery, then use results as objective

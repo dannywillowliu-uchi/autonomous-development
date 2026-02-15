@@ -19,7 +19,7 @@ from mission_control.continuous_controller import (
 )
 from mission_control.db import Database
 from mission_control.green_branch import UnitMergeResult
-from mission_control.models import Epoch, Handoff, Mission, Plan, Signal, WorkUnit
+from mission_control.models import Epoch, Handoff, Mission, Plan, Signal, Worker, WorkUnit
 
 
 class TestShouldStop:
@@ -1173,3 +1173,226 @@ class TestWorkerRecordPersistence:
 
 		worker = db.get_worker("wu1")
 		assert worker is None
+
+
+class TestFailUnitHelper:
+	@pytest.mark.asyncio
+	async def test_updates_unit_and_worker_and_queues(self, config: MissionConfig, db: Database) -> None:
+		"""_fail_unit should update unit status, worker status, and put completion on queue."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		ctrl = ContinuousController(config, db)
+
+		async def mock_locked_call(method: str, *args: object) -> object:
+			return getattr(db, method)(*args)
+		db.locked_call = mock_locked_call  # type: ignore[attr-defined]
+
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task", attempt=0)
+		db.insert_work_unit(unit)
+
+		worker = Worker(id="w1", workspace_path="/tmp/ws", status="working")
+		db.insert_worker(worker)
+
+		await ctrl._fail_unit(unit, worker, epoch, "test failure", "/tmp/ws")
+
+		assert unit.status == "failed"
+		assert unit.attempt == 1
+		assert unit.output_summary == "test failure"
+		assert unit.finished_at is not None
+		assert worker.status == "dead"
+		assert worker.units_failed == 1
+
+		# Check completion was queued
+		assert not ctrl._completion_queue.empty()
+		completion = ctrl._completion_queue.get_nowait()
+		assert completion.unit.id == "wu1"
+		assert completion.handoff is None
+		assert completion.workspace == "/tmp/ws"
+
+	@pytest.mark.asyncio
+	async def test_put_on_queue_false_skips_queue(self, config: MissionConfig, db: Database) -> None:
+		"""_fail_unit with put_on_queue=False should not add to completion queue."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		ctrl = ContinuousController(config, db)
+
+		async def mock_locked_call(method: str, *args: object) -> object:
+			return getattr(db, method)(*args)
+		db.locked_call = mock_locked_call  # type: ignore[attr-defined]
+
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task", attempt=0)
+		db.insert_work_unit(unit)
+
+		await ctrl._fail_unit(unit, None, epoch, "cancelled", "/tmp/ws", put_on_queue=False)
+
+		assert unit.status == "failed"
+		assert unit.attempt == 1
+		assert ctrl._completion_queue.empty()
+
+	@pytest.mark.asyncio
+	async def test_no_worker(self, config: MissionConfig, db: Database) -> None:
+		"""_fail_unit with worker=None should still update unit and queue."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		ctrl = ContinuousController(config, db)
+
+		async def mock_locked_call(method: str, *args: object) -> object:
+			return getattr(db, method)(*args)
+		db.locked_call = mock_locked_call  # type: ignore[attr-defined]
+
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task", attempt=0)
+		db.insert_work_unit(unit)
+
+		await ctrl._fail_unit(unit, None, epoch, "provision failed", "")
+
+		assert unit.status == "failed"
+		assert not ctrl._completion_queue.empty()
+
+
+class TestHandleAdjustSemaphoreRebuild:
+	def test_semaphore_rebuilt_with_new_value(self, config: MissionConfig, db: Database) -> None:
+		"""_handle_adjust_signal should rebuild semaphore with new worker count."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._semaphore = asyncio.Semaphore(2)
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="adjust",
+			payload='{"num_workers": 6}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_adjust_signal(signal)
+
+		assert config.scheduler.parallel.num_workers == 6
+		assert ctrl._semaphore is not None
+		assert ctrl._semaphore._value == 6
+
+	def test_semaphore_preserves_in_flight(self, config: MissionConfig, db: Database) -> None:
+		"""Semaphore rebuild should pre-acquire slots for in-flight workers."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._semaphore = asyncio.Semaphore(4)
+
+		# Simulate 2 in-flight tasks
+		mock_task1 = MagicMock(spec=asyncio.Task)
+		mock_task1.done.return_value = False
+		mock_task2 = MagicMock(spec=asyncio.Task)
+		mock_task2.done.return_value = False
+		mock_done_task = MagicMock(spec=asyncio.Task)
+		mock_done_task.done.return_value = True
+		ctrl._active_tasks = {mock_task1, mock_task2, mock_done_task}
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="adjust",
+			payload='{"num_workers": 5}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_adjust_signal(signal)
+
+		# 5 total - 2 in-flight = 3 available
+		assert ctrl._semaphore._value == 3
+
+	def test_no_semaphore_no_crash(self, config: MissionConfig, db: Database) -> None:
+		"""Adjusting workers without semaphore should still update config."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		# _semaphore is None by default
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="adjust",
+			payload='{"num_workers": 3}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_adjust_signal(signal)
+
+		assert config.scheduler.parallel.num_workers == 3
+		assert ctrl._semaphore is None
+
+
+class TestDryRun:
+	@pytest.mark.asyncio
+	async def test_dry_run_returns_early(self, config: MissionConfig, db: Database) -> None:
+		"""dry_run=True should call planner once and return empty result."""
+		ctrl = ContinuousController(config, db)
+
+		plan = Plan(id="p1", objective="test")
+		epoch = Epoch(id="ep1", mission_id="m1", number=0)
+		units = [
+			WorkUnit(id="wu1", plan_id="p1", title="Task A", priority=1, files_hint="src/a.py"),
+			WorkUnit(id="wu2", plan_id="p1", title="Task B", priority=2, files_hint="src/b.py"),
+		]
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(return_value=(plan, units, epoch))
+
+		mock_backend = AsyncMock()
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._backend = mock_backend
+
+		with patch.object(ctrl, "_init_components", mock_init):
+			result = await ctrl.run(dry_run=True)
+
+		mock_planner.get_next_units.assert_called_once()
+		assert result.mission_id == ""
+		assert result.total_units_dispatched == 0
+		mock_backend.cleanup.assert_called_once()
+
+	@pytest.mark.asyncio
+	async def test_dry_run_no_units(self, config: MissionConfig, db: Database) -> None:
+		"""dry_run with no planner units should print message and return."""
+		ctrl = ContinuousController(config, db)
+
+		plan = Plan(id="p1", objective="test")
+		epoch = Epoch(id="ep1", mission_id="m1", number=0)
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(return_value=(plan, [], epoch))
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._backend = AsyncMock()
+
+		with patch.object(ctrl, "_init_components", mock_init):
+			result = await ctrl.run(dry_run=True)
+
+		assert result.total_units_dispatched == 0
+
+	@pytest.mark.asyncio
+	async def test_dry_run_does_not_insert_mission(self, config: MissionConfig, db: Database) -> None:
+		"""dry_run should not persist a mission to the database."""
+		ctrl = ContinuousController(config, db)
+
+		plan = Plan(id="p1", objective="test")
+		epoch = Epoch(id="ep1", mission_id="m1", number=0)
+		units = [WorkUnit(id="wu1", plan_id="p1", title="Task")]
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(return_value=(plan, units, epoch))
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._backend = AsyncMock()
+
+		with patch.object(ctrl, "_init_components", mock_init):
+			await ctrl.run(dry_run=True)
+
+		# No mission should be in the DB
+		latest = db.get_latest_mission()
+		assert latest is None
