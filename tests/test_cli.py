@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mission_control.cli import build_parser, cmd_init, cmd_parallel, main
+from mission_control.cli import build_parser, cmd_discover, cmd_init, cmd_parallel, main
 
 
 class TestArgParsing:
@@ -98,3 +98,62 @@ model = "sonnet"
 		args = parser.parse_args(["parallel", "--config", str(config_file), "--dry-run"])
 		result = cmd_parallel(args)
 		assert result == 0
+
+
+class TestDiscoverArgs:
+	def test_discover_defaults(self) -> None:
+		parser = build_parser()
+		args = parser.parse_args(["discover"])
+		assert args.command == "discover"
+		assert args.config == "mission-control.toml"
+		assert args.dry_run is False
+		assert args.json_output is False
+		assert args.latest is False
+
+	def test_discover_with_flags(self) -> None:
+		parser = build_parser()
+		args = parser.parse_args(["discover", "--json", "--config", "c.toml"])
+		assert args.json_output is True
+		assert args.config == "c.toml"
+
+	def test_discover_dry_run(self, tmp_path: Path) -> None:
+		config_file = tmp_path / "mission-control.toml"
+		config_file.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[discovery]
+model = "sonnet"
+tracks = ["feature", "quality"]
+""")
+		parser = build_parser()
+		args = parser.parse_args(["discover", "--config", str(config_file), "--dry-run"])
+		result = cmd_discover(args)
+		assert result == 0
+
+	def test_discover_latest_empty(self, tmp_path: Path) -> None:
+		config_file = tmp_path / "mission-control.toml"
+		config_file.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+""")
+		parser = build_parser()
+		args = parser.parse_args(["discover", "--config", str(config_file), "--latest"])
+		result = cmd_discover(args)
+		assert result == 1  # No discoveries yet
+
+
+class TestMissionAutoDiscoverArgs:
+	def test_mission_auto_discover_flag(self) -> None:
+		parser = build_parser()
+		args = parser.parse_args(["mission", "--auto-discover"])
+		assert args.auto_discover is True
+		assert args.approve_all is False
+
+	def test_mission_approve_all_flag(self) -> None:
+		parser = build_parser()
+		args = parser.parse_args(["mission", "--auto-discover", "--approve-all"])
+		assert args.auto_discover is True
+		assert args.approve_all is True

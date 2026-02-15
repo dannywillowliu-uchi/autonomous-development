@@ -53,6 +53,21 @@ def build_parser() -> argparse.ArgumentParser:
 	mission.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
 	mission.add_argument("--workers", type=int, default=None, help="Number of workers")
 	mission.add_argument("--dry-run", action="store_true", help="Show mission plan without executing")
+	mission.add_argument(
+		"--auto-discover", action="store_true",
+		help="Run discovery before mission, use results as objective",
+	)
+	mission.add_argument(
+		"--approve-all", action="store_true",
+		help="Auto-approve all discovery items (skip checkpoint)",
+	)
+
+	# mc discover
+	discover = sub.add_parser("discover", help="Run codebase discovery analysis")
+	discover.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	discover.add_argument("--dry-run", action="store_true", help="Show what would be analyzed")
+	discover.add_argument("--json", action="store_true", dest="json_output", help="Output raw JSON")
+	discover.add_argument("--latest", action="store_true", help="Show latest discovery from DB")
 
 	# mc init
 	init_cmd = sub.add_parser("init", help="Initialize a mission-control config")
@@ -220,6 +235,83 @@ def cmd_parallel(args: argparse.Namespace) -> int:
 		db.close()
 
 
+def cmd_discover(args: argparse.Namespace) -> int:
+	"""Run codebase discovery analysis."""
+	import json as json_mod
+
+	from mission_control.auto_discovery import DiscoveryEngine
+
+	config = load_config(args.config)
+	db_path = _get_db_path(args.config)
+
+	if args.dry_run:
+		dc = config.discovery
+		print(f"Target: {config.target.name} ({config.target.resolved_path})")
+		print(f"Tracks: {', '.join(dc.tracks)}")
+		print(f"Model: {dc.model}")
+		print(f"Budget: ${dc.budget_per_call_usd}/call")
+		print(f"Min priority: {dc.min_priority_score}")
+		print(f"Max items/track: {dc.max_items_per_track}")
+		return 0
+
+	db = Database(db_path)
+	try:
+		if args.latest:
+			result, items = db.get_latest_discovery()
+			if result is None:
+				print("No discovery results found.")
+				return 1
+		else:
+			engine = DiscoveryEngine(config, db)
+			result, items = asyncio.run(engine.discover())
+
+		if args.json_output:
+			data = {
+				"id": result.id,
+				"timestamp": result.timestamp,
+				"model": result.model,
+				"item_count": result.item_count,
+				"items": [
+					{
+						"track": i.track,
+						"title": i.title,
+						"description": i.description,
+						"rationale": i.rationale,
+						"files_hint": i.files_hint,
+						"impact": i.impact,
+						"effort": i.effort,
+						"priority_score": i.priority_score,
+						"status": i.status,
+					}
+					for i in items
+				],
+			}
+			print(json_mod.dumps(data, indent=2))
+		else:
+			_print_discovery_table(items)
+
+		return 0
+	finally:
+		db.close()
+
+
+def _print_discovery_table(items: list) -> None:
+	"""Print discovery items in a formatted table."""
+	if not items:
+		print("No items discovered.")
+		return
+
+	print(f"\n{'Track':<10} {'Title':<40} {'Priority':>8} {'Impact':>7} {'Effort':>7}")
+	print("-" * 75)
+	for i in items:
+		title = i.title[:38] + ".." if len(i.title) > 40 else i.title
+		print(
+			f"{i.track:<10} {title:<40} {i.priority_score:>8.1f} "
+			f"{i.impact:>7} {i.effort:>7}"
+		)
+	print(f"\nTotal: {len(items)} items")
+
+
 def cmd_mission(args: argparse.Namespace) -> int:
 	"""Run the continuous mission mode (outer loop)."""
 	config = load_config(args.config)
@@ -247,8 +339,45 @@ def cmd_mission(args: argparse.Namespace) -> int:
 		print(f"Database: {db_path}")
 		return 0
 
+	# Auto-discover mode: run discovery, then use results as objective
+	if args.auto_discover:
+		from mission_control.auto_discovery import DiscoveryEngine
+
+		db = Database(db_path)
+		try:
+			engine = DiscoveryEngine(config, db)
+			result, items = asyncio.run(engine.discover())
+
+			if not items:
+				print("Discovery found no actionable items.")
+				return 0
+
+			_print_discovery_table(items)
+
+			if not args.approve_all:
+				print("\nReview the items above.")
+				answer = input(
+					"Approve all and start mission? [y/N] "
+				).strip().lower()
+				if answer != "y":
+					print("Mission cancelled.")
+					return 0
+
+			# Mark all as approved
+			for item in items:
+				db.update_discovery_item_status(item.id, "approved")
+
+			# Compose objective from approved items
+			config.target.objective = engine.compose_objective(items)
+			print(f"\nComposed objective from {len(items)} items.")
+		finally:
+			db.close()
+
 	if not config.target.objective:
-		print("Error: target.objective must be set in config for mission mode.")
+		print(
+			"Error: target.objective must be set in config "
+			"for mission mode (or use --auto-discover)."
+		)
 		return 1
 
 	db = Database(db_path)
@@ -318,6 +447,14 @@ fixup_max_attempts = 3
 max_wall_time_seconds = 7200
 backlog_min_size = 2
 timeout_multiplier = 1.2
+
+[discovery]
+enabled = true
+tracks = ["feature", "quality", "security"]
+max_items_per_track = 3
+min_priority_score = 3.0
+model = "opus"
+budget_per_call_usd = 2.0
 
 [heartbeat]
 interval = 300
@@ -491,6 +628,7 @@ COMMANDS = {
 	"history": cmd_history,
 	"snapshot": cmd_snapshot,
 	"parallel": cmd_parallel,
+	"discover": cmd_discover,
 	"mission": cmd_mission,
 	"init": cmd_init,
 	"dashboard": cmd_dashboard,
