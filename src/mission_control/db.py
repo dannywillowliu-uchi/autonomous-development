@@ -801,6 +801,26 @@ class Database:
 		).fetchall()
 		return [self._row_to_work_unit(r) for r in rows]
 
+	def get_work_units_for_mission(self, mission_id: str) -> list[WorkUnit]:
+		"""Get all work units for a mission via epoch_id -> epochs.mission_id."""
+		rows = self.conn.execute(
+			"""SELECT wu.* FROM work_units wu
+			JOIN epochs e ON wu.epoch_id = e.id
+			WHERE e.mission_id = ?
+			ORDER BY wu.started_at ASC NULLS LAST""",
+			(mission_id,),
+		).fetchall()
+		return [self._row_to_work_unit(r) for r in rows]
+
+	def get_active_mission(self) -> Mission | None:
+		"""Get the currently running mission, if any."""
+		row = self.conn.execute(
+			"SELECT * FROM missions WHERE status='running' ORDER BY started_at DESC LIMIT 1"
+		).fetchone()
+		if row is None:
+			return None
+		return self._row_to_mission(row)
+
 	def claim_work_unit(self, worker_id: str, now: str | None = None) -> WorkUnit | None:
 		"""Atomically claim the next available work unit.
 

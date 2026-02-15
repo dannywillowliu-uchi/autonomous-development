@@ -77,8 +77,13 @@ def build_parser() -> argparse.ArgumentParser:
 	dash = sub.add_parser("dashboard", help="Launch TUI dashboard")
 	dash.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
 
+	# mc live
+	live = sub.add_parser("live", help="Launch live mission control dashboard")
+	live.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	live.add_argument("--port", type=int, default=8080, help="Port to serve on")
+
 	# mc web
-	web = sub.add_parser("web", help="Launch web dashboard")
+	web = sub.add_parser("web", help="Launch web dashboard (legacy)")
 	web.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
 	web.add_argument("--port", type=int, default=8080, help="Port to serve on")
 
@@ -506,6 +511,27 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_live(args: argparse.Namespace) -> int:
+	"""Launch the live mission control dashboard."""
+	try:
+		import uvicorn
+
+		from mission_control.dashboard.live import LiveDashboard
+	except ImportError:
+		print("Dashboard dependencies not installed. Run: pip install -e '.[dashboard]'")
+		return 1
+
+	db_path = str(_get_db_path(args.config))
+	if not Path(db_path).exists():
+		print("No database found. Run 'mc mission' first.")
+		return 1
+
+	dashboard = LiveDashboard(db_path)
+	print(f"Starting live dashboard at http://localhost:{args.port}")
+	uvicorn.run(dashboard.app, host="0.0.0.0", port=args.port, log_level="warning")
+	return 0
+
+
 def cmd_web(args: argparse.Namespace) -> int:
 	"""Launch the web dashboard."""
 	try:
@@ -632,6 +658,7 @@ COMMANDS = {
 	"mission": cmd_mission,
 	"init": cmd_init,
 	"dashboard": cmd_dashboard,
+	"live": cmd_live,
 	"web": cmd_web,
 	"register": cmd_register,
 	"unregister": cmd_unregister,
