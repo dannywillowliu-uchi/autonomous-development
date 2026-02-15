@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from mission_control.notifier import TelegramNotifier
+from mission_control.notifier import MAX_QUEUE_SIZE, NotificationPriority, TelegramNotifier
 
 
 @pytest.fixture
@@ -54,7 +54,8 @@ class TestTelegramNotifier:
 	async def test_send_queues_message(self, notifier: TelegramNotifier) -> None:
 		with patch.object(notifier, "_flush_batch", new_callable=AsyncMock):
 			await notifier.send("hello")
-			assert notifier._batch_queue.qsize() == 1
+			assert len(notifier._priority_queue) == 1
+			assert notifier._priority_queue[0] == (NotificationPriority.LOW, "hello")
 			assert notifier._batch_task is not None
 
 		notifier._batch_task.cancel()
@@ -80,10 +81,10 @@ class TestTelegramNotifier:
 
 		with patch.object(notifier, "_flush_batch", side_effect=capture_flush), \
 			patch("mission_control.notifier.BATCH_WINDOW", 0.05):
-			# Manually run the batch loop with short window
-			notifier._batch_queue.put_nowait("msg1")
-			notifier._batch_queue.put_nowait("msg2")
-			notifier._batch_queue.put_nowait("msg3")
+			notifier._priority_queue.append((NotificationPriority.LOW, "msg1"))
+			notifier._priority_queue.append((NotificationPriority.LOW, "msg2"))
+			notifier._priority_queue.append((NotificationPriority.LOW, "msg3"))
+			notifier._queue_event.set()
 
 			task = asyncio.create_task(notifier._batch_loop())
 			await asyncio.sleep(0.15)
@@ -104,7 +105,7 @@ class TestTelegramNotifier:
 		mock_response = httpx.Response(200)
 		with patch("mission_control.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
 			mock_post.return_value = mock_response
-			notifier._batch_queue.put_nowait("leftover")
+			notifier._priority_queue.append((NotificationPriority.LOW, "leftover"))
 			await notifier.close()
 
 			mock_post.assert_called_once()
@@ -120,6 +121,7 @@ class TestTelegramNotifier:
 			assert "Mission started" in msg
 			assert "fix all bugs" in msg
 			assert "4" in msg
+			assert mock_send.call_args[1]["priority"] == NotificationPriority.HIGH
 
 	@pytest.mark.asyncio
 	async def test_send_mission_end(self, notifier: TelegramNotifier) -> None:
@@ -158,3 +160,53 @@ class TestTelegramNotifier:
 			msg = mock_send.call_args[0][0]
 			assert "Merge conflict" in msg
 			assert "fix auth module" in msg
+			assert mock_send.call_args[1]["priority"] == NotificationPriority.HIGH
+
+	@pytest.mark.asyncio
+	async def test_backpressure_drops_low_priority(self, notifier: TelegramNotifier) -> None:
+		"""When queue exceeds MAX_QUEUE_SIZE, low-priority messages are dropped."""
+		with patch.object(notifier, "_ensure_batch_task"):
+			for i in range(MAX_QUEUE_SIZE):
+				await notifier.send(f"low-{i}", priority=NotificationPriority.LOW)
+			assert len(notifier._priority_queue) == MAX_QUEUE_SIZE
+
+			for i in range(20):
+				await notifier.send(f"high-{i}", priority=NotificationPriority.HIGH)
+
+			assert len(notifier._priority_queue) <= MAX_QUEUE_SIZE
+
+			messages = [msg for _, msg in notifier._priority_queue]
+			for i in range(20):
+				assert f"high-{i}" in messages
+
+			low_count = sum(1 for p, _ in notifier._priority_queue if p == NotificationPriority.LOW)
+			assert low_count < MAX_QUEUE_SIZE
+
+	@pytest.mark.asyncio
+	async def test_batching_combines_messages(self, notifier: TelegramNotifier) -> None:
+		"""Verify 5s window batching behavior: messages within window are combined."""
+		flushed: list[list[str]] = []
+
+		async def capture_flush(messages: list[str]) -> None:
+			flushed.append(list(messages))
+
+		with patch.object(notifier, "_flush_batch", side_effect=capture_flush), \
+			patch("mission_control.notifier.BATCH_WINDOW", 0.05):
+			notifier._priority_queue.append((NotificationPriority.LOW, "batch-a"))
+			notifier._priority_queue.append((NotificationPriority.HIGH, "batch-b"))
+			notifier._priority_queue.append((NotificationPriority.LOW, "batch-c"))
+			notifier._queue_event.set()
+
+			task = asyncio.create_task(notifier._batch_loop())
+			await asyncio.sleep(0.15)
+			task.cancel()
+			try:
+				await task
+			except asyncio.CancelledError:
+				pass
+
+		assert len(flushed) >= 1
+		first_batch = flushed[0]
+		assert "batch-a" in first_batch
+		assert "batch-b" in first_batch
+		assert "batch-c" in first_batch
