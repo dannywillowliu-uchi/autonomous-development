@@ -132,6 +132,9 @@ class DiscoveryConfig:
 	min_priority_score: float = 3.0
 	model: str = "opus"
 	budget_per_call_usd: float = 2.0
+	research_enabled: bool = True
+	research_model: str = "sonnet"
+	research_parallel_queries: int = 3
 
 
 @dataclass
@@ -380,6 +383,12 @@ def _build_discovery(data: dict[str, Any]) -> DiscoveryConfig:
 		dc.model = str(data["model"])
 	if "budget_per_call_usd" in data:
 		dc.budget_per_call_usd = float(data["budget_per_call_usd"])
+	if "research_enabled" in data:
+		dc.research_enabled = bool(data["research_enabled"])
+	if "research_model" in data:
+		dc.research_model = str(data["research_model"])
+	if "research_parallel_queries" in data:
+		dc.research_parallel_queries = int(data["research_parallel_queries"])
 	return dc
 
 

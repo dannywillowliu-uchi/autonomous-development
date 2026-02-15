@@ -400,3 +400,54 @@ reset_on_init = false
 	assert cfg.green_branch.green_branch == "mc/stable"
 	assert cfg.green_branch.fixup_max_attempts == 5
 	assert cfg.green_branch.reset_on_init is False
+
+
+# -- Discovery config tests --
+
+
+def test_discovery_config_defaults() -> None:
+	"""DiscoveryConfig new fields have sensible defaults."""
+	cfg = MissionConfig()
+	assert cfg.discovery.research_enabled is True
+	assert cfg.discovery.research_model == "sonnet"
+	assert cfg.discovery.research_parallel_queries == 3
+
+
+def test_discovery_config_from_toml(tmp_path: Path) -> None:
+	"""DiscoveryConfig new fields can be loaded from TOML."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[discovery]
+research_enabled = false
+research_model = "haiku"
+research_parallel_queries = 5
+""")
+	cfg = load_config(toml)
+	assert cfg.discovery.research_enabled is False
+	assert cfg.discovery.research_model == "haiku"
+	assert cfg.discovery.research_parallel_queries == 5
+
+
+def test_discovery_config_partial(tmp_path: Path) -> None:
+	"""Partial discovery config uses defaults for missing research fields."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[discovery]
+model = "opus"
+budget_per_call_usd = 3.0
+""")
+	cfg = load_config(toml)
+	assert cfg.discovery.model == "opus"
+	assert cfg.discovery.budget_per_call_usd == 3.0
+	# New fields should use defaults
+	assert cfg.discovery.research_enabled is True
+	assert cfg.discovery.research_model == "sonnet"
+	assert cfg.discovery.research_parallel_queries == 3

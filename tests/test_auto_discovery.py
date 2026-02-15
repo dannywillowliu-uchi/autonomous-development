@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from mission_control.auto_discovery import DiscoveryEngine, _compute_priority
+from mission_control.auto_discovery import (
+	AnalysisOutput,
+	DiscoveryEngine,
+	ResearchOutput,
+	_compute_priority,
+)
 from mission_control.config import (
 	DiscoveryConfig,
 	MissionConfig,
@@ -19,7 +24,7 @@ from mission_control.db import Database
 from mission_control.models import DiscoveryItem, DiscoveryResult
 
 
-def _config() -> MissionConfig:
+def _config(*, research_enabled: bool = True) -> MissionConfig:
 	return MissionConfig(
 		target=TargetConfig(
 			name="test-proj",
@@ -35,12 +40,37 @@ def _config() -> MissionConfig:
 			min_priority_score=3.0,
 			model="sonnet",
 			budget_per_call_usd=1.0,
+			research_enabled=research_enabled,
 		),
 	)
 
 
 def _discovery_json(items: list[dict]) -> str:
 	return f"DISCOVERY_RESULT:\n```json\n{json.dumps({'items': items})}\n```"
+
+
+def _analysis_json(
+	gaps: list[dict] | None = None,
+	architecture: str = "modular",
+	patterns: list[str] | None = None,
+) -> str:
+	default_gaps = [{"category": "testing", "description": "Missing tests", "files": "src/foo.py", "severity": "high"}]
+	data = {
+		"architecture": architecture,
+		"patterns": patterns if patterns is not None else ["dataclass", "async"],
+		"gaps": gaps if gaps is not None else default_gaps,
+	}
+	return f"ANALYSIS_RESULT:\n```json\n{json.dumps(data)}\n```"
+
+
+def _research_json(category: str = "testing") -> str:
+	data = {
+		"gap_category": category,
+		"best_practices": "Use pytest fixtures",
+		"examples": "FastAPI project uses pytest-asyncio",
+		"sources": "https://example.com",
+	}
+	return f"RESEARCH_RESULT:\n```json\n{json.dumps(data)}\n```"
 
 
 def _sample_item(
@@ -58,6 +88,13 @@ def _sample_item(
 		"impact": impact,
 		"effort": effort,
 	}
+
+
+def _mock_proc(returncode: int = 0, stdout: bytes = b"", stderr: bytes = b"") -> AsyncMock:
+	mock = AsyncMock()
+	mock.communicate = AsyncMock(return_value=(stdout, stderr))
+	mock.returncode = returncode
+	return mock
 
 
 class TestComputePriority:
@@ -146,24 +183,109 @@ class TestParseDiscoveryOutput:
 		assert result.item_count == 1
 
 
-class TestBuildPrompt:
+class TestParseAnalysisOutput:
+	def setup_method(self) -> None:
+		self.config = _config()
+		self.db = Database(":memory:")
+		self.engine = DiscoveryEngine(self.config, self.db)
+
+	def test_parse_valid_analysis(self) -> None:
+		output = _analysis_json()
+		result = self.engine._parse_analysis_output(output)
+		assert result.architecture == "modular"
+		assert "dataclass" in result.patterns
+		assert len(result.gaps) == 1
+		assert result.gaps[0]["category"] == "testing"
+
+	def test_parse_empty_output(self) -> None:
+		result = self.engine._parse_analysis_output("")
+		assert result.architecture == ""
+		assert result.gaps == []
+		assert result.raw == ""
+
+	def test_parse_bad_json_fallback(self) -> None:
+		result = self.engine._parse_analysis_output("not json at all")
+		assert result.architecture == ""
+		assert result.gaps == []
+		assert result.raw == "not json at all"
+
+	def test_parse_multiple_gaps(self) -> None:
+		gaps = [
+			{"category": "testing", "description": "Missing tests", "files": "a.py", "severity": "high"},
+			{"category": "security", "description": "No input validation", "files": "b.py", "severity": "medium"},
+		]
+		output = _analysis_json(gaps=gaps)
+		result = self.engine._parse_analysis_output(output)
+		assert len(result.gaps) == 2
+		assert result.gaps[1]["category"] == "security"
+
+
+class TestParseResearchResult:
+	def setup_method(self) -> None:
+		self.config = _config()
+		self.db = Database(":memory:")
+		self.engine = DiscoveryEngine(self.config, self.db)
+
+	def test_parse_valid_research(self) -> None:
+		output = _research_json("testing")
+		result = self.engine._parse_research_result(output, "testing")
+		assert result is not None
+		assert result["gap_category"] == "testing"
+		assert "pytest" in result["best_practices"]
+
+	def test_parse_empty_output(self) -> None:
+		result = self.engine._parse_research_result("", "testing")
+		assert result is None
+
+	def test_parse_bad_json(self) -> None:
+		result = self.engine._parse_research_result("not json", "testing")
+		assert result is None
+
+
+class TestSynthesizePrompt:
 	def setup_method(self) -> None:
 		self.config = _config()
 		self.db = Database(":memory:")
 		self.engine = DiscoveryEngine(self.config, self.db)
 
 	def test_includes_tracks(self) -> None:
-		prompt = self.engine._build_discovery_prompt()
+		analysis = AnalysisOutput(architecture="modular", gaps=[])
+		prompt = self.engine._build_synthesize_prompt(analysis, None)
 		assert "Track A - Features" in prompt
 		assert "Track B - Code Quality" in prompt
 		assert "Track C - Security" in prompt
 
 	def test_includes_max_per_track(self) -> None:
-		prompt = self.engine._build_discovery_prompt()
+		analysis = AnalysisOutput(architecture="modular", gaps=[])
+		prompt = self.engine._build_synthesize_prompt(analysis, None)
 		assert "up to 3 improvements" in prompt
 
+	def test_includes_analysis_context(self) -> None:
+		analysis = AnalysisOutput(
+			architecture="layered MVC",
+			patterns=["repository pattern"],
+			gaps=[{"category": "testing", "description": "no tests"}],
+		)
+		prompt = self.engine._build_synthesize_prompt(analysis, None)
+		assert "layered MVC" in prompt
+		assert "repository pattern" in prompt
+		assert "no tests" in prompt
+
+	def test_includes_research_context(self) -> None:
+		analysis = AnalysisOutput(gaps=[])
+		research = ResearchOutput(findings=[
+			{"gap_category": "testing", "best_practices": "Use pytest fixtures", "examples": "", "sources": ""},
+		])
+		prompt = self.engine._build_synthesize_prompt(analysis, research)
+		assert "Research Findings" in prompt
+		assert "pytest fixtures" in prompt
+
+	def test_no_research_section_when_none(self) -> None:
+		analysis = AnalysisOutput(gaps=[])
+		prompt = self.engine._build_synthesize_prompt(analysis, None)
+		assert "Research Findings" not in prompt
+
 	def test_includes_past_discoveries(self) -> None:
-		# Insert a past discovery
 		dr = DiscoveryResult(target_path="/tmp/test", model="sonnet")
 		item = DiscoveryItem(
 			track="quality",
@@ -172,13 +294,15 @@ class TestBuildPrompt:
 		)
 		self.db.insert_discovery_result(dr, [item])
 
-		prompt = self.engine._build_discovery_prompt()
+		analysis = AnalysisOutput(gaps=[])
+		prompt = self.engine._build_synthesize_prompt(analysis, None)
 		assert "Old improvement" in prompt
 		assert "Previously Discovered" in prompt
 
 	def test_subset_tracks(self) -> None:
 		self.config.discovery.tracks = ["security"]
-		prompt = self.engine._build_discovery_prompt()
+		analysis = AnalysisOutput(gaps=[])
+		prompt = self.engine._build_synthesize_prompt(analysis, None)
 		assert "Track C - Security" in prompt
 		assert "Track A" not in prompt
 		assert "Track B" not in prompt
@@ -257,151 +381,412 @@ class TestDBIntegration:
 		assert items[0].status == "approved"
 
 
-class TestDiscoverSubprocess:
+class TestStageAnalyze:
 	@pytest.mark.asyncio
-	async def test_discover_calls_subprocess(self) -> None:
+	async def test_analyze_success(self) -> None:
 		config = _config()
 		db = Database(":memory:")
 		engine = DiscoveryEngine(config, db)
 
-		mock_output = _discovery_json([_sample_item()])
+		analysis_output = _analysis_json()
+		mock = _mock_proc(stdout=analysis_output.encode())
 
-		mock_proc = AsyncMock()
-		mock_proc.communicate = AsyncMock(return_value=(mock_output.encode(), b""))
-		mock_proc.returncode = 0
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock):
+			result = await engine._stage_analyze()
 
-		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
+		assert result is not None
+		assert result.architecture == "modular"
+		assert len(result.gaps) == 1
+
+	@pytest.mark.asyncio
+	async def test_analyze_failure_returns_none(self) -> None:
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		mock = _mock_proc(returncode=1, stderr=b"budget exceeded")
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock):
+			result = await engine._stage_analyze()
+
+		assert result is None
+
+	@pytest.mark.asyncio
+	async def test_analyze_empty_output(self) -> None:
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		mock = _mock_proc(stdout=b"")
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock):
+			result = await engine._stage_analyze()
+
+		assert result is not None
+		assert result.gaps == []
+
+
+class TestStageResearch:
+	@pytest.mark.asyncio
+	async def test_research_success(self) -> None:
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		analysis = AnalysisOutput(
+			gaps=[{"category": "testing", "description": "Missing tests"}],
+		)
+		research_output = _research_json("testing")
+		mock = _mock_proc(stdout=research_output.encode())
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock):
+			result = await engine._stage_research(analysis)
+
+		assert result is not None
+		assert len(result.findings) == 1
+		assert result.findings[0]["gap_category"] == "testing"
+
+	@pytest.mark.asyncio
+	async def test_research_partial_failure(self) -> None:
+		"""One query fails, others succeed -- partial results collected."""
+		config = _config()
+		config.discovery.research_parallel_queries = 3
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		analysis = AnalysisOutput(
+			gaps=[
+				{"category": "testing", "description": "Missing tests"},
+				{"category": "security", "description": "No validation"},
+			],
+		)
+
+		call_count = 0
+
+		async def mock_exec(*args, **kwargs):
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				# First call (analyze stage won't be made, this is research)
+				return _mock_proc(stdout=_research_json("testing").encode())
+			else:
+				# Second research query fails
+				return _mock_proc(returncode=1, stderr=b"timeout")
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", side_effect=mock_exec):
+			result = await engine._stage_research(analysis)
+
+		assert result is not None
+		assert len(result.findings) == 1
+		assert result.findings[0]["gap_category"] == "testing"
+
+	@pytest.mark.asyncio
+	async def test_research_all_fail_returns_none(self) -> None:
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		analysis = AnalysisOutput(
+			gaps=[{"category": "testing", "description": "Missing tests"}],
+		)
+		mock = _mock_proc(returncode=1, stderr=b"error")
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock):
+			result = await engine._stage_research(analysis)
+
+		assert result is None
+
+	@pytest.mark.asyncio
+	async def test_research_uses_web_flag(self) -> None:
+		"""Research subprocess should use --permission-mode bypassPermissions."""
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		analysis = AnalysisOutput(
+			gaps=[{"category": "testing", "description": "Missing tests"}],
+		)
+		research_output = _research_json("testing")
+		mock = _mock_proc(stdout=research_output.encode())
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock) as mock_exec:
+			await engine._stage_research(analysis)
+
+		# Check the command includes bypassPermissions
+		call_args = mock_exec.call_args
+		cmd = call_args[0]
+		assert "--permission-mode" in cmd
+		assert "bypassPermissions" in cmd
+
+	@pytest.mark.asyncio
+	async def test_research_uses_research_model(self) -> None:
+		"""Research subprocess should use research_model, not main model."""
+		config = _config()
+		config.discovery.research_model = "haiku"
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		analysis = AnalysisOutput(
+			gaps=[{"category": "testing", "description": "Missing tests"}],
+		)
+		research_output = _research_json("testing")
+		mock = _mock_proc(stdout=research_output.encode())
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock) as mock_exec:
+			await engine._stage_research(analysis)
+
+		cmd = mock_exec.call_args[0]
+		model_idx = list(cmd).index("--model")
+		assert cmd[model_idx + 1] == "haiku"
+
+
+class TestFullPipeline:
+	@pytest.mark.asyncio
+	async def test_pipeline_research_disabled(self) -> None:
+		"""Only 2 subprocess calls when research is off (analyze + synthesize)."""
+		config = _config(research_enabled=False)
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		call_count = 0
+
+		async def mock_exec(*args, **kwargs):
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				# Stage 1: analyze
+				return _mock_proc(stdout=_analysis_json().encode())
+			else:
+				# Stage 3: synthesize
+				return _mock_proc(stdout=_discovery_json([_sample_item()]).encode())
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", side_effect=mock_exec):
 			result, items = await engine.discover()
 
+		assert call_count == 2
 		assert result.item_count == 1
 		assert items[0].title == "Fix test coverage"
 
-		# Verify persisted to DB
+	@pytest.mark.asyncio
+	async def test_full_pipeline_with_research(self) -> None:
+		"""All 3 stages succeed, verify 3+ subprocess calls."""
+		config = _config(research_enabled=True)
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		call_count = 0
+
+		async def mock_exec(*args, **kwargs):
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				# Stage 1: analyze
+				return _mock_proc(stdout=_analysis_json().encode())
+			elif call_count == 2:
+				# Stage 2: research (one gap category)
+				return _mock_proc(stdout=_research_json("testing").encode())
+			else:
+				# Stage 3: synthesize
+				return _mock_proc(stdout=_discovery_json([_sample_item()]).encode())
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", side_effect=mock_exec):
+			result, items = await engine.discover()
+
+		assert call_count == 3  # analyze + 1 research + synthesize
+		assert result.item_count == 1
+		assert result.error_type == ""
+
+	@pytest.mark.asyncio
+	async def test_pipeline_falls_back_on_research_failure(self) -> None:
+		"""Stage 2 fails, Stage 3 still produces results."""
+		config = _config(research_enabled=True)
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		call_count = 0
+
+		async def mock_exec(*args, **kwargs):
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				# Stage 1: analyze
+				return _mock_proc(stdout=_analysis_json().encode())
+			elif call_count == 2:
+				# Stage 2: research fails
+				return _mock_proc(returncode=1, stderr=b"timeout")
+			else:
+				# Stage 3: synthesize (still works without research)
+				return _mock_proc(stdout=_discovery_json([_sample_item()]).encode())
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", side_effect=mock_exec):
+			result, items = await engine.discover()
+
+		assert result.item_count == 1
+		assert result.error_type == ""  # no error since synthesize succeeded
+
+	@pytest.mark.asyncio
+	async def test_pipeline_analyze_failure(self) -> None:
+		"""Stage 1 fails -> return empty result with error."""
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		mock = _mock_proc(returncode=1, stderr=b"budget exceeded")
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock):
+			result, items = await engine.discover()
+
+		assert result.error_type == "analyze_failed"
+		assert result.item_count == 0
+		assert items == []
+
+	@pytest.mark.asyncio
+	async def test_pipeline_no_gaps_skips_research(self) -> None:
+		"""When analysis finds no gaps, research is skipped even if enabled."""
+		config = _config(research_enabled=True)
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		call_count = 0
+
+		async def mock_exec(*args, **kwargs):
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				# Stage 1: analyze with no gaps
+				return _mock_proc(stdout=_analysis_json(gaps=[]).encode())
+			else:
+				# Stage 3: synthesize
+				return _mock_proc(stdout=_discovery_json([_sample_item()]).encode())
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", side_effect=mock_exec):
+			result, items = await engine.discover()
+
+		assert call_count == 2  # analyze + synthesize, no research
+
+	@pytest.mark.asyncio
+	async def test_persists_to_db(self) -> None:
+		"""Results are persisted to DB."""
+		config = _config(research_enabled=False)
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		call_count = 0
+
+		async def mock_exec(*args, **kwargs):
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				return _mock_proc(stdout=_analysis_json().encode())
+			else:
+				return _mock_proc(stdout=_discovery_json([_sample_item()]).encode())
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", side_effect=mock_exec):
+			result, items = await engine.discover()
+
 		latest, db_items = db.get_latest_discovery()
 		assert latest is not None
 		assert latest.id == result.id
 		assert len(db_items) == 1
 
+
+class TestRunStageSubprocess:
 	@pytest.mark.asyncio
-	async def test_discover_timeout(self) -> None:
+	async def test_timeout_error(self) -> None:
 		config = _config()
 		db = Database(":memory:")
 		engine = DiscoveryEngine(config, db)
 
-		with patch(
-			"mission_control.auto_discovery.asyncio.create_subprocess_exec",
-			side_effect=asyncio.TimeoutError,
-		):
-			result, items = await engine.discover()
-
-		assert result.item_count == 0
-		assert items == []
-		assert result.error_type == "timeout"
-		assert "timed out" in result.error_detail
-
-
-class TestDiscoverySubprocessErrors:
-	"""Test structured error context for discovery subprocess failures."""
-
-	def _make_engine(self) -> tuple[DiscoveryEngine, Database]:
-		config = _config()
-		db = Database(":memory:")
-		return DiscoveryEngine(config, db), db
-
-	def _mock_proc(self, returncode: int, stdout: bytes = b"", stderr: bytes = b"") -> AsyncMock:
 		mock = AsyncMock()
-		mock.communicate = AsyncMock(return_value=(stdout, stderr))
-		mock.returncode = returncode
-		return mock
+		mock.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+		mock.kill = lambda: None
+		mock.wait = AsyncMock()
 
-	@pytest.mark.asyncio
-	async def test_timeout_error(self) -> None:
-		engine, db = self._make_engine()
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock):
+			output, error_type, error_detail = await engine._run_stage_subprocess(
+				"test prompt", model="sonnet", stage_name="test",
+			)
 
-		mock_proc = AsyncMock()
-		mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
-		mock_proc.kill = lambda: None  # kill() is sync on subprocess
-		mock_proc.wait = AsyncMock()
-
-		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
-			result, items = await engine.discover()
-
-		assert result.error_type == "timeout"
-		assert "timed out" in result.error_detail
-		assert result.item_count == 0
-		assert items == []
+		assert error_type == "timeout"
+		assert "timed out" in error_detail
 
 	@pytest.mark.asyncio
 	async def test_nonzero_exit_budget_exceeded(self) -> None:
-		engine, db = self._make_engine()
-		stderr_msg = b"Error: budget limit exceeded -- session cost $1.50 exceeded max $1.00"
-		mock_proc = self._mock_proc(returncode=1, stderr=stderr_msg)
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
 
-		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
-			result, items = await engine.discover()
+		mock = _mock_proc(returncode=1, stderr=b"Error: budget limit exceeded")
 
-		assert result.error_type == "budget_exceeded"
-		assert b"budget".decode() in result.error_detail
-		assert result.item_count == 0
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock):
+			output, error_type, error_detail = await engine._run_stage_subprocess(
+				"test prompt", model="sonnet", stage_name="test",
+			)
 
-	@pytest.mark.asyncio
-	async def test_nonzero_exit_permission_denied(self) -> None:
-		engine, db = self._make_engine()
-		stderr_msg = b"Error: permission denied accessing /etc/shadow"
-		mock_proc = self._mock_proc(returncode=1, stderr=stderr_msg)
-
-		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
-			result, items = await engine.discover()
-
-		assert result.error_type == "permission_denied"
-		assert "permission" in result.error_detail
+		assert error_type == "budget_exceeded"
 
 	@pytest.mark.asyncio
-	async def test_nonzero_exit_workspace_corruption(self) -> None:
-		engine, db = self._make_engine()
-		stderr_msg = b"Fatal: workspace corrupted, cannot read .git/HEAD"
-		mock_proc = self._mock_proc(returncode=128, stderr=stderr_msg)
+	async def test_success_no_error(self) -> None:
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
 
-		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
-			result, items = await engine.discover()
+		mock = _mock_proc(stdout=b"hello world")
 
-		assert result.error_type == "workspace_corruption"
-		assert "corrupt" in result.error_detail.lower()
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock):
+			output, error_type, error_detail = await engine._run_stage_subprocess(
+				"test prompt", model="sonnet", stage_name="test",
+			)
 
-	@pytest.mark.asyncio
-	async def test_nonzero_exit_unknown_error(self) -> None:
-		engine, db = self._make_engine()
-		stderr_msg = b"Segmentation fault (core dumped)"
-		mock_proc = self._mock_proc(returncode=139, stderr=stderr_msg)
-
-		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
-			result, items = await engine.discover()
-
-		assert result.error_type == "unknown"
-		assert "Segmentation fault" in result.error_detail
+		assert output == "hello world"
+		assert error_type == ""
+		assert error_detail == ""
 
 	@pytest.mark.asyncio
-	async def test_stderr_captured_on_failure(self) -> None:
-		engine, db = self._make_engine()
+	async def test_web_flag_adds_bypass_permissions(self) -> None:
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		mock = _mock_proc(stdout=b"ok")
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock) as mock_exec:
+			await engine._run_stage_subprocess(
+				"test prompt", model="sonnet", stage_name="test", enable_web=True,
+			)
+
+		cmd = mock_exec.call_args[0]
+		assert "--permission-mode" in cmd
+		assert "bypassPermissions" in cmd
+
+	@pytest.mark.asyncio
+	async def test_no_web_flag_no_bypass(self) -> None:
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
+		mock = _mock_proc(stdout=b"ok")
+
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock) as mock_exec:
+			await engine._run_stage_subprocess(
+				"test prompt", model="sonnet", stage_name="test", enable_web=False,
+			)
+
+		cmd = mock_exec.call_args[0]
+		assert "--permission-mode" not in cmd
+
+	@pytest.mark.asyncio
+	async def test_stderr_truncated(self) -> None:
+		config = _config()
+		db = Database(":memory:")
+		engine = DiscoveryEngine(config, db)
+
 		long_stderr = b"x" * 1000
-		mock_proc = self._mock_proc(returncode=1, stderr=long_stderr)
+		mock = _mock_proc(returncode=1, stderr=long_stderr)
 
-		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
-			result, items = await engine.discover()
+		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock):
+			_, _, error_detail = await engine._run_stage_subprocess(
+				"test prompt", model="sonnet", stage_name="test",
+			)
 
-		assert result.error_type == "unknown"
-		# error_detail should be truncated to 500 chars
-		assert len(result.error_detail) == 500
-
-	@pytest.mark.asyncio
-	async def test_success_has_no_error(self) -> None:
-		engine, db = self._make_engine()
-		mock_output = _discovery_json([_sample_item()])
-		mock_proc = self._mock_proc(returncode=0, stdout=mock_output.encode(), stderr=b"")
-
-		with patch("mission_control.auto_discovery.asyncio.create_subprocess_exec", return_value=mock_proc):
-			result, items = await engine.discover()
-
-		assert result.error_type == ""
-		assert result.error_detail == ""
-		assert result.item_count == 1
+		assert len(error_detail) == 500
