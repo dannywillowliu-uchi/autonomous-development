@@ -121,10 +121,7 @@ body {
 
 .epoch-header:hover { background: var(--border); }
 
-.epoch-header .toggle { width: 16px; color: var(--text-muted); }
-
 .unit-node {
-	margin-left: 22px;
 	padding: 4px 8px;
 	border-radius: 4px;
 	font-size: 12px;
@@ -147,6 +144,82 @@ body {
 .unit-dot.failed { background: var(--red); }
 .unit-dot.pending { background: var(--text-muted); }
 .unit-dot.blocked { background: var(--purple); }
+
+/* Progress bar under epoch header */
+.epoch-progress {
+	height: 4px;
+	background: var(--border);
+	border-radius: 2px;
+	margin: 4px 6px 2px 6px;
+	overflow: hidden;
+}
+
+.epoch-progress-fill {
+	height: 100%;
+	background: var(--green);
+	border-radius: 2px;
+	transition: width 0.3s ease;
+}
+
+/* Tree lines connecting epoch to units */
+.epoch-children {
+	position: relative;
+	margin-left: 12px;
+	padding-left: 14px;
+	border-left: 1px solid var(--border);
+}
+
+.unit-node {
+	position: relative;
+}
+
+.unit-node::before {
+	content: "";
+	position: absolute;
+	left: -14px;
+	top: 50%;
+	width: 14px;
+	height: 1px;
+	background: var(--border);
+}
+
+.epoch-children .unit-node:last-child::after {
+	content: "";
+	position: absolute;
+	left: -15px;
+	top: 50%;
+	bottom: -1px;
+	width: 1px;
+	background: var(--bg);
+}
+
+/* Expandable/collapsible toggle */
+.epoch-header .toggle {
+	width: 16px;
+	color: var(--text-muted);
+	display: inline-block;
+	transition: transform 0.2s ease;
+}
+
+.epoch-node.collapsed .epoch-header .toggle {
+	transform: rotate(-90deg);
+}
+
+.epoch-node.collapsed .epoch-children {
+	display: none;
+}
+
+.epoch-node.collapsed .epoch-progress {
+	display: none;
+}
+
+/* Unit duration label */
+.unit-duration {
+	margin-left: auto;
+	flex-shrink: 0;
+	font-size: 11px;
+	color: var(--text-muted);
+}
 
 /* Worker cards panel */
 .workers {
@@ -531,6 +604,8 @@ function updateHeader(mission) {
 	}
 }
 
+let collapsedEpochs = new Set();
+
 function updatePlanTree(tree) {
 	const container = document.getElementById("plan-tree-content");
 	if (!tree || tree.length === 0) {
@@ -541,12 +616,15 @@ function updatePlanTree(tree) {
 	let html = "";
 	for (const epoch of tree) {
 		const children = epoch.children || [];
+		const total = children.length;
 		const merged = children.filter(c => c.status === "completed").length;
 		const running = children.filter(c => c.status === "running").length;
 		const failed = children.filter(c => c.status === "failed").length;
+		const pct = total > 0 ? Math.round((merged / total) * 100) : 0;
+		const isCollapsed = collapsedEpochs.has(epoch.number);
 
-		html += `<div class="epoch-node">`;
-		html += `<div class="epoch-header" onclick="this.parentElement.classList.toggle('collapsed')">`;
+		html += `<div class="epoch-node${isCollapsed ? " collapsed" : ""}">`;
+		html += `<div class="epoch-header" onclick="toggleEpoch(${epoch.number})">`;
 		html += `<span class="toggle">&#9662;</span>`;
 		html += `<span>Epoch ${epoch.number}</span>`;
 		html += `<span style="color:var(--text-muted);font-size:11px;margin-left:auto">`;
@@ -556,17 +634,52 @@ function updatePlanTree(tree) {
 		html += `</span>`;
 		html += `</div>`;
 
+		html += `<div class="epoch-progress"><div class="epoch-progress-fill" style="width:${pct}%"></div></div>`;
+
+		html += `<div class="epoch-children">`;
 		for (const unit of children) {
 			unitTitles[unit.id] = unit.title;
 			const dotClass = unit.status === "completed" ? "completed" : unit.status;
+			const duration = formatUnitDuration(unit);
 			html += `<div class="unit-node" onclick="scrollToCard('${unit.id}')" title="${escapeHtml(unit.title)}">`;
 			html += `<span class="unit-dot ${dotClass}"></span>`;
 			html += `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(unit.title)}</span>`;
+			if (duration) html += `<span class="unit-duration">${duration}</span>`;
 			html += `</div>`;
 		}
 		html += `</div>`;
+
+		html += `</div>`;
 	}
 	container.innerHTML = html;
+}
+
+function toggleEpoch(num) {
+	if (collapsedEpochs.has(num)) {
+		collapsedEpochs.delete(num);
+	} else {
+		collapsedEpochs.add(num);
+	}
+	const nodes = document.querySelectorAll(".epoch-node");
+	for (const node of nodes) {
+		const header = node.querySelector(".epoch-header");
+		if (header && header.textContent.includes(`Epoch ${num}`)) {
+			node.classList.toggle("collapsed");
+			break;
+		}
+	}
+}
+
+function formatUnitDuration(unit) {
+	if (!unit.started_at) return "";
+	const start = new Date(unit.started_at);
+	const end = unit.finished_at ? new Date(unit.finished_at) : (unit.status === "running" ? new Date() : null);
+	if (!end) return "";
+	const diffMs = end - start;
+	const mins = Math.floor(diffMs / 60000);
+	const secs = Math.floor((diffMs % 60000) / 1000);
+	if (mins > 0) return `${mins}m ${secs}s`;
+	return `${secs}s`;
 }
 
 function updateWorkerCards(units) {
