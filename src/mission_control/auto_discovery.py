@@ -18,7 +18,7 @@ from typing import Any
 from mission_control.config import MissionConfig, claude_subprocess_env
 from mission_control.db import Database
 from mission_control.json_utils import extract_json_from_text
-from mission_control.models import DiscoveryItem, DiscoveryResult
+from mission_control.models import BacklogItem, DiscoveryItem, DiscoveryResult
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,31 @@ class DiscoveryEngine:
 		result.error_type = error_type
 		result.error_detail = error_detail
 		self.db.insert_discovery_result(result, items)
+		self._insert_items_to_backlog(items)
 		return result, items
+
+	def _insert_items_to_backlog(self, items: list[DiscoveryItem]) -> None:
+		"""Convert DiscoveryItems to BacklogItems and insert, skipping duplicate titles."""
+		if not items:
+			return
+		existing_titles: set[str] = {
+			row["title"]
+			for row in self.db.conn.execute("SELECT title FROM backlog_items").fetchall()
+		}
+		for item in items:
+			if item.title in existing_titles:
+				logger.debug("Skipping duplicate backlog item: %s", item.title)
+				continue
+			backlog_item = BacklogItem(
+				title=item.title,
+				description=item.description,
+				priority_score=item.priority_score,
+				impact=item.impact,
+				effort=item.effort,
+				track=item.track,
+			)
+			self.db.insert_backlog_item(backlog_item)
+			existing_titles.add(item.title)
 
 	# -- Stage 1: Analyze --
 
