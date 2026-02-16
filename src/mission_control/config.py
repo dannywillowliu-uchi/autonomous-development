@@ -147,6 +147,7 @@ class GreenBranchConfig:
 	working_branch: str = "mc/working"
 	green_branch: str = "mc/green"
 	fixup_max_attempts: int = 3
+	fixup_candidates: int = 3
 	reset_on_init: bool = True
 	auto_push: bool = False
 	push_branch: str = "main"
@@ -380,6 +381,8 @@ def _build_green_branch(data: dict[str, Any]) -> GreenBranchConfig:
 			setattr(gc, key, str(data[key]))
 	if "fixup_max_attempts" in data:
 		gc.fixup_max_attempts = int(data["fixup_max_attempts"])
+	if "fixup_candidates" in data:
+		gc.fixup_candidates = int(data["fixup_candidates"])
 	if "reset_on_init" in data:
 		gc.reset_on_init = bool(data["reset_on_init"])
 	if "auto_push" in data:
