@@ -357,6 +357,25 @@ class ContinuousController:
 			except Exception as exc:
 				logger.error("Failed to generate mission report: %s", exc, exc_info=True)
 
+			# Determine if follow-up work is needed (mission chaining)
+			if not result.objective_met:
+				try:
+					remaining_backlog = self.db.get_pending_backlog(limit=5)
+					if remaining_backlog:
+						top_items = remaining_backlog[:3]
+						descriptions = [
+							f"[{item.track}] {item.title} (priority={item.priority_score:.1f})"
+							for item in top_items
+						]
+						result.next_objective = (
+							f"Continue with {len(remaining_backlog)} remaining backlog items. "
+							f"Top priorities: {'; '.join(descriptions)}"
+						)
+						mission.next_objective = result.next_objective
+						logger.info("Next objective set for mission chaining: %s", result.next_objective[:100])
+				except Exception as exc:
+					logger.error("Failed to determine next objective: %s", exc, exc_info=True)
+
 			# Append strategic context for future strategist calls
 			try:
 				merged_summaries: list[str] = []
@@ -583,6 +602,61 @@ class ContinuousController:
 				best_item.title[:40], unit.title[:40],
 			)
 
+	def _score_ambition(self, units: list[WorkUnit]) -> int:
+		"""Score planned work 1-10 based on heuristics.
+
+		Factors: unit count, file diversity, unit_type mix, priority distribution.
+		Returns integer 1-10 where 1-3 = busywork, 4-6 = moderate, 7-10 = ambitious.
+		"""
+		if not units:
+			return 1
+
+		count = len(units)
+
+		# Factor 1: Unit count (0-2.5 points)
+		if count >= 6:
+			count_score = 2.5
+		elif count >= 3:
+			count_score = 1.5
+		else:
+			count_score = 0.5
+
+		# Factor 2: File diversity (0-3 points)
+		all_files: set[str] = set()
+		for u in units:
+			if u.files_hint:
+				for f in u.files_hint.split(","):
+					f = f.strip()
+					if f:
+						all_files.add(f)
+		file_count = len(all_files)
+		if file_count >= 10:
+			file_score = 3.0
+		elif file_count >= 5:
+			file_score = 2.0
+		elif file_count >= 2:
+			file_score = 1.0
+		else:
+			file_score = 0.5
+
+		# Factor 3: Unit type mix (0-2 points)
+		types = {u.unit_type for u in units}
+		type_score = 2.0 if len(types) > 1 else 0.5
+
+		# Factor 4: Priority distribution (0-2.5 points, lower number = higher priority)
+		avg_priority = sum(u.priority for u in units) / count
+		if avg_priority <= 2:
+			priority_score = 2.5
+		elif avg_priority <= 4:
+			priority_score = 1.5
+		else:
+			priority_score = 0.5
+
+		raw = count_score + file_score + type_score + priority_score
+		# raw range: 2.0 - 10.0; round and clamp
+		score = max(1, min(10, round(raw)))
+		return score
+
 	async def _run_post_mission_discovery(self, mission_id: str = "") -> None:
 		"""Run discovery after a successful mission to find new improvements."""
 		try:
@@ -807,6 +881,31 @@ class ContinuousController:
 						"Mission complete: planner returned no more work units.",
 					)
 				break
+
+			# Score ambition of planned work
+			ambition = self._score_ambition(units)
+			self.ambition_score = ambition
+			mission.ambition_score = ambition
+			result.ambition_score = ambition
+			logger.info("Ambition score for planned units: %d/10", ambition)
+
+			if ambition < 4:
+				pending_backlog = self.db.get_pending_backlog(limit=5)
+				higher_priority = [
+					item for item in pending_backlog
+					if item.priority_score > max(u.priority for u in units)
+				]
+				if higher_priority:
+					logger.warning(
+						"Ambition score %d is low and %d higher-priority backlog items exist. "
+						"Consider replanning with a more ambitious objective.",
+						ambition, len(higher_priority),
+					)
+
+			try:
+				self.db.update_mission(mission)
+			except Exception as exc:
+				logger.error("Failed to persist ambition score: %s", exc)
 
 			# Persist plan and tree
 			try:
