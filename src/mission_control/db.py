@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Generator, Sequence
 
 from mission_control.models import (
+	BacklogItem,
 	Decision,
 	DiscoveryItem,
 	DiscoveryResult,
@@ -366,6 +367,27 @@ CREATE TABLE IF NOT EXISTS discovery_items (
 
 CREATE INDEX IF NOT EXISTS idx_discovery_items_discovery ON discovery_items(discovery_id);
 CREATE INDEX IF NOT EXISTS idx_discovery_items_status ON discovery_items(status, priority_score DESC);
+
+CREATE TABLE IF NOT EXISTS backlog_items (
+	id TEXT PRIMARY KEY,
+	title TEXT NOT NULL DEFAULT '',
+	description TEXT NOT NULL DEFAULT '',
+	priority_score REAL NOT NULL DEFAULT 0.0,
+	impact INTEGER NOT NULL DEFAULT 5,
+	effort INTEGER NOT NULL DEFAULT 5,
+	track TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'pending',
+	source_mission_id TEXT,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	attempt_count INTEGER NOT NULL DEFAULT 0,
+	last_failure_reason TEXT,
+	pinned_score REAL,
+	depends_on TEXT NOT NULL DEFAULT '',
+	tags TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_backlog_items_status ON backlog_items(status, priority_score DESC);
 """
 
 
@@ -396,6 +418,7 @@ class Database:
 		self._migrate_epoch_columns()
 		self._migrate_token_columns()
 		self._migrate_unit_type_column()
+		self._migrate_backlog_table()
 
 	def _migrate_epoch_columns(self) -> None:
 		"""Add epoch_id columns to existing tables (idempotent)."""
@@ -453,6 +476,10 @@ class Database:
 			else:
 				logger.warning("Migration failed for work_units.unit_type: %s", exc)
 				raise
+
+	def _migrate_backlog_table(self) -> None:
+		"""Ensure backlog_items table exists (forward-compat for existing DBs)."""
+		logger.debug("Migration: ensuring backlog_items table exists")
 
 	def close(self) -> None:
 		logger.debug("Closing database connection")
@@ -1937,4 +1964,147 @@ class Database:
 			effort=row["effort"],
 			priority_score=row["priority_score"],
 			status=row["status"],
+		)
+
+	# -- Backlog Items --
+
+	def insert_backlog_item(self, item: BacklogItem) -> None:
+		self.conn.execute(
+			"""INSERT INTO backlog_items
+			(id, title, description, priority_score, impact, effort, track, status,
+			 source_mission_id, created_at, updated_at, attempt_count,
+			 last_failure_reason, pinned_score, depends_on, tags)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				item.id, item.title, item.description, item.priority_score,
+				item.impact, item.effort, item.track, item.status,
+				item.source_mission_id, item.created_at, item.updated_at,
+				item.attempt_count, item.last_failure_reason, item.pinned_score,
+				item.depends_on, item.tags,
+			),
+		)
+		self.conn.commit()
+
+	def update_backlog_item(self, item: BacklogItem) -> None:
+		self.conn.execute(
+			"""UPDATE backlog_items SET
+			title=?, description=?, priority_score=?, impact=?, effort=?,
+			track=?, status=?, source_mission_id=?, created_at=?, updated_at=?,
+			attempt_count=?, last_failure_reason=?, pinned_score=?,
+			depends_on=?, tags=?
+			WHERE id=?""",
+			(
+				item.title, item.description, item.priority_score, item.impact,
+				item.effort, item.track, item.status, item.source_mission_id,
+				item.created_at, item.updated_at, item.attempt_count,
+				item.last_failure_reason, item.pinned_score, item.depends_on,
+				item.tags, item.id,
+			),
+		)
+		self.conn.commit()
+
+	def get_backlog_item(self, item_id: str) -> BacklogItem | None:
+		row = self.conn.execute("SELECT * FROM backlog_items WHERE id=?", (item_id,)).fetchone()
+		if row is None:
+			return None
+		return self._row_to_backlog_item(row)
+
+	def list_backlog_items(
+		self, status: str | None = None, track: str | None = None, limit: int = 50
+	) -> list[BacklogItem]:
+		conditions: list[str] = []
+		params: list[str | int] = []
+		if status is not None:
+			conditions.append("status = ?")
+			params.append(status)
+		if track is not None:
+			conditions.append("track = ?")
+			params.append(track)
+		where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+		rows = self.conn.execute(
+			f"SELECT * FROM backlog_items {where} ORDER BY priority_score DESC LIMIT ?",  # noqa: S608
+			(*params, limit),
+		).fetchall()
+		return [self._row_to_backlog_item(r) for r in rows]
+
+	def get_pending_backlog(self, limit: int = 20) -> list[BacklogItem]:
+		rows = self.conn.execute(
+			"""SELECT * FROM backlog_items WHERE status = 'pending'
+			ORDER BY
+				CASE WHEN pinned_score IS NOT NULL THEN pinned_score ELSE priority_score END DESC
+			LIMIT ?""",
+			(limit,),
+		).fetchall()
+		return [self._row_to_backlog_item(r) for r in rows]
+
+	def get_backlog_items_for_mission(self, mission_id: str) -> list[BacklogItem]:
+		rows = self.conn.execute(
+			"SELECT * FROM backlog_items WHERE source_mission_id = ? ORDER BY priority_score DESC",
+			(mission_id,),
+		).fetchall()
+		return [self._row_to_backlog_item(r) for r in rows]
+
+	def update_attempt_count(self, item_id: str, failure_reason: str | None = None) -> None:
+		from mission_control.models import _now_iso
+		self.conn.execute(
+			"""UPDATE backlog_items SET
+			attempt_count = attempt_count + 1,
+			last_failure_reason = ?,
+			updated_at = ?
+			WHERE id = ?""",
+			(failure_reason, _now_iso(), item_id),
+		)
+		self.conn.commit()
+
+	def search_backlog_items(self, keywords: list[str], limit: int = 10) -> list[BacklogItem]:
+		if not keywords:
+			return []
+		conditions = []
+		params: list[str] = []
+		for kw in keywords:
+			conditions.append("(title LIKE ? OR description LIKE ? OR tags LIKE ?)")
+			pattern = f"%{kw}%"
+			params.extend([pattern, pattern, pattern])
+		where = " OR ".join(conditions)
+		rows = self.conn.execute(
+			f"SELECT * FROM backlog_items WHERE {where} ORDER BY priority_score DESC LIMIT ?",  # noqa: S608
+			(*params, limit),
+		).fetchall()
+		return [self._row_to_backlog_item(r) for r in rows]
+
+	def defer_backlog_item(self, item_id: str) -> None:
+		from mission_control.models import _now_iso
+		self.conn.execute(
+			"UPDATE backlog_items SET status = 'deferred', updated_at = ? WHERE id = ?",
+			(_now_iso(), item_id),
+		)
+		self.conn.commit()
+
+	def pin_backlog_score(self, item_id: str, score: float) -> None:
+		from mission_control.models import _now_iso
+		self.conn.execute(
+			"UPDATE backlog_items SET pinned_score = ?, updated_at = ? WHERE id = ?",
+			(score, _now_iso(), item_id),
+		)
+		self.conn.commit()
+
+	@staticmethod
+	def _row_to_backlog_item(row: sqlite3.Row) -> BacklogItem:
+		return BacklogItem(
+			id=row["id"],
+			title=row["title"],
+			description=row["description"],
+			priority_score=row["priority_score"],
+			impact=row["impact"],
+			effort=row["effort"],
+			track=row["track"],
+			status=row["status"],
+			source_mission_id=row["source_mission_id"],
+			created_at=row["created_at"],
+			updated_at=row["updated_at"],
+			attempt_count=row["attempt_count"],
+			last_failure_reason=row["last_failure_reason"],
+			pinned_score=row["pinned_score"],
+			depends_on=row["depends_on"],
+			tags=row["tags"],
 		)
