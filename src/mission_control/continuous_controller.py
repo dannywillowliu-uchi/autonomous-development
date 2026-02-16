@@ -20,6 +20,7 @@ from mission_control.feedback import get_worker_context
 from mission_control.green_branch import GreenBranchManager
 from mission_control.heartbeat import Heartbeat
 from mission_control.models import (
+	BacklogItem,
 	Epoch,
 	Handoff,
 	Mission,
@@ -88,6 +89,7 @@ class ContinuousController:
 		self._semaphore: asyncio.Semaphore | None = None
 		self._paused: bool = False
 		self._start_time: float = 0.0
+		self._backlog_item_ids: list[str] = []
 		self._total_dispatched: int = 0
 		self._total_merged: int = 0
 		self._total_failed: int = 0
@@ -162,6 +164,21 @@ class ContinuousController:
 
 		try:
 			await self._init_components()
+
+			# Load backlog items as objective if discovery is enabled
+			if self.config.discovery.enabled:
+				backlog_objective = self._load_backlog_objective()
+				if backlog_objective:
+					if self.config.target.objective:
+						self.config.target.objective += "\n\n" + backlog_objective
+					else:
+						self.config.target.objective = backlog_objective
+					mission.objective = self.config.target.objective
+					result.objective = mission.objective
+					try:
+						self.db.update_mission(mission)
+					except Exception as exc:
+						logger.error("Failed to update mission objective: %s", exc)
 
 			# Initialize JSONL event stream
 			target_dir = Path(self.config.target.resolved_path)
@@ -277,6 +294,16 @@ class ContinuousController:
 							details={"error": str(exc)},
 						)
 
+			# Update backlog items based on mission outcome
+			if self._backlog_item_ids:
+				try:
+					handoffs = self.db.get_recent_handoffs(mission.id, limit=50)
+					self._update_backlog_on_completion(result.objective_met, handoffs)
+				except Exception as exc:
+					logger.error(
+						"Failed to update backlog on completion: %s", exc, exc_info=True,
+					)
+
 			mission.status = "completed" if result.objective_met else "stopped"
 			mission.finished_at = _now_iso()
 			mission.stopped_reason = result.stopped_reason
@@ -332,6 +359,89 @@ class ContinuousController:
 
 		return result
 
+	def _load_backlog_objective(self, limit: int = 5) -> str | None:
+		"""Load top pending backlog items and compose an objective string.
+
+		Marks selected items as in_progress and stores their IDs for
+		post-mission completion tracking.
+
+		Returns the composed objective string, or None if no backlog items found.
+		"""
+		items = self.db.get_pending_backlog(limit=limit)
+		if not items:
+			return None
+
+		self._backlog_item_ids = [item.id for item in items]
+
+		# Mark selected items as in_progress
+		for item in items:
+			item.status = "in_progress"
+			item.updated_at = _now_iso()
+			self.db.update_backlog_item(item)
+
+		# Compose objective from backlog items
+		lines = ["Priority backlog items to address:"]
+		for i, item in enumerate(items, 1):
+			lines.append(
+				f"{i}. [{item.track}] {item.title} "
+				f"(backlog_item_id={item.id}, priority={item.priority_score:.1f}): "
+				f"{item.description}"
+			)
+
+		logger.info(
+			"Loaded %d backlog items as mission objective (IDs: %s)",
+			len(items),
+			", ".join(item.id[:8] for item in items),
+		)
+		return "\n".join(lines)
+
+	def _update_backlog_on_completion(
+		self, objective_met: bool, handoffs: list[Handoff],
+	) -> None:
+		"""Update backlog items after mission ends.
+
+		If objective_met: mark all targeted items as completed.
+		If not: reset to pending, store failure context, increment attempt_count.
+		"""
+		if not self._backlog_item_ids:
+			return
+
+		# Build failure context from handoffs
+		failure_reasons: list[str] = []
+		for h in handoffs:
+			if h.status != "completed":
+				try:
+					concerns = json.loads(h.concerns) if h.concerns else []
+				except (json.JSONDecodeError, TypeError):
+					concerns = []
+				if concerns:
+					failure_reasons.append(concerns[-1][:200])
+				elif h.summary:
+					failure_reasons.append(h.summary[:200])
+
+		for item_id in self._backlog_item_ids:
+			item = self.db.get_backlog_item(item_id)
+			if item is None:
+				continue
+
+			if objective_met:
+				item.status = "completed"
+				item.updated_at = _now_iso()
+				self.db.update_backlog_item(item)
+			else:
+				item.status = "pending"
+				item.attempt_count += 1
+				if failure_reasons:
+					item.last_failure_reason = "; ".join(failure_reasons[:3])
+				item.updated_at = _now_iso()
+				self.db.update_backlog_item(item)
+
+		logger.info(
+			"Updated %d backlog items: %s",
+			len(self._backlog_item_ids),
+			"completed" if objective_met else "reset to pending",
+		)
+
 	async def _run_post_mission_discovery(self) -> None:
 		"""Run discovery after a successful mission to find new improvements."""
 		try:
@@ -342,6 +452,27 @@ class ContinuousController:
 			if items:
 				logger.info(
 					"Post-mission discovery found %d new items",
+					len(items),
+				)
+				# Bridge discovery items into persistent backlog
+				for disc_item in items:
+					backlog_item = BacklogItem(
+						title=disc_item.title,
+						description=disc_item.description,
+						priority_score=disc_item.priority_score,
+						impact=disc_item.impact,
+						effort=disc_item.effort,
+						track=disc_item.track,
+					)
+					try:
+						self.db.insert_backlog_item(backlog_item)
+					except Exception as exc:
+						logger.warning(
+							"Failed to insert discovery item '%s' into backlog: %s",
+							disc_item.title[:40], exc,
+						)
+				logger.info(
+					"Inserted %d discovery items into persistent backlog",
 					len(items),
 				)
 				if self._notifier:
