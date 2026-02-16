@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -19,7 +20,7 @@ from mission_control.continuous_controller import (
 )
 from mission_control.db import Database
 from mission_control.green_branch import UnitMergeResult
-from mission_control.models import Epoch, Handoff, Mission, Plan, Signal, Worker, WorkUnit
+from mission_control.models import BacklogItem, Epoch, Handoff, Mission, Plan, Signal, Worker, WorkUnit
 
 
 class TestShouldStop:
@@ -1623,3 +1624,406 @@ class TestDryRun:
 		# No mission should be in the DB
 		latest = db.get_latest_mission()
 		assert latest is None
+
+
+class TestScoreAmbition:
+	def test_empty_units_returns_1(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		assert ctrl._score_ambition([]) == 1
+
+	def test_single_low_priority_unit(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		units = [WorkUnit(id="wu1", title="Fix typo", priority=7, files_hint="README.md")]
+		score = ctrl._score_ambition(units)
+		# Single unit, 1 file, 1 type, low priority -> low score
+		assert 1 <= score <= 5
+
+	def test_many_diverse_units_scores_high(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		units = [
+			WorkUnit(id=f"wu{i}", title=f"Task {i}", priority=1,
+				files_hint=f"src/mod{i}.py, src/mod{i}_test.py",
+				unit_type="implementation" if i % 2 == 0 else "research")
+			for i in range(8)
+		]
+		score = ctrl._score_ambition(units)
+		# 8 units, 16 files, mixed types, high priority -> high score
+		assert score >= 7
+
+	def test_medium_ambition(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		units = [
+			WorkUnit(id="wu1", title="Add feature", priority=3, files_hint="src/a.py, src/b.py, src/c.py"),
+			WorkUnit(id="wu2", title="Add tests", priority=3, files_hint="tests/test_a.py, tests/test_b.py"),
+			WorkUnit(id="wu3", title="Update docs", priority=4, files_hint="docs/api.md"),
+		]
+		score = ctrl._score_ambition(units)
+		assert 3 <= score <= 7
+
+	def test_unit_type_mix_increases_score(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		impl_only = [
+			WorkUnit(id="wu1", title="Task", priority=3, files_hint="a.py", unit_type="implementation"),
+			WorkUnit(id="wu2", title="Task2", priority=3, files_hint="b.py", unit_type="implementation"),
+		]
+		mixed = [
+			WorkUnit(id="wu1", title="Task", priority=3, files_hint="a.py", unit_type="implementation"),
+			WorkUnit(id="wu2", title="Research", priority=3, files_hint="b.py", unit_type="research"),
+		]
+		score_impl = ctrl._score_ambition(impl_only)
+		score_mixed = ctrl._score_ambition(mixed)
+		assert score_mixed >= score_impl
+
+	def test_score_clamped_to_range(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		# Even with extreme inputs, score stays 1-10
+		units = [
+			WorkUnit(id=f"wu{i}", title=f"T{i}", priority=1,
+				files_hint=", ".join(f"f{j}.py" for j in range(20)),
+				unit_type="research" if i % 2 else "implementation")
+			for i in range(20)
+		]
+		score = ctrl._score_ambition(units)
+		assert 1 <= score <= 10
+
+	def test_high_priority_units_score_higher(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		low_pri = [
+			WorkUnit(id="wu1", title="T1", priority=7, files_hint="a.py"),
+			WorkUnit(id="wu2", title="T2", priority=8, files_hint="b.py"),
+			WorkUnit(id="wu3", title="T3", priority=9, files_hint="c.py"),
+		]
+		high_pri = [
+			WorkUnit(id="wu1", title="T1", priority=1, files_hint="a.py"),
+			WorkUnit(id="wu2", title="T2", priority=1, files_hint="b.py"),
+			WorkUnit(id="wu3", title="T3", priority=2, files_hint="c.py"),
+		]
+		score_low = ctrl._score_ambition(low_pri)
+		score_high = ctrl._score_ambition(high_pri)
+		assert score_high >= score_low
+
+
+class TestAmbitionScoringInDispatch:
+	@pytest.mark.asyncio
+	async def test_ambition_score_persisted_on_mission(self, config: MissionConfig, db: Database) -> None:
+		"""Ambition score should be set on the mission object and result."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 5
+		ctrl = ContinuousController(config, db)
+
+		call_count = 0
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "",
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			plan = Plan(id=f"p{call_count}", objective="test")
+			epoch = Epoch(id=f"ep{call_count}", mission_id=mission.id, number=call_count)
+			if call_count == 1:
+				units = [
+					WorkUnit(id=f"wu-{i}", plan_id=plan.id, title=f"Task {i}", priority=2,
+						files_hint=f"src/mod{i}.py, src/mod{i}_test.py",
+						unit_type="implementation" if i % 2 == 0 else "research")
+					for i in range(5)
+				]
+				return plan, units, epoch
+			return plan, [], epoch
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			unit.status = "completed"
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
+			)
+			semaphore.release()
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+
+		with (
+			patch.object(ctrl, "_init_components", mock_init),
+			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+		):
+			result = await ctrl.run()
+
+		assert result.ambition_score > 0
+		assert ctrl.ambition_score > 0
+
+		# Verify it was persisted to the DB
+		db_mission = db.get_latest_mission()
+		assert db_mission is not None
+		assert db_mission.ambition_score > 0
+
+	@pytest.mark.asyncio
+	async def test_low_ambition_warns_with_higher_backlog(
+		self, config: MissionConfig, db: Database, caplog: pytest.LogCaptureFixture,
+	) -> None:
+		"""Low ambition with higher-priority backlog items should log a warning."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 5
+		config.discovery.enabled = False
+		ctrl = ContinuousController(config, db)
+
+		# Insert high-priority backlog items (stay pending since discovery is off)
+		for i in range(3):
+			db.insert_backlog_item(BacklogItem(
+				id=f"bl{i}", title=f"Important task {i}",
+				priority_score=9.0, status="pending",
+			))
+
+		call_count = 0
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "",
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			plan = Plan(id=f"p{call_count}", objective="test")
+			epoch = Epoch(id=f"ep{call_count}", mission_id=mission.id, number=call_count)
+			if call_count == 1:
+				# Single low-priority unit -> low ambition
+				units = [WorkUnit(id="wu-1", plan_id=plan.id, title="Fix lint", priority=8, files_hint="a.py")]
+				return plan, units, epoch
+			return plan, [], epoch
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			unit.status = "completed"
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
+			)
+			semaphore.release()
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+
+		warning_messages: list[str] = []
+
+		def capture_warning(msg: str, *args: object, **kwargs: object) -> None:
+			warning_messages.append(msg % args if args else msg)
+
+		with (
+			patch.object(ctrl, "_init_components", mock_init),
+			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch.object(
+				logging.getLogger("mission_control.continuous_controller"),
+				"warning", side_effect=capture_warning,
+			),
+		):
+			result = await ctrl.run()
+
+		# Ambition should be low (single lint fix unit)
+		assert result.ambition_score < 4
+		# Warning should have been logged about low ambition
+		ambition_warnings = [m for m in warning_messages if "ambition" in m.lower() or "Ambition" in m]
+		assert len(ambition_warnings) > 0
+
+
+class TestNextObjectivePopulation:
+	@pytest.mark.asyncio
+	async def test_next_objective_set_when_not_met_with_backlog(self, config: MissionConfig, db: Database) -> None:
+		"""When objective not met and backlog exists, next_objective should be populated."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 2
+		ctrl = ContinuousController(config, db)
+
+		# Insert pending backlog items
+		db.insert_backlog_item(BacklogItem(
+			id="bl1", title="Add auth", priority_score=8.0,
+			track="feature", status="pending",
+		))
+		db.insert_backlog_item(BacklogItem(
+			id="bl2", title="Fix tests", priority_score=6.0,
+			track="quality", status="pending",
+		))
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "",
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			# Always return units (never complete)
+			plan = Plan(id="p1", objective="test")
+			epoch = Epoch(id="ep1", mission_id=mission.id, number=1)
+			units = [WorkUnit(id="wu-1", plan_id=plan.id, title="Task", priority=3, files_hint="a.py")]
+			return plan, units, epoch
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			unit.status = "completed"
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
+			)
+			semaphore.release()
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+
+		with (
+			patch.object(ctrl, "_init_components", mock_init),
+			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+		):
+			result = await ctrl.run()
+
+		# Mission should have stopped by wall_time, not objective_met
+		assert result.objective_met is False
+		assert result.next_objective != ""
+		assert "remaining backlog" in result.next_objective
+		assert "Add auth" in result.next_objective
+
+	@pytest.mark.asyncio
+	async def test_next_objective_empty_when_objective_met(self, config: MissionConfig, db: Database) -> None:
+		"""When objective is met, next_objective should remain empty."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 5
+		ctrl = ContinuousController(config, db)
+
+		# Insert backlog items (they exist but shouldn't trigger chaining since objective is met)
+		db.insert_backlog_item(BacklogItem(
+			id="bl1", title="Some task", priority_score=5.0,
+			track="feature", status="pending",
+		))
+
+		call_count = 0
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "",
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			plan = Plan(id=f"p{call_count}", objective="test")
+			epoch = Epoch(id=f"ep{call_count}", mission_id=mission.id, number=call_count)
+			if call_count == 1:
+				units = [WorkUnit(id="wu-1", plan_id=plan.id, title="Task", priority=3, files_hint="a.py")]
+				return plan, units, epoch
+			return plan, [], epoch  # Empty = objective met
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			unit.status = "completed"
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
+			)
+			semaphore.release()
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+
+		with (
+			patch.object(ctrl, "_init_components", mock_init),
+			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+		):
+			result = await ctrl.run()
+
+		assert result.objective_met is True
+		assert result.next_objective == ""
+
+	@pytest.mark.asyncio
+	async def test_next_objective_empty_when_no_backlog(self, config: MissionConfig, db: Database) -> None:
+		"""When objective not met but no backlog, next_objective should remain empty."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 2
+		ctrl = ContinuousController(config, db)
+
+		# No backlog items inserted
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "",
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			plan = Plan(id="p1", objective="test")
+			epoch = Epoch(id="ep1", mission_id=mission.id, number=1)
+			units = [WorkUnit(id="wu-1", plan_id=plan.id, title="Task", priority=3, files_hint="a.py")]
+			return plan, units, epoch
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			unit.status = "completed"
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
+			)
+			semaphore.release()
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+
+		with (
+			patch.object(ctrl, "_init_components", mock_init),
+			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+		):
+			result = await ctrl.run()
+
+		assert result.objective_met is False
+		assert result.next_objective == ""
+
+	def test_next_objective_on_result_dataclass(self) -> None:
+		"""ContinuousMissionResult should have next_objective field."""
+		r = ContinuousMissionResult()
+		assert hasattr(r, "next_objective")
+		assert r.next_objective == ""
+
+		r.next_objective = "Do more work"
+		assert r.next_objective == "Do more work"
