@@ -16,6 +16,7 @@ Each unit: implement the feature, add tests, ensure all existing tests pass. Rea
 ## Completed
 - [x] 27c55874 (2026-02-16T06:16:28.342807+00:00) -- Added StrategicContext dataclass to models.py, added ambition_score/next_objective/proposed_by_strat (files: src/mission_control/models.py, src/mission_control/db.py, src/mission_control/continuous_controller.py, tests/test_strategic_context_db.py)
 - [x] 875c5f11 (2026-02-16T06:20:34.139144+00:00) -- Created src/mission_control/strategist.py with Strategist class that gathers context from BACKLOG.md (files: src/mission_control/strategist.py, tests/test_strategist.py)
+- [x] 4dcf4bae (2026-02-16T06:27:13.205278+00:00) -- Added experiment_mode field to WorkUnit dataclass, new ExperimentResult dataclass in models.py. Adde (files: src/mission_control/models.py, src/mission_control/db.py)
 
 ## Files Modified
 src/mission_control/continuous_controller.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/strategist.py, tests/test_strategic_context_db.py, tests/test_strategist.py
@@ -27,3 +28,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 ## Changelog
 - 2026-02-16T06:16:28.342807+00:00 | 27c55874 merged (commit: eed6e1d) -- Added StrategicContext dataclass to models.py, added ambition_score/next_objecti
 - 2026-02-16T06:20:34.139144+00:00 | 875c5f11 merged (commit: 00df582) -- Created src/mission_control/strategist.py with Strategist class that gathers con
+- 2026-02-16T06:27:13.205278+00:00 | 4dcf4bae merged (commit: 707a535) -- Added experiment_mode field to WorkUnit dataclass, new ExperimentResult dataclas
