@@ -2,7 +2,29 @@
 
 Derived from cross-system research (Feb 2026). Ordered by priority.
 
-## P0: Replace LLM Evaluator with Objective Signals
+## P0: Priority Queue and Cross-Mission Scheduling System
+
+**Problem**: Priorities are set once at discovery time and never revisited. BACKLOG.md is a markdown file with human-assigned P0-P9 labels that the scheduler doesn't parse or enforce. Each mission rediscovers from scratch with no memory of what was planned before. There's no way to reprioritize items between missions, no feedback loop for items that keep failing, and no human override mechanism.
+
+**Solution**: Build a structured priority queue that persists across missions and supports reprioritization:
+
+1. **Persistent backlog store**: SQLite table `backlog_items` with fields: id, title, description, priority_score, impact, effort, track, status (pending/in_progress/completed/deferred), source_mission_id, created_at, updated_at, attempt_count, last_failure_reason
+2. **Priority recalculation**: After each mission, recalculate priorities based on:
+   - Original impact/effort score
+   - Failure history (items that failed get deprioritized unless the failure was infrastructure-related)
+   - Dependency satisfaction (items whose blockers are now resolved get boosted)
+   - Staleness penalty (items sitting untouched for N missions get flagged)
+3. **Human override CLI**: `mc priority set <item-id> <score>` to manually pin an item's priority. `mc priority list` to show the current queue. `mc priority defer <item-id>` to push to bottom.
+4. **Mission intake**: When a mission starts, instead of rediscovering everything, it reads the priority queue first and selects the top N items. Discovery adds NEW items to the queue rather than replacing it.
+5. **Cross-mission continuity**: Post-mission discovery items get inserted into the persistent queue, not just logged to the DB. Next mission picks up where the last left off.
+
+**Files**: `db.py` (new table), `models.py` (BacklogItem model), `cli.py` (priority subcommand), `auto_discovery.py` (integrate with queue), `continuous_controller.py` (read from queue at mission start)
+
+**Why P0**: Without this, every other improvement is ad-hoc. The scheduler can't strategically sequence its own evolution. This is the foundation for the strategist agent and mission chaining.
+
+---
+
+## P1 (was P0): Replace LLM Evaluator with Objective Signals
 
 **Problem**: The evaluator spawns a full Claude session per round to assign a subjective 0.0-1.0 score. This is expensive, noisy (Round 2 scored 0.0 despite real work), and contradicts our "objective signals only" design.
 
@@ -184,3 +206,59 @@ Start with prompt-level self-play (no weight updates). The Self-Improving Coding
 **Files**: New module `self_play.py`, integration with feedback system
 
 **Source inspiration**: Meta FAIR Self-Play SWE-RL, Self-Improving Coding Agent (ICLR 2025 Workshop).
+
+## Next Mission: Traceability & Dashboard Features
+
+- **MISSION_STATE.md generation**: Auto-generate and commit a MISSION_STATE.md file at mission start and update throughout execution. Contains: objective, discovered work items, status of each item, timestamps.
+- **Dashboard mission statement view**: Add a section to the live web dashboard (live_ui.html) that displays the current mission objective and planned work items. Should be visible at the top of the dashboard alongside the status bar.
+
+---
+
+## Next Mission: Autonomous Engineering Lead Capabilities
+
+The goal is to evolve mission control from a task executor into an autonomous engineering lead that can do what a human currently does manually.
+
+### Strategic Decision-Making
+**Problem**: The human currently decides _what_ to build and _how_ to architect it. Mission control only executes predefined objectives.
+
+**Solution**: Add a strategy layer that can:
+- Evaluate the codebase holistically (using analyze_codebase) and identify the highest-impact next step
+- Choose between competing architectural approaches by reasoning about trade-offs (maintainability, performance, complexity)
+- Make design decisions within a mission without human approval for non-destructive choices
+- Maintain a rolling "strategic context" that accumulates across missions -- what worked, what didn't, what the long-term direction is
+
+**Implementation**: A "strategist" agent that runs before discovery, reads BACKLOG.md + git history + past mission reports, and produces a focused objective autonomously. Checkpointed: human approves the objective, but the system proposes it.
+
+### Test and Experiment
+**Problem**: Workers implement a single approach and either pass or fail verification. No exploration of alternatives, no benchmarking, no "try it and see."
+
+**Solution**: Add an experimentation mode where workers can:
+- Prototype multiple approaches in isolated branches before committing to one
+- Run benchmarks/profiling to compare approaches with data
+- A/B test implementations: generate N candidates, run tests + benchmarks on each, pick the winner (extends P1 N-of-M beyond just fixup)
+- Record experiment results for future reference ("approach X was 3x faster than Y for this pattern")
+
+**Implementation**: New execution mode `experiment` alongside `implement`. Experiment units produce a comparison report rather than a merged commit. Winning approach gets promoted to an implement unit.
+
+### Visual Verification
+**Problem**: Mission control can run pytest/ruff/mypy but cannot look at UI changes, rendered output, dashboards, or visual artifacts to verify correctness. A human must visually inspect.
+
+**Solution**: Integrate browser automation for visual verification:
+- After UI-related units complete, launch the app and take screenshots
+- Use vision-capable models to evaluate: "Does this look correct? Does the layout match the requirements?"
+- Screenshot diffing: compare before/after for unintended visual regressions
+- Interactive testing: navigate the UI, click buttons, verify behavior
+
+**Implementation**: Integration with browser automation tools (Playwright or claude-in-chrome MCP). New verification step `visual_verify` that runs after standard verification for UI-touching units. Store screenshots in mission artifacts.
+
+### Ambitious Scope
+**Problem**: Current missions are constrained to small, safe, incremental units. The system avoids risk. A human would take on larger refactors, multi-system changes, or greenfield features.
+
+**Solution**: Enable mission control to:
+- Plan multi-epoch, multi-session work toward a large goal (not just single-session units)
+- Take calculated risks with rollback capability -- try a large refactor, verify, roll back if it breaks
+- Build entirely new modules/features from scratch, not just modify existing code
+- Chain missions: output of one mission feeds the objective of the next, building toward a multi-day goal
+- Self-evaluate ambition level: "Is this mission pushing boundaries or just doing busywork?"
+
+**Implementation**: Mission chaining in config (next_mission field). Ambition scoring in the strategist. Rollback-safe mode that snapshots before risky changes and auto-reverts on failure.
