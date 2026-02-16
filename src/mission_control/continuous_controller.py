@@ -91,6 +91,7 @@ class ContinuousController:
 		self._paused: bool = False
 		self._start_time: float = 0.0
 		self._backlog_item_ids: list[str] = []
+		self._state_changelog: list[str] = []
 		self._total_dispatched: int = 0
 		self._total_merged: int = 0
 		self._total_failed: int = 0
@@ -162,6 +163,12 @@ class ContinuousController:
 			result.stopped_reason = "db_error"
 			return result
 		result.mission_id = mission.id
+
+		# Generate initial MISSION_STATE.md with objective and empty sections
+		try:
+			self._update_mission_state(mission)
+		except Exception as exc:
+			logger.warning("Failed to write initial MISSION_STATE.md: %s", exc)
 
 		try:
 			await self._init_components()
@@ -895,6 +902,12 @@ class ContinuousController:
 				if handoff and self._planner:
 					self._planner.ingest_handoff(handoff)
 
+				timestamp = unit.finished_at or _now_iso()
+				summary = (handoff.summary[:80] if handoff and handoff.summary else unit.output_summary[:80])
+				self._state_changelog.append(
+					f"- {timestamp} | {unit.id[:8]} research completed -- {summary}"
+				)
+
 				try:
 					self._update_mission_state(mission)
 				except Exception as exc:
@@ -1080,6 +1093,19 @@ class ContinuousController:
 			# Feed handoff to planner for adaptive replanning
 			if handoff and self._planner:
 				self._planner.ingest_handoff(handoff)
+
+			# Append changelog entry before updating state file
+			timestamp = unit.finished_at or _now_iso()
+			summary = (handoff.summary[:80] if handoff and handoff.summary else unit.output_summary[:80])
+			if merged:
+				commit_str = unit.commit_hash or "no-commit"
+				self._state_changelog.append(
+					f"- {timestamp} | {unit.id[:8]} merged (commit: {commit_str}) -- {summary}"
+				)
+			elif unit.status == "failed":
+				self._state_changelog.append(
+					f"- {timestamp} | {unit.id[:8]} failed -- {summary}"
+				)
 
 			# Update MISSION_STATE.md in target repo
 			try:
@@ -1573,9 +1599,17 @@ class ContinuousController:
 
 			summary = h.summary[:100] if h.summary else ""
 
+			# Look up work unit for timestamp
+			try:
+				wu = self.db.get_work_unit(h.work_unit_id)
+				timestamp = wu.finished_at if wu and wu.finished_at else ""
+			except Exception:
+				timestamp = ""
+
 			if h.status == "completed":
+				ts_part = f" ({timestamp})" if timestamp else ""
 				completed.append(
-					f"- [x] {h.work_unit_id[:8]} -- {summary}"
+					f"- [x] {h.work_unit_id[:8]}{ts_part} -- {summary}"
 					+ (f" (files: {file_str})" if file_str else ""),
 				)
 			else:
@@ -1584,7 +1618,8 @@ class ContinuousController:
 				except (json.JSONDecodeError, TypeError):
 					concerns = []
 				detail = concerns[-1][:100] if concerns else "unknown"
-				failed.append(f"- [ ] {h.work_unit_id[:8]} -- {detail}")
+				ts_part = f" ({timestamp})" if timestamp else ""
+				failed.append(f"- [ ] {h.work_unit_id[:8]}{ts_part} -- {detail}")
 
 		if completed:
 			lines.append("## Completed")
@@ -1606,6 +1641,11 @@ class ContinuousController:
 			"The planner should focus on what hasn't been done yet.",
 			"Do NOT re-target files in the 'Files Modified' list unless fixing a failure.",
 		])
+
+		if self._state_changelog:
+			lines.append("")
+			lines.append("## Changelog")
+			lines.extend(self._state_changelog)
 
 		try:
 			state_path.write_text("\n".join(lines) + "\n")
