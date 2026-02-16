@@ -63,6 +63,7 @@ class ContinuousMissionResult:
 	stopped_reason: str = ""
 	final_verification_passed: bool | None = None
 	final_verification_output: str = ""
+	backlog_item_ids: list[str] | None = None
 
 
 class ContinuousController:
@@ -326,6 +327,9 @@ class ContinuousController:
 			result.total_units_dispatched = self._total_dispatched
 			result.total_units_merged = self._total_merged
 			result.total_units_failed = self._total_failed
+
+			if self._backlog_item_ids:
+				result.backlog_item_ids = list(self._backlog_item_ids)
 
 			try:
 				from mission_control.mission_report import generate_mission_report
