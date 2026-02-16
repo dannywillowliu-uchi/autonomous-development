@@ -408,6 +408,28 @@ class UnitEvent:
 
 
 @dataclass
+class BacklogItem:
+	"""A persistent backlog item for cross-mission task tracking."""
+
+	id: str = field(default_factory=_new_id)
+	title: str = ""
+	description: str = ""
+	priority_score: float = 0.0
+	impact: int = 5
+	effort: int = 5
+	track: str = ""  # feature/quality/security
+	status: str = "pending"  # pending/in_progress/completed/deferred/rejected
+	source_mission_id: str | None = None
+	created_at: str = field(default_factory=_now_iso)
+	updated_at: str = field(default_factory=_now_iso)
+	attempt_count: int = 0
+	last_failure_reason: str | None = None
+	pinned_score: float | None = None
+	depends_on: str = ""  # comma-separated BacklogItem IDs
+	tags: str = ""  # comma-separated tags
+
+
+@dataclass
 class DiscoveryItem:
 	"""A single improvement discovered during codebase analysis."""
 
