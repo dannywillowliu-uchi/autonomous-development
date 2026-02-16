@@ -30,7 +30,7 @@ body {
 
 .layout {
 	display: grid;
-	grid-template-rows: auto 1fr auto;
+	grid-template-rows: auto auto 1fr auto auto;
 	height: 100vh;
 }
 
@@ -713,11 +713,207 @@ body {
 	color: var(--text-muted);
 	font-size: 14px;
 }
+
+/* Mission objective banner */
+.objective-banner {
+	background: linear-gradient(135deg, rgba(88, 166, 255, 0.12), rgba(188, 140, 255, 0.08));
+	border-bottom: 1px solid var(--border);
+	padding: 10px 20px;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-height: 40px;
+}
+
+.objective-banner .objective-label {
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	color: var(--blue);
+	flex-shrink: 0;
+}
+
+.objective-banner .objective-text {
+	font-size: 13px;
+	color: var(--text);
+	line-height: 1.4;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.objective-banner.inactive {
+	background: rgba(48, 54, 61, 0.3);
+}
+
+.objective-banner.inactive .objective-label {
+	color: var(--text-muted);
+}
+
+.objective-banner.inactive .objective-text {
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+/* Enhanced worker card timestamps */
+.card-timestamps {
+	font-size: 11px;
+	color: var(--text-muted);
+	margin-top: 4px;
+	display: flex;
+	gap: 12px;
+}
+
+.card-timestamps .ts-label {
+	color: var(--text-muted);
+	opacity: 0.7;
+}
+
+.card-worker-name {
+	font-size: 12px;
+	color: var(--purple);
+	font-weight: 500;
+	margin-top: 2px;
+}
+
+/* Mission History section */
+.history-section {
+	background: var(--surface);
+	border-top: 1px solid var(--border);
+}
+
+.history-toggle {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 20px;
+	cursor: pointer;
+	user-select: none;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	border: none;
+	background: none;
+	width: 100%;
+	text-align: left;
+}
+
+.history-toggle:hover {
+	color: var(--text);
+	background: rgba(255, 255, 255, 0.02);
+}
+
+.history-toggle .toggle-arrow {
+	display: inline-block;
+	transition: transform 0.2s ease;
+	font-size: 10px;
+}
+
+.history-section.collapsed .toggle-arrow {
+	transform: rotate(-90deg);
+}
+
+.history-section.collapsed .history-content {
+	display: none;
+}
+
+.history-content {
+	padding: 0 20px 12px 20px;
+	overflow-x: auto;
+}
+
+.history-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 12px;
+}
+
+.history-table th {
+	text-align: left;
+	color: var(--text-muted);
+	font-weight: 600;
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.3px;
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--border);
+}
+
+.history-table td {
+	padding: 8px 10px;
+	border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+	color: var(--text);
+	vertical-align: middle;
+}
+
+.history-table tr:hover td {
+	background: rgba(255, 255, 255, 0.02);
+}
+
+.history-objective {
+	max-width: 300px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.history-badge {
+	display: inline-block;
+	padding: 1px 6px;
+	border-radius: 8px;
+	font-size: 10px;
+	font-weight: 600;
+	text-transform: uppercase;
+}
+
+.history-badge.completed { background: rgba(63, 185, 80, 0.2); color: var(--green); }
+.history-badge.failed { background: rgba(248, 81, 73, 0.2); color: var(--red); }
+.history-badge.stopped { background: rgba(248, 81, 73, 0.2); color: var(--red); }
+.history-badge.running { background: rgba(210, 153, 34, 0.2); color: var(--yellow); }
+
+.history-counts {
+	display: flex;
+	gap: 6px;
+	font-size: 11px;
+}
+
+.history-counts .hc-merged { color: var(--green); }
+.history-counts .hc-failed { color: var(--red); }
+
+.history-detail-btn {
+	font-size: 11px;
+	padding: 2px 8px;
+	border-radius: 4px;
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--blue);
+	cursor: pointer;
+}
+
+.history-detail-btn:hover {
+	background: rgba(88, 166, 255, 0.1);
+}
+
+.history-empty {
+	padding: 16px 0;
+	text-align: center;
+	color: var(--text-muted);
+	font-size: 13px;
+}
 </style>
 </head>
 <body>
 
 <div class="layout">
+	<!-- Mission objective banner -->
+	<div class="objective-banner inactive" id="objective-banner">
+		<span class="objective-label">Objective</span>
+		<span class="objective-text" id="objective-text">No active mission</span>
+	</div>
+
 	<!-- Header -->
 	<div class="header">
 		<div class="header-left">
@@ -762,6 +958,17 @@ body {
 				<button class="event-filter-btn active" data-type="merge_failed" onclick="toggleEventFilter('merge_failed')">Merge Fail</button>
 			</div>
 			<div id="event-log-content"></div>
+		</div>
+	</div>
+
+	<!-- Mission History -->
+	<div class="history-section collapsed" id="history-section">
+		<button class="history-toggle" onclick="toggleHistory()">
+			<span class="toggle-arrow">&#9662;</span>
+			Mission History
+		</button>
+		<div class="history-content" id="history-content">
+			<div class="history-empty">No mission history</div>
 		</div>
 	</div>
 
@@ -856,6 +1063,7 @@ function updateAll(snapshot) {
 	updatePlanTree(snapshot.plan_tree);
 	updateWorkerCards(snapshot.units);
 	updateEventLog(snapshot.events);
+	updateHistory(snapshot.history);
 }
 
 function updateHeader(mission, summary) {
@@ -863,18 +1071,33 @@ function updateHeader(mission, summary) {
 	const elapsed = document.getElementById("elapsed");
 	const cost = document.getElementById("cost");
 	const epochEl = document.getElementById("epoch-num");
+	const banner = document.getElementById("objective-banner");
+	const objText = document.getElementById("objective-text");
 
 	updateControlStates(mission);
 
 	if (!mission) {
 		badge.textContent = "NO MISSION";
 		badge.className = "status-badge no-mission";
+		banner.className = "objective-banner inactive";
+		objText.textContent = "No active mission";
 		return;
 	}
 
 	const status = isPaused ? "paused" : mission.status;
 	badge.textContent = status.toUpperCase();
 	badge.className = `status-badge ${status}`;
+
+	// Update objective banner
+	if (mission.objective) {
+		banner.className = "objective-banner";
+		objText.textContent = mission.objective;
+		objText.title = mission.objective;
+	} else {
+		banner.className = "objective-banner inactive";
+		objText.textContent = "No objective set";
+		objText.title = "";
+	}
 
 	cost.textContent = `$${(mission.total_cost_usd || 0).toFixed(2)}`;
 
@@ -1015,6 +1238,12 @@ function updateWorkerCards(units) {
 		html += `<span class="card-title" title="${escapeHtml(unit.title)}">${escapeHtml(unit.title)}</span>`;
 		html += `<span class="card-status ${unit.status}">${unit.status}</span>`;
 		html += `</div>`;
+		if (worker && worker.name) {
+			html += `<div class="card-worker-name">${escapeHtml(worker.name)}</div>`;
+		} else if (worker && worker.id) {
+			html += `<div class="card-worker-name">Worker ${escapeHtml(worker.id.substring(0, 8))}</div>`;
+		}
+
 		html += `<div class="card-meta">`;
 		html += `${unit.id.substring(0, 8)}`;
 		if (unit.attempt > 0) html += ` | attempt ${unit.attempt}/${unit.max_attempts}`;
@@ -1033,6 +1262,15 @@ function updateWorkerCards(units) {
 		if (unit.files_hint) {
 			html += `<div class="card-meta">files: ${escapeHtml(unit.files_hint.substring(0, 60))}</div>`;
 		}
+
+		html += `<div class="card-timestamps">`;
+		if (unit.started_at) {
+			html += `<span><span class="ts-label">Started:</span> ${formatTimestamp(unit.started_at)}</span>`;
+		}
+		if (unit.finished_at) {
+			html += `<span><span class="ts-label">Finished:</span> ${formatTimestamp(unit.finished_at)}</span>`;
+		}
+		html += `</div>`;
 
 		html += `<div class="card-summary">`;
 		if (worker && worker.output_excerpt) {
@@ -1416,6 +1654,87 @@ function escapeHtml(text) {
 	const div = document.createElement("div");
 	div.textContent = text;
 	return div.innerHTML;
+}
+
+function formatTimestamp(isoString) {
+	if (!isoString) return "--";
+	try {
+		const d = new Date(isoString);
+		return d.toLocaleString([], {
+			month: "short", day: "numeric",
+			hour: "2-digit", minute: "2-digit", second: "2-digit"
+		});
+	} catch {
+		return "--";
+	}
+}
+
+function formatDuration(startIso, endIso) {
+	if (!startIso) return "--";
+	try {
+		const start = new Date(startIso);
+		const end = endIso ? new Date(endIso) : new Date();
+		const diffMs = end - start;
+		const hrs = Math.floor(diffMs / 3600000);
+		const mins = Math.floor((diffMs % 3600000) / 60000);
+		if (hrs > 0) return `${hrs}h ${mins}m`;
+		return `${mins}m`;
+	} catch {
+		return "--";
+	}
+}
+
+function toggleHistory() {
+	const section = document.getElementById("history-section");
+	section.classList.toggle("collapsed");
+}
+
+function updateHistory(history) {
+	const container = document.getElementById("history-content");
+	if (!history || history.length === 0) {
+		container.innerHTML = '<div class="history-empty">No mission history</div>';
+		return;
+	}
+
+	let html = '<table class="history-table">';
+	html += '<thead><tr>';
+	html += '<th>Objective</th><th>Status</th><th>Units</th><th>Duration</th><th>Cost</th><th></th>';
+	html += '</tr></thead><tbody>';
+
+	for (const m of history) {
+		const objective = m.objective || "Untitled mission";
+		const truncated = objective.length > 80 ? objective.substring(0, 77) + "..." : objective;
+		const statusClass = m.status || "completed";
+		const merged = m.units_merged || 0;
+		const failed = m.units_failed || 0;
+		const total = m.units_total || (merged + failed);
+		const duration = formatDuration(m.started_at, m.finished_at);
+		const cost = m.total_cost_usd != null ? `$${m.total_cost_usd.toFixed(2)}` : "--";
+
+		html += `<tr>`;
+		html += `<td><span class="history-objective" title="${escapeHtml(objective)}">${escapeHtml(truncated)}</span></td>`;
+		html += `<td><span class="history-badge ${statusClass}">${statusClass}</span></td>`;
+		html += `<td><span class="history-counts">`;
+		html += `<span class="hc-merged">${merged}m</span>`;
+		if (failed > 0) html += ` <span class="hc-failed">${failed}f</span>`;
+		html += ` / ${total}`;
+		html += `</span></td>`;
+		html += `<td>${duration}</td>`;
+		html += `<td>${cost}</td>`;
+		html += `<td>`;
+		if (m.id) {
+			html += `<button class="history-detail-btn" onclick="event.stopPropagation();viewMissionDetail('${escapeHtml(m.id)}')">Details</button>`;
+		}
+		html += `</td>`;
+		html += `</tr>`;
+	}
+
+	html += '</tbody></table>';
+	container.innerHTML = html;
+}
+
+function viewMissionDetail(missionId) {
+	showToast("Mission details: " + missionId.substring(0, 8), "info");
 }
 
 // Update relative timestamps every 15 seconds
