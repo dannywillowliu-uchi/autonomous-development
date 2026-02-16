@@ -71,6 +71,14 @@ def build_parser() -> argparse.ArgumentParser:
 		"--experiment", action="store_true",
 		help="Run in experiment mode: units produce comparison reports instead of merged commits",
 	)
+	mission.add_argument(
+		"--chain", action="store_true",
+		help="Automatically chain missions when next_objective is set",
+	)
+	mission.add_argument(
+		"--max-chain-depth", type=int, default=3,
+		help="Maximum number of chained missions (default: 3)",
+	)
 
 	# mc discover
 	discover = sub.add_parser("discover", help="Run codebase discovery analysis")
@@ -442,12 +450,19 @@ def cmd_mission(args: argparse.Namespace) -> int:
 		)
 		return 1
 
-	with Database(db_path) as db:
-		from mission_control.continuous_controller import ContinuousController
-		controller = ContinuousController(config, db)
-		if args.strategist:
-			controller.proposed_by_strategist = True
-		result = asyncio.run(controller.run())
+	from mission_control.continuous_controller import ContinuousController
+
+	chain_depth = 0
+	max_chain_depth = getattr(args, "max_chain_depth", 3)
+	last_result = None
+
+	while True:
+		with Database(db_path) as db:
+			controller = ContinuousController(config, db)
+			if args.strategist:
+				controller.proposed_by_strategist = True
+			result = asyncio.run(controller.run())
+
 		print(f"Mission: {result.mission_id}")
 		print(f"Objective met: {result.objective_met}")
 		disp = result.total_units_dispatched
@@ -455,11 +470,27 @@ def cmd_mission(args: argparse.Namespace) -> int:
 		failed = result.total_units_failed
 		print(f"Units: {disp} dispatched, {merged} merged, {failed} failed")
 		if result.final_verification_passed is not None:
-			status = "PASS" if result.final_verification_passed else "FAIL"
-			print(f"Final verification: {status}")
+			fv_status = "PASS" if result.final_verification_passed else "FAIL"
+			print(f"Final verification: {fv_status}")
 		print(f"Wall time: {result.wall_time_seconds:.1f}s")
 		print(f"Stopped: {result.stopped_reason}")
-		return 0 if result.objective_met else 1
+
+		last_result = result
+		chain_depth += 1
+
+		if not args.chain:
+			break
+		if not result.next_objective:
+			break
+		if chain_depth >= max_chain_depth:
+			print(f"Chain depth limit reached ({max_chain_depth}). Stopping.")
+			break
+
+		print(f"\n--- Chaining mission {chain_depth + 1}/{max_chain_depth} ---")
+		print(f"Next objective: {result.next_objective}")
+		config.target.objective = result.next_objective
+
+	return 0 if last_result.objective_met else 1
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
