@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import re
 import sys
 from pathlib import Path
 
 from mission_control.config import load_config, validate_config
 from mission_control.db import Database
+from mission_control.models import BacklogItem, _new_id, _now_iso
 from mission_control.scheduler import Scheduler
 
 DEFAULT_CONFIG = "mission-control.toml"
@@ -109,6 +111,27 @@ def build_parser() -> argparse.ArgumentParser:
 	# mc validate-config
 	vc = sub.add_parser("validate-config", help="Validate config file semantically")
 	vc.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+
+	# mc priority
+	priority = sub.add_parser("priority", help="Manage backlog priority queue")
+	priority.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	priority_sub = priority.add_subparsers(dest="priority_command")
+
+	# mc priority list
+	priority_sub.add_parser("list", help="List backlog items sorted by score")
+
+	# mc priority set <item-id> <score>
+	pset = priority_sub.add_parser("set", help="Pin a priority score on an item")
+	pset.add_argument("item_id", help="Backlog item ID")
+	pset.add_argument("score", type=float, help="Priority score to pin")
+
+	# mc priority defer <item-id>
+	pdefer = priority_sub.add_parser("defer", help="Defer a backlog item")
+	pdefer.add_argument("item_id", help="Backlog item ID to defer")
+
+	# mc priority import --config <path>
+	pimport = priority_sub.add_parser("import", help="Import items from BACKLOG.md")
+	pimport.add_argument("--file", required=True, help="Path to BACKLOG.md file")
 
 	return parser
 
@@ -731,6 +754,169 @@ def cmd_mcp(args: argparse.Namespace) -> int:
 	return 0
 
 
+def recalculate_priorities(items: list[BacklogItem]) -> list[BacklogItem]:
+	"""Recalculate priority scores for backlog items based on impact, effort, and history."""
+	for item in items:
+		if item.pinned_score is not None:
+			item.priority_score = item.pinned_score
+		else:
+			base = item.impact * (11 - item.effort) / 10.0
+			failure_penalty = min(item.attempt_count * 0.5, 3.0)
+			item.priority_score = max(base - failure_penalty, 0.0)
+	items.sort(key=lambda i: i.priority_score, reverse=True)
+	return items
+
+
+def parse_backlog_md(text: str) -> list[BacklogItem]:
+	"""Parse a BACKLOG.md file into BacklogItem objects.
+
+	Expects sections like '## P0: Title' with optional **Problem** and **Files** blocks.
+	"""
+	items: list[BacklogItem] = []
+	sections = re.split(r"^## ", text, flags=re.MULTILINE)
+	for section in sections:
+		section = section.strip()
+		if not section:
+			continue
+		header_match = re.match(r"P(\d+):\s*(.+)", section)
+		if not header_match:
+			continue
+		priority_num = int(header_match.group(1))
+		title = header_match.group(2).strip()
+		lines = section.split("\n", 1)
+		description = lines[1].strip() if len(lines) > 1 else ""
+		impact = max(10 - priority_num, 1)
+		effort = 5
+		score = impact * (11 - effort) / 10.0
+		now = _now_iso()
+		item = BacklogItem(
+			id=_new_id(),
+			title=title,
+			description=description,
+			priority_score=score,
+			impact=impact,
+			effort=effort,
+			track="feature",
+			status="pending",
+			created_at=now,
+			updated_at=now,
+		)
+		items.append(item)
+	return items
+
+
+def cmd_priority_list(args: argparse.Namespace) -> int:
+	"""List backlog items sorted by priority score."""
+	db_path = _get_db_path(args.config)
+	if not db_path.exists():
+		print("No database found. Run 'mc start' first.")
+		return 1
+
+	with Database(db_path) as db:
+		items = db.list_backlog_items()
+		items = recalculate_priorities(items)
+		if not items:
+			print("No backlog items.")
+			return 0
+
+		print(
+			f"\n{'ID':<14} {'Title':<30} {'Score':>6} {'Impact':>7} "
+			f"{'Effort':>7} {'Track':<10} {'Status':<10} {'Attempts':>8}"
+		)
+		print("-" * 96)
+		for i in items:
+			title = i.title[:28] + ".." if len(i.title) > 30 else i.title
+			print(
+				f"{i.id:<14} {title:<30} {i.priority_score:>6.1f} {i.impact:>7} "
+				f"{i.effort:>7} {i.track:<10} {i.status:<10} {i.attempt_count:>8}"
+			)
+		print(f"\nTotal: {len(items)} items")
+		return 0
+
+
+def cmd_priority_set(args: argparse.Namespace) -> int:
+	"""Pin a priority score on a backlog item."""
+	db_path = _get_db_path(args.config)
+	if not db_path.exists():
+		print("No database found. Run 'mc start' first.")
+		return 1
+
+	with Database(db_path) as db:
+		item = db.get_backlog_item(args.item_id)
+		if item is None:
+			print(f"Item not found: {args.item_id}")
+			return 1
+		db.pin_backlog_score(args.item_id, args.score)
+		print(f"Pinned score {args.score:.1f} on item {args.item_id} ({item.title})")
+		return 0
+
+
+def cmd_priority_defer(args: argparse.Namespace) -> int:
+	"""Defer a backlog item."""
+	db_path = _get_db_path(args.config)
+	if not db_path.exists():
+		print("No database found. Run 'mc start' first.")
+		return 1
+
+	with Database(db_path) as db:
+		item = db.get_backlog_item(args.item_id)
+		if item is None:
+			print(f"Item not found: {args.item_id}")
+			return 1
+		db.defer_backlog_item(args.item_id)
+		print(f"Deferred item {args.item_id} ({item.title})")
+		return 0
+
+
+def cmd_priority_import(args: argparse.Namespace) -> int:
+	"""Import backlog items from a BACKLOG.md file."""
+	db_path = _get_db_path(args.config)
+
+	file_path = Path(args.file)
+	if not file_path.exists():
+		print(f"File not found: {file_path}")
+		return 1
+
+	text = file_path.read_text()
+	parsed = parse_backlog_md(text)
+	if not parsed:
+		print("No items found in file.")
+		return 0
+
+	with Database(db_path) as db:
+		existing = db.list_backlog_items(limit=1000)
+		existing_titles = {item.title for item in existing}
+		imported = 0
+		for item in parsed:
+			if item.title in existing_titles:
+				continue
+			db.insert_backlog_item(item)
+			imported += 1
+		print(f"Imported {imported} items ({len(parsed) - imported} skipped as duplicates)")
+		return 0
+
+
+def cmd_priority(args: argparse.Namespace) -> int:
+	"""Dispatch priority subcommands."""
+	subcmd = getattr(args, "priority_command", None)
+	if subcmd is None:
+		print("Usage: mc priority {list|set|defer|import}")
+		return 1
+	handler = _PRIORITY_COMMANDS.get(subcmd)
+	if handler is None:
+		print(f"Unknown priority subcommand: {subcmd}")
+		return 1
+	return handler(args)
+
+
+_PRIORITY_COMMANDS = {
+	"list": cmd_priority_list,
+	"set": cmd_priority_set,
+	"defer": cmd_priority_defer,
+	"import": cmd_priority_import,
+}
+
+
 COMMANDS = {
 	"start": cmd_start,
 	"status": cmd_status,
@@ -749,6 +935,7 @@ COMMANDS = {
 	"projects": cmd_projects,
 	"mcp": cmd_mcp,
 	"validate-config": cmd_validate_config,
+	"priority": cmd_priority,
 }
 
 
