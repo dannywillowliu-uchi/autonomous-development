@@ -22,12 +22,14 @@ Each unit: implement the feature, add tests, ensure all existing tests pass. Rea
 - [x] 90c4d907 (2026-02-16T07:00:38.273686+00:00) -- Added EXPERIMENT_WORKER_PROMPT_TEMPLATE in worker.py with template selection for experiment units. A (files: src/mission_control/worker.py, src/mission_control/continuous_controller.py, src/mission_control/models.py, src/mission_control/db.py)
 - [x] fee1ff2d (2026-02-16T06:39:48.945344+00:00) -- Added 11 tests in TestMissionAmbitionScore class verifying ambition_score/next_objective/proposed_by (files: tests/test_db.py)
 - [x] 3d855d5b (2026-02-16T06:47:28.954859+00:00) -- Added --experiment CLI flag to mission subparser and 19 comprehensive tests in test_experiment_mode. (files: src/mission_control/cli.py, tests/test_experiment_mode.py)
-- [x] 56b114f6 (2026-02-16T06:54:38.826428+00:00) -- Added --chain flag (store_true) and --max-chain-depth (int, default 3) to the mission subparser. In  (files: src/mission_control/cli.py, tests/test_cli.py)
+- [x] 56b114f6 (2026-02-16T07:19:32.938950+00:00) -- Added --chain flag (store_true) and --max-chain-depth (int, default 3) to the mission subparser. In  (files: src/mission_control/cli.py, tests/test_cli.py)
 - [x] 90c4d907 (2026-02-16T07:00:38.273686+00:00) -- Added EXPERIMENT_WORKER_PROMPT_TEMPLATE in worker.py with template selection for experiment units. A (files: src/mission_control/worker.py, src/mission_control/continuous_controller.py)
 - [x] 4ffa78ef (2026-02-16T07:11:47.554179+00:00) -- Added EXPERIMENT_WORKER_PROMPT_TEMPLATE in worker.py with template selection based on unit.experimen (files: src/mission_control/worker.py, src/mission_control/continuous_controller.py, tests/test_experiment_runtime.py)
+- [x] 56b114f6 (2026-02-16T07:19:32.938950+00:00) -- Added --chain flag (store_true) and --max-chain-depth (int, default 3) to the mission subparser in b (files: src/mission_control/cli.py, tests/test_cli.py)
+- [x] 5d14e7ff (2026-02-16T07:27:12.880273+00:00) -- Added mission chaining with --chain CLI flag. chain_max_depth in ContinuousConfig, suggest_followup( (files: src/mission_control/config.py, src/mission_control/cli.py, src/mission_control/continuous_controller.py, src/mission_control/strategist.py, tests/test_mission_chaining.py)
 
 ## Files Modified
-src/mission_control/cli.py, src/mission_control/continuous_controller.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/strategist.py, src/mission_control/worker.py, tests/test_cli.py, tests/test_db.py, tests/test_experiment_mode.py, tests/test_experiment_runtime.py, tests/test_strategic_context_db.py, tests/test_strategist.py, tests/test_strategist_integration.py
+src/mission_control/cli.py, src/mission_control/config.py, src/mission_control/continuous_controller.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/strategist.py, src/mission_control/worker.py, tests/test_cli.py, tests/test_db.py, tests/test_experiment_mode.py, tests/test_experiment_runtime.py, tests/test_mission_chaining.py, tests/test_strategic_context_db.py, tests/test_strategist.py, tests/test_strategist_integration.py
 
 ## Remaining
 The planner should focus on what hasn't been done yet.
@@ -41,3 +43,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 - 2026-02-16T06:39:48.945344+00:00 | fee1ff2d merged (commit: 6b3420a) -- Added 11 tests in TestMissionAmbitionScore class verifying ambition_score/next_o
 - 2026-02-16T06:47:28.954859+00:00 | 3d855d5b merged (commit: 8c052b4) -- Added --experiment CLI flag to mission subparser and 19 comprehensive tests in t
 - 2026-02-16T07:00:38.273686+00:00 | 90c4d907 merged (commit: 1d1289f) -- Added EXPERIMENT_WORKER_PROMPT_TEMPLATE in worker.py with template selection for
+- 2026-02-16T07:19:32.938950+00:00 | 56b114f6 merged (commit: e4ba046) -- Added --chain flag (store_true) and --max-chain-depth (int, default 3) to the mi
