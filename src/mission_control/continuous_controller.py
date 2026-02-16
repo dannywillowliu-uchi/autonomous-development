@@ -34,6 +34,7 @@ from mission_control.models import (
 from mission_control.notifier import TelegramNotifier
 from mission_control.overlap import _parse_files_hint
 from mission_control.session import parse_mc_result
+from mission_control.strategist import Strategist
 from mission_control.token_parser import compute_token_cost, parse_stream_json
 from mission_control.worker import render_mission_worker_prompt
 
@@ -102,6 +103,7 @@ class ContinuousController:
 		self._event_stream: EventStream | None = None
 		self.ambition_score: float = 0.0
 		self.proposed_by_strategist: bool = False
+		self._strategist: Strategist | None = None
 
 	async def run(self, dry_run: bool = False) -> ContinuousMissionResult:
 		"""Run the continuous mission loop until objective met or stopping condition."""
@@ -883,13 +885,23 @@ class ContinuousController:
 				break
 
 			# Score ambition of planned work
-			ambition = self._score_ambition(units)
+			if self._strategist:
+				ambition = self._strategist.evaluate_ambition(units)
+			else:
+				ambition = self._score_ambition(units)
 			self.ambition_score = ambition
 			mission.ambition_score = ambition
 			result.ambition_score = ambition
 			logger.info("Ambition score for planned units: %d/10", ambition)
 
-			if ambition < 4:
+			if self._strategist:
+				pending_backlog = self.db.get_pending_backlog(limit=5)
+				should_replan, replan_reason = self._strategist.should_replan(ambition, pending_backlog)
+				if should_replan:
+					logger.warning(
+						"Strategist recommends replanning: %s", replan_reason,
+					)
+			elif ambition < 4:
 				pending_backlog = self.db.get_pending_backlog(limit=5)
 				higher_priority = [
 					item for item in pending_backlog
