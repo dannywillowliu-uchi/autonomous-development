@@ -17,6 +17,7 @@ from mission_control.json_utils import extract_json_from_text
 log = logging.getLogger(__name__)
 
 STRATEGY_RESULT_MARKER = "STRATEGY_RESULT:"
+FOLLOWUP_RESULT_MARKER = "FOLLOWUP_RESULT:"
 
 
 def _build_strategy_prompt(
@@ -221,46 +222,119 @@ class Strategist:
 
 		return self._parse_strategy_output(output)
 
-	def suggest_followup(
-		self,
-		mission_result: object,
-		mission: object,
-	) -> str:
-		"""Evaluate whether follow-up work is needed based on mission outcome.
-
-		Returns next_objective string if follow-up is warranted, or empty string.
-		"""
+	def _build_followup_prompt(self, mission_result: object, strategic_context: str) -> str:
+		objective = getattr(mission_result, "objective", "")
 		objective_met = getattr(mission_result, "objective_met", False)
+		total_dispatched = getattr(mission_result, "total_units_dispatched", 0)
+		total_merged = getattr(mission_result, "total_units_merged", 0)
 		total_failed = getattr(mission_result, "total_units_failed", 0)
 		stopped_reason = getattr(mission_result, "stopped_reason", "")
+		wall_time = getattr(mission_result, "wall_time_seconds", 0.0)
 
-		# If objective was fully met and nothing failed, no follow-up needed
-		if objective_met and total_failed == 0:
+		pending_backlog = self._get_pending_backlog()
+
+		return f"""You are a strategic engineering lead evaluating whether a completed mission needs follow-up work.
+
+## Completed Mission
+- Objective: {objective}
+- Objective met: {objective_met}
+- Units dispatched: {total_dispatched}, merged: {total_merged}, failed: {total_failed}
+- Stopped reason: {stopped_reason or "normal completion"}
+- Wall time: {wall_time:.0f}s
+
+## Rolling Strategic Context
+{strategic_context or "(No strategic context available)"}
+
+## Pending Backlog Items
+{pending_backlog or "(No pending backlog items)"}
+
+## Instructions
+
+Decide if follow-up work is needed. Follow-up is warranted when:
+1. The objective was NOT fully met and there is remaining work to do.
+2. Multiple units failed and the failures indicate fixable issues.
+3. There are high-priority pending backlog items that build on this mission's progress.
+
+Follow-up is NOT needed when:
+1. The objective was fully met with no failures.
+2. The remaining work is unrelated to the completed mission.
+3. There is no pending backlog.
+
+## Output Format
+
+You MUST end your response with a FOLLOWUP_RESULT line:
+
+FOLLOWUP_RESULT:{{"next_objective": "Follow-up objective or empty string", "rationale": "Why"}}
+
+
+- next_objective: A focused follow-up objective string. Use empty string "" if no follow-up is needed.
+- rationale: 1-2 sentences explaining the decision.
+
+IMPORTANT: The FOLLOWUP_RESULT line must be the LAST line of your output."""
+
+	def _parse_followup_output(self, output: str) -> str:
+		"""Parse FOLLOWUP_RESULT from LLM output. Returns next_objective string."""
+		idx = output.rfind(FOLLOWUP_RESULT_MARKER)
+		data = None
+		if idx != -1:
+			remainder = output[idx + len(FOLLOWUP_RESULT_MARKER):]
+			data = extract_json_from_text(remainder)
+
+		if not isinstance(data, dict):
+			data = extract_json_from_text(output)
+
+		if not isinstance(data, dict):
+			log.warning("Could not parse FOLLOWUP_RESULT from output (%d chars), assuming no follow-up", len(output))
 			return ""
 
-		# Check pending backlog for remaining work
-		pending_items = self.db.get_pending_backlog(limit=5)
-		if not pending_items:
-			return ""
+		return str(data.get("next_objective", "")).strip()
 
-		# Build follow-up objective from pending backlog
-		top_items = pending_items[:3]
-		descriptions = [
-			f"[{item.track}] {item.title} (priority={item.priority_score:.1f})"
-			for item in top_items
-		]
+	async def suggest_followup(self, mission_result: object, strategic_context: str) -> str:
+		"""Call Claude to determine if follow-up work is needed after a mission.
 
-		parts: list[str] = []
-		if not objective_met:
-			parts.append(
-				f"Previous mission did not fully meet objective (stopped: {stopped_reason})."
+		Args:
+			mission_result: The completed mission result with objective_met, stopped_reason, etc.
+			strategic_context: Rolling strategic context string from previous missions.
+
+		Returns:
+			A next_objective string if follow-up is warranted, or empty string.
+		"""
+		prompt = self._build_followup_prompt(mission_result, strategic_context)
+		budget = self.config.planner.budget_per_call_usd
+		model = self.config.scheduler.model
+		timeout = self.config.target.verification.timeout
+
+		log.info("Invoking strategist LLM to evaluate follow-up")
+
+		try:
+			proc = await asyncio.create_subprocess_exec(
+				"claude", "-p",
+				"--output-format", "text",
+				"--max-budget-usd", str(budget),
+				"--model", model,
+				stdin=asyncio.subprocess.PIPE,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				env=claude_subprocess_env(),
+				cwd=str(self.config.target.resolved_path),
 			)
-		if total_failed > 0:
-			parts.append(f"{total_failed} units failed in previous mission.")
+			stdout, stderr = await asyncio.wait_for(
+				proc.communicate(input=prompt.encode()),
+				timeout=timeout,
+			)
+			output = stdout.decode() if stdout else ""
+		except asyncio.TimeoutError:
+			log.error("Followup LLM timed out after %ds", timeout)
+			try:
+				proc.kill()
+				await proc.wait()
+			except ProcessLookupError:
+				pass
+			return ""
 
-		parts.append(
-			f"Continue with {len(pending_items)} remaining backlog items. "
-			f"Top priorities: {'; '.join(descriptions)}"
-		)
+		if proc.returncode != 0:
+			err_msg = stderr.decode()[:200] if stderr else "unknown error"
+			log.error("Followup LLM failed (rc=%d): %s", proc.returncode, err_msg)
+			return ""
 
-		return " ".join(parts)
+		return self._parse_followup_output(output)
