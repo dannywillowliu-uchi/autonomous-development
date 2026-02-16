@@ -220,3 +220,47 @@ class Strategist:
 			raise RuntimeError(f"Strategist subprocess failed (rc={proc.returncode}): {err_msg}")
 
 		return self._parse_strategy_output(output)
+
+	def suggest_followup(
+		self,
+		mission_result: object,
+		mission: object,
+	) -> str:
+		"""Evaluate whether follow-up work is needed based on mission outcome.
+
+		Returns next_objective string if follow-up is warranted, or empty string.
+		"""
+		objective_met = getattr(mission_result, "objective_met", False)
+		total_failed = getattr(mission_result, "total_units_failed", 0)
+		stopped_reason = getattr(mission_result, "stopped_reason", "")
+
+		# If objective was fully met and nothing failed, no follow-up needed
+		if objective_met and total_failed == 0:
+			return ""
+
+		# Check pending backlog for remaining work
+		pending_items = self.db.get_pending_backlog(limit=5)
+		if not pending_items:
+			return ""
+
+		# Build follow-up objective from pending backlog
+		top_items = pending_items[:3]
+		descriptions = [
+			f"[{item.track}] {item.title} (priority={item.priority_score:.1f})"
+			for item in top_items
+		]
+
+		parts: list[str] = []
+		if not objective_met:
+			parts.append(
+				f"Previous mission did not fully meet objective (stopped: {stopped_reason})."
+			)
+		if total_failed > 0:
+			parts.append(f"{total_failed} units failed in previous mission.")
+
+		parts.append(
+			f"Continue with {len(pending_items)} remaining backlog items. "
+			f"Top priorities: {'; '.join(descriptions)}"
+		)
+
+		return " ".join(parts)

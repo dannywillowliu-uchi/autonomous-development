@@ -122,6 +122,7 @@ class ContinuousConfig:
 	timeout_multiplier: float = 1.2  # applied to session_timeout for poll deadline
 	retry_base_delay_seconds: int = 30
 	retry_max_delay_seconds: int = 300
+	chain_max_depth: int = 3
 
 
 @dataclass
@@ -366,7 +367,7 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 		cc.verify_before_merge = bool(data["verify_before_merge"])
 	if "timeout_multiplier" in data:
 		cc.timeout_multiplier = float(data["timeout_multiplier"])
-	for key in ("retry_base_delay_seconds", "retry_max_delay_seconds"):
+	for key in ("retry_base_delay_seconds", "retry_max_delay_seconds", "chain_max_depth"):
 		if key in data:
 			setattr(cc, key, int(data[key]))
 	return cc
