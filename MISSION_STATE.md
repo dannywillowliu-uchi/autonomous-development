@@ -30,9 +30,10 @@ Each unit: implement the feature, add tests, ensure all existing tests pass. Rea
 - [x] 2ca466ff (2026-02-16T07:31:13.321536+00:00) -- Added _score_ambition() method to ContinuousController scoring planned work 1-10 based on unit count (files: src/mission_control/continuous_controller.py, tests/test_continuous_controller.py)
 - [x] 4ffa78ef (2026-02-16T07:35:17.260908+00:00) -- Added tests/test_experiment_runtime.py with 14 tests: 7 for experiment prompt template selection (ve (files: tests/test_experiment_runtime.py)
 - [x] 5d14e7ff (2026-02-16T07:52:17.963283+00:00) -- Added mission chaining with --chain CLI flag. chain_max_depth field in ContinuousConfig (default 3), (files: src/mission_control/config.py, src/mission_control/strategist.py, tests/test_mission_chaining.py)
+- [x] abeb9279 (2026-02-16T08:15:26.249342+00:00) -- Removed duplicate BacklogItem class definition in models.py (fixed F811 ruff error), merged defaults (files: src/mission_control/models.py, src/mission_control/strategist.py, tests/test_strategist_followup.py)
 
 ## Files Modified
-src/mission_control/cli.py, src/mission_control/config.py, src/mission_control/continuous_controller.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/strategist.py, src/mission_control/worker.py, tests/test_cli.py, tests/test_continuous_controller.py, tests/test_db.py, tests/test_experiment_mode.py, tests/test_experiment_runtime.py, tests/test_mission_chaining.py, tests/test_strategic_context_db.py, tests/test_strategist.py, tests/test_strategist_integration.py
+src/mission_control/cli.py, src/mission_control/config.py, src/mission_control/continuous_controller.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/strategist.py, src/mission_control/worker.py, tests/test_cli.py, tests/test_continuous_controller.py, tests/test_db.py, tests/test_experiment_mode.py, tests/test_experiment_runtime.py, tests/test_mission_chaining.py, tests/test_strategic_context_db.py, tests/test_strategist.py, tests/test_strategist_followup.py, tests/test_strategist_integration.py
 
 ## Remaining
 The planner should focus on what hasn't been done yet.
@@ -50,3 +51,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 - 2026-02-16T07:31:13.321536+00:00 | 2ca466ff merged (commit: 2646caf) -- Added _score_ambition() method to ContinuousController scoring planned work 1-10
 - 2026-02-16T07:35:17.260908+00:00 | 4ffa78ef merged (commit: 4f25009) -- Added tests/test_experiment_runtime.py with 14 tests: 7 for experiment prompt te
 - 2026-02-16T07:52:17.963283+00:00 | 5d14e7ff merged (commit: 142a0d3) -- Added mission chaining with --chain CLI flag. chain_max_depth field in Continuou
+- 2026-02-16T08:15:26.249342+00:00 | abeb9279 merged (commit: f9d9e46) -- Removed duplicate BacklogItem class definition in models.py (fixed F811 ruff err
