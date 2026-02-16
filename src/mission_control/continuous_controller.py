@@ -96,6 +96,8 @@ class ContinuousController:
 		self._total_merged: int = 0
 		self._total_failed: int = 0
 		self._event_stream: EventStream | None = None
+		self.ambition_score: float = 0.0
+		self.proposed_by_strategist: bool = False
 
 	async def run(self, dry_run: bool = False) -> ContinuousMissionResult:
 		"""Run the continuous mission loop until objective met or stopping condition."""
@@ -320,6 +322,13 @@ class ContinuousController:
 			mission.status = "completed" if result.objective_met else "stopped"
 			mission.finished_at = _now_iso()
 			mission.stopped_reason = result.stopped_reason
+
+			# Set strategist metadata on mission if fields exist
+			if hasattr(mission, "ambition_score"):
+				mission.ambition_score = self.ambition_score
+			if hasattr(mission, "proposed_by_strategist"):
+				mission.proposed_by_strategist = self.proposed_by_strategist
+
 			try:
 				self.db.update_mission(mission)
 			except Exception as exc:
@@ -343,6 +352,26 @@ class ContinuousController:
 				generate_mission_report(result, mission, self.db, self.config)
 			except Exception as exc:
 				logger.error("Failed to generate mission report: %s", exc, exc_info=True)
+
+			# Append strategic context for future strategist calls
+			try:
+				merged_summaries: list[str] = []
+				failed_summaries: list[str] = []
+				handoffs = self.db.get_recent_handoffs(mission.id, limit=50)
+				for h in handoffs:
+					summary_text = h.summary[:200] if h.summary else ""
+					if h.status == "completed" and summary_text:
+						merged_summaries.append(summary_text)
+					elif summary_text:
+						failed_summaries.append(summary_text)
+				self.db.append_strategic_context(
+					what_attempted=mission.objective[:500],
+					what_worked="; ".join(merged_summaries[:10]) or "nothing merged",
+					what_failed="; ".join(failed_summaries[:10]) or "no failures",
+					recommended_next=result.stopped_reason or "continue",
+				)
+			except Exception as exc:
+				logger.error("Failed to append strategic context: %s", exc, exc_info=True)
 
 			if self._notifier:
 				await self._notifier.send_mission_end(
