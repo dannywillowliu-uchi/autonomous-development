@@ -6,27 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from mission_control.cli import build_parser, cmd_discover, cmd_init, cmd_mission, cmd_parallel, cmd_summary, main
+from mission_control.cli import build_parser, cmd_discover, cmd_init, cmd_mission, cmd_summary, main
 from mission_control.db import Database
 from mission_control.models import Epoch, Mission, Plan, WorkUnit
 
 
 class TestArgParsing:
-	def test_start_defaults(self) -> None:
-		parser = build_parser()
-		args = parser.parse_args(["start"])
-		assert args.command == "start"
-		assert args.config == "mission-control.toml"
-		assert args.max_sessions is None
-		assert args.dry_run is False
-
-	def test_start_with_flags(self) -> None:
-		parser = build_parser()
-		args = parser.parse_args(["start", "--config", "custom.toml", "--max-sessions", "5", "--dry-run"])
-		assert args.config == "custom.toml"
-		assert args.max_sessions == 5
-		assert args.dry_run is True
-
 	def test_history_limit(self) -> None:
 		parser = build_parser()
 		args = parser.parse_args(["history", "--limit", "20"])
@@ -66,42 +51,6 @@ class TestCmdInit:
 		args = parser.parse_args(["init", str(tmp_path)])
 		result = cmd_init(args)
 		assert result == 1
-
-
-class TestParallelArgs:
-	def test_parallel_defaults(self) -> None:
-		parser = build_parser()
-		args = parser.parse_args(["parallel"])
-		assert args.command == "parallel"
-		assert args.config == "mission-control.toml"
-		assert args.workers is None
-		assert args.dry_run is False
-
-	def test_parallel_with_flags(self) -> None:
-		parser = build_parser()
-		args = parser.parse_args(["parallel", "--workers", "8", "--dry-run", "--config", "c.toml"])
-		assert args.workers == 8
-		assert args.dry_run is True
-		assert args.config == "c.toml"
-
-	def test_parallel_dry_run(self, tmp_path: Path) -> None:
-		config_file = tmp_path / "mission-control.toml"
-		config_file.write_text("""\
-[target]
-name = "test"
-path = "/tmp/test"
-objective = "fix things"
-
-[target.verification]
-command = "pytest"
-
-[scheduler]
-model = "sonnet"
-""")
-		parser = build_parser()
-		args = parser.parse_args(["parallel", "--config", str(config_file), "--dry-run"])
-		result = cmd_parallel(args)
-		assert result == 0
 
 
 class TestDiscoverArgs:

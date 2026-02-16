@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mission_control.backends.base import WorkerHandle
-from mission_control.backends.container import ContainerBackend
 from mission_control.backends.local import _MB, LocalBackend
 from mission_control.backends.ssh import SSHBackend
 from mission_control.config import SSHHostConfig
@@ -41,47 +40,6 @@ class TestWorkerHandle:
 		assert handle.pid == 12345
 		assert handle.workspace_path == "/tmp/ws"
 		assert handle.backend_metadata == '{"host": "server1"}'
-
-
-# ---------------------------------------------------------------------------
-# ContainerBackend -- all methods raise NotImplementedError
-# ---------------------------------------------------------------------------
-
-class TestContainerBackend:
-	@pytest.fixture()
-	def backend(self) -> ContainerBackend:
-		return ContainerBackend()
-
-	async def test_provision_workspace_raises(self, backend: ContainerBackend) -> None:
-		with pytest.raises(NotImplementedError):
-			await backend.provision_workspace("w1", "/repo", "main")
-
-	async def test_spawn_raises(self, backend: ContainerBackend) -> None:
-		with pytest.raises(NotImplementedError):
-			await backend.spawn("w1", "/ws", ["echo", "hi"], 60)
-
-	async def test_check_status_raises(self, backend: ContainerBackend) -> None:
-		handle = WorkerHandle(worker_id="w1")
-		with pytest.raises(NotImplementedError):
-			await backend.check_status(handle)
-
-	async def test_get_output_raises(self, backend: ContainerBackend) -> None:
-		handle = WorkerHandle(worker_id="w1")
-		with pytest.raises(NotImplementedError):
-			await backend.get_output(handle)
-
-	async def test_kill_raises(self, backend: ContainerBackend) -> None:
-		handle = WorkerHandle(worker_id="w1")
-		with pytest.raises(NotImplementedError):
-			await backend.kill(handle)
-
-	async def test_release_workspace_raises(self, backend: ContainerBackend) -> None:
-		with pytest.raises(NotImplementedError):
-			await backend.release_workspace("/ws")
-
-	async def test_cleanup_raises(self, backend: ContainerBackend) -> None:
-		with pytest.raises(NotImplementedError):
-			await backend.cleanup()
 
 
 # ---------------------------------------------------------------------------
