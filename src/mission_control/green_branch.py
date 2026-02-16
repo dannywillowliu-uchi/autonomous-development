@@ -10,15 +10,42 @@ import asyncio
 import logging
 import random
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
 
 from mission_control.config import MissionConfig
 from mission_control.db import Database
+from mission_control.state import _parse_pytest, _parse_ruff
 
 logger = logging.getLogger(__name__)
+
+FIXUP_PROMPTS = [
+	"Fix the failing tests by modifying the implementation code. Do NOT change any test files.",
+	"Fix by adjusting the test expectations to match the current implementation behavior.",
+	"Fix by refactoring the surrounding code to make both tests and implementation consistent.",
+]
+
+
+@dataclass
+class FixupCandidate:
+	"""Result of a single fixup candidate attempt."""
+
+	branch: str = ""
+	verification_passed: bool = False
+	tests_passed: int = 0
+	lint_errors: int = 0
+	diff_lines: int = 0
+
+
+@dataclass
+class FixupResult:
+	"""Result of the N-of-M fixup selection process."""
+
+	success: bool = False
+	winner: FixupCandidate | None = None
+	candidates: list[FixupCandidate] = field(default_factory=list)
 
 
 @dataclass
@@ -201,6 +228,161 @@ class GreenBranchManager:
 				await self._run_git("checkout", gb.green_branch)
 				await self._run_git("branch", "-D", temp_branch)
 				await self._run_git("remote", "remove", remote_name)
+
+	async def run_fixup(self, failure_output: str) -> FixupResult:
+		"""Run N fixup candidates in parallel and select the best one.
+
+		Each candidate gets a different prompt approach and runs on a temporary
+		branch. Verification is run on each. The best candidate (most tests
+		passing, fewest lint errors, smallest diff on tie) is merged into mc/green.
+		"""
+		gb = self.config.green_branch
+		n = gb.fixup_candidates
+		prompts = FIXUP_PROMPTS[:n]
+		# Pad with the first prompt if N > len(FIXUP_PROMPTS)
+		while len(prompts) < n:
+			prompts.append(FIXUP_PROMPTS[0])
+
+		green_ref = gb.green_branch
+
+		# Run all candidates concurrently
+		tasks = [
+			self._run_fixup_candidate(i, prompts[i], failure_output, green_ref)
+			for i in range(n)
+		]
+		candidates = await asyncio.gather(*tasks)
+
+		result = FixupResult(candidates=list(candidates))
+
+		# Find the best candidate
+		passing = [c for c in candidates if c.verification_passed]
+		if not passing:
+			logger.warning("All %d fixup candidates failed verification", n)
+			return result
+
+		# Sort by: most tests passed (desc), fewest lint errors (asc), smallest diff (asc)
+		passing.sort(key=lambda c: (-c.tests_passed, c.lint_errors, c.diff_lines))
+		winner = passing[0]
+		result.winner = winner
+		result.success = True
+
+		# Merge the winner branch into mc/green
+		async with self._merge_lock:
+			await self._run_git("checkout", green_ref)
+			ok, output = await self._run_git(
+				"merge", "--ff-only", winner.branch,
+			)
+			if not ok:
+				# Try non-ff merge as fallback
+				ok, output = await self._run_git(
+					"merge", "--no-ff", winner.branch,
+					"-m", f"Merge fixup candidate {winner.branch}",
+				)
+			if not ok:
+				logger.error("Failed to merge winning fixup branch %s: %s", winner.branch, output)
+				result.success = False
+				result.winner = None
+				return result
+
+			logger.info(
+				"Fixup succeeded: branch=%s tests_passed=%d lint_errors=%d diff_lines=%d",
+				winner.branch, winner.tests_passed, winner.lint_errors, winner.diff_lines,
+			)
+
+		# Cleanup all candidate branches
+		for c in candidates:
+			await self._run_git("branch", "-D", c.branch)
+
+		return result
+
+	async def _run_fixup_candidate(
+		self,
+		index: int,
+		prompt: str,
+		failure_output: str,
+		green_ref: str,
+	) -> FixupCandidate:
+		"""Run a single fixup candidate on a temporary branch."""
+		branch = f"mc/fixup-candidate-{index}"
+		candidate = FixupCandidate(branch=branch)
+
+		# Create candidate branch from mc/green
+		await self._run_git("branch", "-D", branch)  # cleanup stale
+		await self._run_git("checkout", green_ref)
+		ok, _ = await self._run_git("checkout", "-b", branch)
+		if not ok:
+			logger.warning("Failed to create fixup branch %s", branch)
+			return candidate
+
+		# Run the fixup session (Claude Code subprocess)
+		full_prompt = (
+			f"{prompt}\n\n"
+			f"## Verification Failure\n{failure_output}\n\n"
+			f"## Verification Command\n{self.config.target.verification.command}\n\n"
+			f"Run the verification command after making changes. "
+			f"Commit your fix if verification passes."
+		)
+
+		ok, output = await self._run_fixup_session(full_prompt)
+
+		# Run verification on the candidate branch
+		verify_ok, verify_output = await self._run_command(
+			self.config.target.verification.command,
+		)
+		candidate.verification_passed = verify_ok
+
+		# Parse test and lint results
+		pytest_data = _parse_pytest(verify_output)
+		ruff_data = _parse_ruff(verify_output)
+		candidate.tests_passed = pytest_data["test_passed"]
+		candidate.lint_errors = ruff_data["lint_errors"]
+
+		# Measure diff size
+		diff_ok, diff_output = await self._run_git(
+			"diff", "--stat", green_ref, branch,
+		)
+		if diff_ok:
+			candidate.diff_lines = self._count_diff_lines(diff_output)
+
+		# Return to green branch
+		await self._run_git("checkout", green_ref)
+
+		return candidate
+
+	async def _run_fixup_session(self, prompt: str) -> tuple[bool, str]:
+		"""Spawn a Claude Code subprocess for fixup.
+
+		Returns (success, output) tuple.
+		"""
+		cmd = [
+			"claude", "--print", "--output-format", "text",
+			"--max-turns", "5",
+			"-p", prompt,
+		]
+		return await self._run_command(cmd)
+
+	@staticmethod
+	def _count_diff_lines(diff_stat_output: str) -> int:
+		"""Count total insertions + deletions from git diff --stat output.
+
+		The last line of git diff --stat looks like:
+		  3 files changed, 10 insertions(+), 5 deletions(-)
+		"""
+		for line in reversed(diff_stat_output.splitlines()):
+			if "changed" in line:
+				total = 0
+				parts = line.split(",")
+				for part in parts:
+					part = part.strip()
+					if "insertion" in part or "deletion" in part:
+						digits = ""
+						for ch in part:
+							if ch.isdigit():
+								digits += ch
+						if digits:
+							total += int(digits)
+				return total
+		return 0
 
 	async def commit_state_file(self, content: str) -> bool:
 		"""Write MISSION_STATE.md to the green branch workspace, stage, and commit it."""

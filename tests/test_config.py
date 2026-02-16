@@ -403,6 +403,27 @@ reset_on_init = false
 	assert cfg.green_branch.reset_on_init is False
 
 
+def test_green_branch_fixup_candidates_default() -> None:
+	"""fixup_candidates defaults to 3."""
+	cfg = MissionConfig()
+	assert cfg.green_branch.fixup_candidates == 3
+
+
+def test_green_branch_fixup_candidates_from_toml(tmp_path: Path) -> None:
+	"""fixup_candidates loaded from TOML."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[green_branch]
+fixup_candidates = 5
+""")
+	cfg = load_config(toml)
+	assert cfg.green_branch.fixup_candidates == 5
+
+
 # -- Discovery config tests --
 
 

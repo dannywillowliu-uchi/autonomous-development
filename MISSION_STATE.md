@@ -13,9 +13,10 @@ Each unit: implement the feature, add tests, ensure all existing tests pass. Rea
 
 ## Completed
 - [x] c8848f9f (2026-02-16T16:01:54.604392+00:00) -- Added fixup_candidates: int = 3 field to GreenBranchConfig, updated _build_green_branch() to parse i (files: src/mission_control/config.py, tests/test_config.py)
+- [x] 616a06d4 (2026-02-16T16:09:32.619329+00:00) -- Created deterministic evaluator module with scoring formula (0.4*test + 0.2*lint + 0.2*completion +  (files: src/mission_control/evaluator.py, tests/test_evaluator.py)
 
 ## Files Modified
-src/mission_control/config.py, tests/test_config.py
+src/mission_control/config.py, src/mission_control/evaluator.py, tests/test_config.py, tests/test_evaluator.py
 
 ## Remaining
 The planner should focus on what hasn't been done yet.
@@ -23,3 +24,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 
 ## Changelog
 - 2026-02-16T16:01:54.604392+00:00 | c8848f9f merged (commit: 0c48d4b) -- Added fixup_candidates: int = 3 field to GreenBranchConfig, updated _build_green
+- 2026-02-16T16:09:32.619329+00:00 | 616a06d4 merged (commit: 41f71f0) -- Created deterministic evaluator module with scoring formula (0.4*test + 0.2*lint
