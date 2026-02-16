@@ -28,6 +28,7 @@ from mission_control.models import (
 	Session,
 	Signal,
 	Snapshot,
+	StrategicContext,
 	TaskRecord,
 	UnitEvent,
 	Worker,
@@ -388,6 +389,19 @@ CREATE TABLE IF NOT EXISTS backlog_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_backlog_items_status ON backlog_items(status, priority_score DESC);
+
+CREATE TABLE IF NOT EXISTS strategic_context (
+	id TEXT PRIMARY KEY,
+	mission_id TEXT NOT NULL,
+	timestamp TEXT NOT NULL,
+	what_attempted TEXT NOT NULL DEFAULT '',
+	what_worked TEXT NOT NULL DEFAULT '',
+	what_failed TEXT NOT NULL DEFAULT '',
+	recommended_next TEXT NOT NULL DEFAULT '',
+	FOREIGN KEY (mission_id) REFERENCES missions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategic_context_timestamp ON strategic_context(timestamp DESC);
 """
 
 
@@ -419,6 +433,8 @@ class Database:
 		self._migrate_token_columns()
 		self._migrate_unit_type_column()
 		self._migrate_backlog_table()
+		self._migrate_strategic_context()
+		self._migrate_mission_strategy_columns()
 
 	def _migrate_epoch_columns(self) -> None:
 		"""Add epoch_id columns to existing tables (idempotent)."""
@@ -480,6 +496,30 @@ class Database:
 	def _migrate_backlog_table(self) -> None:
 		"""Ensure backlog_items table exists (forward-compat for existing DBs)."""
 		logger.debug("Migration: ensuring backlog_items table exists")
+
+	def _migrate_strategic_context(self) -> None:
+		"""Ensure strategic_context table exists (forward-compat for existing DBs)."""
+		logger.debug("Migration: ensuring strategic_context table exists")
+
+	def _migrate_mission_strategy_columns(self) -> None:
+		"""Add ambition_score, next_objective, proposed_by_strategist to missions (idempotent)."""
+		migrations = [
+			("missions", "ambition_score", "INTEGER DEFAULT 0"),
+			("missions", "next_objective", "TEXT DEFAULT ''"),
+			("missions", "proposed_by_strategist", "INTEGER DEFAULT 0"),
+		]
+		for table, column, col_type in migrations:
+			self._validate_identifier(table)
+			self._validate_identifier(column)
+			try:
+				self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")  # noqa: S608
+				logger.debug("Migration: added column %s.%s", table, column)
+			except sqlite3.OperationalError as exc:
+				if "duplicate column name" in str(exc):
+					pass
+				else:
+					logger.warning("Migration failed for %s.%s: %s", table, column, exc)
+					raise
 
 	def close(self) -> None:
 		logger.debug("Closing database connection")
@@ -1191,13 +1231,16 @@ class Database:
 		self.conn.execute(
 			"""INSERT INTO missions
 			(id, objective, status, started_at, finished_at,
-			 total_rounds, total_cost_usd, final_score, stopped_reason)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			 total_rounds, total_cost_usd, final_score, stopped_reason,
+			 ambition_score, next_objective, proposed_by_strategist)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				mission.id, mission.objective, mission.status,
 				mission.started_at, mission.finished_at,
 				mission.total_rounds, mission.total_cost_usd,
 				mission.final_score, mission.stopped_reason,
+				mission.ambition_score, mission.next_objective,
+				int(mission.proposed_by_strategist),
 			),
 		)
 		self.conn.commit()
@@ -1207,13 +1250,16 @@ class Database:
 		self.conn.execute(
 			"""UPDATE missions SET
 			objective=?, status=?, started_at=?, finished_at=?,
-			total_rounds=?, total_cost_usd=?, final_score=?, stopped_reason=?
+			total_rounds=?, total_cost_usd=?, final_score=?, stopped_reason=?,
+			ambition_score=?, next_objective=?, proposed_by_strategist=?
 			WHERE id=?""",
 			(
 				mission.objective, mission.status, mission.started_at,
 				mission.finished_at, mission.total_rounds,
 				mission.total_cost_usd, mission.final_score,
-				mission.stopped_reason, mission.id,
+				mission.stopped_reason, mission.ambition_score,
+				mission.next_objective, int(mission.proposed_by_strategist),
+				mission.id,
 			),
 		)
 		self.conn.commit()
@@ -1306,6 +1352,7 @@ class Database:
 
 	@staticmethod
 	def _row_to_mission(row: sqlite3.Row) -> Mission:
+		keys = row.keys()
 		return Mission(
 			id=row["id"],
 			objective=row["objective"],
@@ -1316,6 +1363,9 @@ class Database:
 			total_cost_usd=row["total_cost_usd"],
 			final_score=row["final_score"],
 			stopped_reason=row["stopped_reason"],
+			ambition_score=row["ambition_score"] if "ambition_score" in keys else 0,
+			next_objective=row["next_objective"] if "next_objective" in keys else "",
+			proposed_by_strategist=bool(row["proposed_by_strategist"]) if "proposed_by_strategist" in keys else False,
 		)
 
 	# -- Rounds --
@@ -2107,4 +2157,56 @@ class Database:
 			pinned_score=row["pinned_score"],
 			depends_on=row["depends_on"],
 			tags=row["tags"],
+		)
+
+	# -- Strategic Context --
+
+	def insert_strategic_context(self, ctx: StrategicContext) -> None:
+		self.conn.execute(
+			"""INSERT INTO strategic_context
+			(id, mission_id, timestamp, what_attempted, what_worked, what_failed, recommended_next)
+			VALUES (?, ?, ?, ?, ?, ?, ?)""",
+			(
+				ctx.id, ctx.mission_id, ctx.timestamp,
+				ctx.what_attempted, ctx.what_worked,
+				ctx.what_failed, ctx.recommended_next,
+			),
+		)
+		self.conn.commit()
+
+	def get_strategic_context(self, limit: int = 10) -> list[StrategicContext]:
+		rows = self.conn.execute(
+			"SELECT * FROM strategic_context ORDER BY timestamp DESC LIMIT ?",
+			(limit,),
+		).fetchall()
+		return [self._row_to_strategic_context(r) for r in rows]
+
+	def append_strategic_context(
+		self,
+		mission_id: str,
+		what_attempted: str,
+		what_worked: str,
+		what_failed: str,
+		recommended_next: str,
+	) -> StrategicContext:
+		ctx = StrategicContext(
+			mission_id=mission_id,
+			what_attempted=what_attempted,
+			what_worked=what_worked,
+			what_failed=what_failed,
+			recommended_next=recommended_next,
+		)
+		self.insert_strategic_context(ctx)
+		return ctx
+
+	@staticmethod
+	def _row_to_strategic_context(row: sqlite3.Row) -> StrategicContext:
+		return StrategicContext(
+			id=row["id"],
+			mission_id=row["mission_id"],
+			timestamp=row["timestamp"],
+			what_attempted=row["what_attempted"],
+			what_worked=row["what_worked"],
+			what_failed=row["what_failed"],
+			recommended_next=row["recommended_next"],
 		)

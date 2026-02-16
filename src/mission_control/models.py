@@ -219,6 +219,9 @@ class Mission:
 	total_cost_usd: float = 0.0
 	final_score: float = 0.0
 	stopped_reason: str = ""
+	ambition_score: int = 0
+	next_objective: str = ""
+	proposed_by_strategist: bool = False
 
 
 @dataclass
@@ -402,6 +405,22 @@ class UnitEvent:
 	details: str = ""  # JSON blob for extra info
 	input_tokens: int = 0
 	output_tokens: int = 0
+
+
+# -- Strategic context models --
+
+
+@dataclass
+class StrategicContext:
+	"""Rolling strategic context that persists across missions."""
+
+	id: str = field(default_factory=_new_id)
+	mission_id: str = ""
+	timestamp: str = field(default_factory=_now_iso)
+	what_attempted: str = ""
+	what_worked: str = ""
+	what_failed: str = ""
+	recommended_next: str = ""
 
 
 # -- Discovery models --

@@ -64,6 +64,9 @@ class ContinuousMissionResult:
 	final_verification_passed: bool | None = None
 	final_verification_output: str = ""
 	backlog_item_ids: list[str] | None = None
+	ambition_score: int = 0
+	next_objective: str = ""
+	proposed_by_strategist: bool = False
 
 
 class ContinuousController:
