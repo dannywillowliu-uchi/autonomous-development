@@ -18,12 +18,14 @@ Each unit: implement the feature, add tests, ensure all existing tests pass. Rea
 - [x] 875c5f11 (2026-02-16T06:20:34.139144+00:00) -- Created src/mission_control/strategist.py with Strategist class that gathers context from BACKLOG.md (files: src/mission_control/strategist.py, tests/test_strategist.py)
 - [x] 4dcf4bae (2026-02-16T06:27:13.205278+00:00) -- Added experiment_mode field to WorkUnit dataclass, new ExperimentResult dataclass in models.py. Adde (files: src/mission_control/models.py, src/mission_control/db.py)
 - [x] 0e81c10f (2026-02-16T06:28:52.819137+00:00) -- Added --strategist CLI flag and post-mission strategic context integration. CLI proposes objective v (files: src/mission_control/cli.py, src/mission_control/continuous_controller.py, tests/test_strategist_integration.py)
-- [x] 3d855d5b (2026-02-16T06:33:29.449498+00:00) -- Added --experiment CLI flag to mission subparser and 20 comprehensive tests in test_experiment_mode. (files: src/mission_control/cli.py, tests/test_experiment_mode.py)
+- [x] 3d855d5b (2026-02-16T06:47:28.954859+00:00) -- Added --experiment CLI flag to mission subparser and 20 comprehensive tests in test_experiment_mode. (files: src/mission_control/cli.py, tests/test_experiment_mode.py)
 - [x] 90c4d907 (2026-02-16T06:35:42.885341+00:00) -- Added EXPERIMENT_WORKER_PROMPT_TEMPLATE in worker.py with template selection for experiment units. A (files: src/mission_control/worker.py, src/mission_control/continuous_controller.py, src/mission_control/models.py, src/mission_control/db.py)
 - [x] fee1ff2d (2026-02-16T06:39:48.945344+00:00) -- Added 11 tests in TestMissionAmbitionScore class verifying ambition_score/next_objective/proposed_by (files: tests/test_db.py)
+- [x] 3d855d5b (2026-02-16T06:47:28.954859+00:00) -- Added --experiment CLI flag to mission subparser and 19 comprehensive tests in test_experiment_mode. (files: src/mission_control/cli.py, tests/test_experiment_mode.py)
+- [x] 56b114f6 (2026-02-16T06:54:38.826428+00:00) -- Added --chain flag (store_true) and --max-chain-depth (int, default 3) to the mission subparser. In  (files: src/mission_control/cli.py, tests/test_cli.py)
 
 ## Files Modified
-src/mission_control/cli.py, src/mission_control/continuous_controller.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/strategist.py, src/mission_control/worker.py, tests/test_db.py, tests/test_experiment_mode.py, tests/test_strategic_context_db.py, tests/test_strategist.py, tests/test_strategist_integration.py
+src/mission_control/cli.py, src/mission_control/continuous_controller.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/strategist.py, src/mission_control/worker.py, tests/test_cli.py, tests/test_db.py, tests/test_experiment_mode.py, tests/test_strategic_context_db.py, tests/test_strategist.py, tests/test_strategist_integration.py
 
 ## Remaining
 The planner should focus on what hasn't been done yet.
@@ -35,3 +37,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 - 2026-02-16T06:27:13.205278+00:00 | 4dcf4bae merged (commit: 707a535) -- Added experiment_mode field to WorkUnit dataclass, new ExperimentResult dataclas
 - 2026-02-16T06:28:52.819137+00:00 | 0e81c10f merged (commit: 63cb7d4) -- Added --strategist CLI flag and post-mission strategic context integration. CLI 
 - 2026-02-16T06:39:48.945344+00:00 | fee1ff2d merged (commit: 6b3420a) -- Added 11 tests in TestMissionAmbitionScore class verifying ambition_score/next_o
+- 2026-02-16T06:47:28.954859+00:00 | 3d855d5b merged (commit: 8c052b4) -- Added --experiment CLI flag to mission subparser and 19 comprehensive tests in t
