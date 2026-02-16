@@ -67,6 +67,10 @@ def build_parser() -> argparse.ArgumentParser:
 		"--strategist", action="store_true",
 		help="Run strategist to propose an objective before the mission",
 	)
+	mission.add_argument(
+		"--experiment", action="store_true",
+		help="Run in experiment mode: units produce comparison reports instead of merged commits",
+	)
 
 	# mc discover
 	discover = sub.add_parser("discover", help="Run codebase discovery analysis")
@@ -418,6 +422,18 @@ def cmd_mission(args: argparse.Namespace) -> int:
 			# Compose objective from approved items
 			config.target.objective = engine.compose_objective(items)
 			print(f"\nComposed objective from {len(items)} items.")
+
+	# Experiment mode: prepend instruction to objective for planner
+	if args.experiment and config.target.objective:
+		config.target.objective = (
+			"[EXPERIMENT MODE] "
+			"All units in this mission are experiments. "
+			"Each unit should try multiple approaches (default 2), benchmark each, "
+			"and report which is better with data. "
+			"Produce comparison reports, not merged commits. "
+			"Set experiment_mode=True on all work units. "
+			+ config.target.objective
+		)
 
 	if not config.target.objective:
 		print(
