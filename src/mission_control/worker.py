@@ -142,6 +142,41 @@ MC_RESULT:{{"status":"completed|failed|blocked","commits":[],\
 """
 
 
+EXPERIMENT_WORKER_PROMPT_TEMPLATE = """\
+You are an experiment agent for {target_name} at {workspace_path}.
+
+## Experiment Task
+{title}
+
+{description}
+
+## Guidelines
+- Try each approach described above (default: 2 approaches)
+- For EACH approach: implement it, benchmark or evaluate it, record the results
+- Do NOT commit code changes -- experiments are informational only
+- After testing all approaches, produce a JSON comparison report in your MC_RESULT
+- The comparison report should include: approach names, metrics, pros/cons, and a recommendation
+- Clean up any experimental code changes before finishing (git checkout -- .)
+
+## Scope
+Files to investigate: {files_hint}
+
+## Verification
+Run (read-only check): {verification_command}
+
+## Context
+{context_block}
+{experience_block}{mission_state_block}{overlap_warnings_block}
+## Output
+When done, write a summary as the LAST line of output:
+MC_RESULT:{{"status":"completed|failed|blocked","commits":[],\
+"summary":"experiment results summary","discoveries":["key findings"],\
+"concerns":["potential issues"],"files_changed":[],\
+"comparison_report":{{"approaches":[{{"name":"approach_1","description":"...","metrics":{{}},"pros":[],"cons":[]}}],\
+"recommended_approach":"approach_1","rationale":"why this approach is better"}}}}
+"""
+
+
 MISSION_WORKER_PROMPT_TEMPLATE = """\
 You are working on {target_name} at {workspace_path}.
 
@@ -192,11 +227,12 @@ def render_mission_worker_prompt(
 	ow_block = ""
 	if overlap_warnings:
 		ow_block = f"\n## File Locking Warnings\n{overlap_warnings}\n"
-	template = (
-		RESEARCH_WORKER_PROMPT_TEMPLATE
-		if unit.unit_type == "research"
-		else MISSION_WORKER_PROMPT_TEMPLATE
-	)
+	if unit.unit_type == "research":
+		template = RESEARCH_WORKER_PROMPT_TEMPLATE
+	elif unit.unit_type == "experiment":
+		template = EXPERIMENT_WORKER_PROMPT_TEMPLATE
+	else:
+		template = MISSION_WORKER_PROMPT_TEMPLATE
 	return template.format(
 		target_name=config.target.name,
 		workspace_path=workspace_path,

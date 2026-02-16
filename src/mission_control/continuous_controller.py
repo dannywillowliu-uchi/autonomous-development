@@ -22,6 +22,7 @@ from mission_control.heartbeat import Heartbeat
 from mission_control.models import (
 	BacklogItem,
 	Epoch,
+	ExperimentResult,
 	Handoff,
 	Mission,
 	Signal,
@@ -938,6 +939,94 @@ class ContinuousController:
 				summary = (handoff.summary[:80] if handoff and handoff.summary else unit.output_summary[:80])
 				self._state_changelog.append(
 					f"- {timestamp} | {unit.id[:8]} research completed -- {summary}"
+				)
+
+				try:
+					self._update_mission_state(mission)
+				except Exception as exc:
+					logger.warning("Failed to update MISSION_STATE.md: %s", exc)
+
+				mission.total_cost_usd += unit.cost_usd
+				try:
+					self.db.update_mission(mission)
+				except Exception as exc:
+					logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
+				continue
+
+			# Experiment units: skip merge, store comparison report
+			if unit.unit_type == "experiment":
+				if unit.status != "completed":
+					self._total_failed += 1
+					logger.info("Experiment unit %s failed", unit.id)
+					if handoff and self._planner:
+						self._planner.ingest_handoff(handoff)
+					mission.total_cost_usd += unit.cost_usd
+					try:
+						self.db.update_mission(mission)
+					except Exception as exc:
+						logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
+					continue
+				logger.info("Experiment unit %s completed -- skipping merge", unit.id)
+				self._total_merged += 1
+
+				# Parse comparison report from handoff and store as ExperimentResult
+				comparison_report = ""
+				recommended_approach = ""
+				approach_count = 2
+				if handoff:
+					try:
+						mc_data = json.loads(handoff.discoveries) if handoff.discoveries else []
+						# Check for comparison_report in the raw MC_RESULT via summary or discoveries
+						if isinstance(mc_data, list):
+							for item in mc_data:
+								if isinstance(item, str) and "approach" in item.lower():
+									comparison_report = item
+									break
+					except (json.JSONDecodeError, TypeError):
+						pass
+					# Also check the handoff summary for report data
+					if handoff.summary:
+						if not comparison_report:
+							comparison_report = handoff.summary
+						recommended_approach = handoff.summary[:200]
+
+				try:
+					experiment_result = ExperimentResult(
+						work_unit_id=unit.id,
+						epoch_id=epoch.id,
+						mission_id=mission.id,
+						approach_count=approach_count,
+						comparison_report=comparison_report,
+						recommended_approach=recommended_approach,
+					)
+					self.db.insert_experiment_result(experiment_result)
+				except Exception as exc:
+					logger.warning("Failed to insert experiment result for unit %s: %s", unit.id, exc)
+
+				try:
+					self.db.insert_unit_event(UnitEvent(
+						mission_id=mission.id,
+						epoch_id=epoch.id,
+						work_unit_id=unit.id,
+						event_type="experiment_completed",
+					))
+				except Exception as exc:
+					logger.warning("Failed to insert experiment_completed event for unit %s: %s", unit.id, exc)
+				if self._event_stream:
+					self._event_stream.emit(
+						"experiment_completed",
+						mission_id=mission.id,
+						epoch_id=epoch.id,
+						unit_id=unit.id,
+					)
+
+				if handoff and self._planner:
+					self._planner.ingest_handoff(handoff)
+
+				timestamp = unit.finished_at or _now_iso()
+				summary = (handoff.summary[:80] if handoff and handoff.summary else unit.output_summary[:80])
+				self._state_changelog.append(
+					f"- {timestamp} | {unit.id[:8]} experiment completed -- {summary}"
 				)
 
 				try:
