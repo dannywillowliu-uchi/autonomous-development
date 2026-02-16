@@ -258,7 +258,8 @@ class TestControllerStrategistIntegration:
 	) -> None:
 		"""When strategist is set, its evaluate_ambition is used instead of _score_ambition."""
 		config.target.name = "test"
-		config.continuous.max_wall_time_seconds = 5
+		config.continuous.max_wall_time_seconds = 1
+		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 
 		mock_strategist = MagicMock(spec=Strategist)
@@ -306,12 +307,16 @@ class TestControllerStrategistIntegration:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		with (
 			patch.object(ctrl, "_init_components", mock_init),
 			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await ctrl.run()
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		mock_strategist.evaluate_ambition.assert_called_once()
 		assert result.ambition_score == 9
@@ -323,7 +328,7 @@ class TestControllerStrategistIntegration:
 	) -> None:
 		"""When strategist recommends replanning, a warning is logged."""
 		config.target.name = "test"
-		config.continuous.max_wall_time_seconds = 5
+		config.continuous.max_wall_time_seconds = 1
 		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 
@@ -374,6 +379,9 @@ class TestControllerStrategistIntegration:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		warning_messages: list[str] = []
 
@@ -387,8 +395,9 @@ class TestControllerStrategistIntegration:
 				logging.getLogger("mission_control.continuous_controller"),
 				"warning", side_effect=capture_warning,
 			),
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await ctrl.run()
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		assert result.ambition_score == 2
 		replan_warnings = [m for m in warning_messages if "replan" in m.lower()]
@@ -400,7 +409,8 @@ class TestControllerStrategistIntegration:
 	) -> None:
 		"""Without a strategist, the controller falls back to _score_ambition."""
 		config.target.name = "test"
-		config.continuous.max_wall_time_seconds = 5
+		config.continuous.max_wall_time_seconds = 1
+		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 		# No strategist set -- ctrl._strategist is None
 
@@ -445,13 +455,17 @@ class TestControllerStrategistIntegration:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		with (
 			patch.object(ctrl, "_init_components", mock_init),
 			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
 			patch.object(ctrl, "_score_ambition", return_value=6) as mock_score,
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await ctrl.run()
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		mock_score.assert_called_once()
 		assert result.ambition_score == 6
@@ -462,7 +476,8 @@ class TestControllerStrategistIntegration:
 	) -> None:
 		"""Ambition score from strategist should be persisted to the mission DB record."""
 		config.target.name = "test"
-		config.continuous.max_wall_time_seconds = 5
+		config.continuous.max_wall_time_seconds = 1
+		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 
 		mock_strategist = MagicMock(spec=Strategist)
@@ -507,12 +522,16 @@ class TestControllerStrategistIntegration:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		with (
 			patch.object(ctrl, "_init_components", mock_init),
 			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await ctrl.run()
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		assert result.ambition_score == 7
 
@@ -527,7 +546,8 @@ class TestControllerStrategistIntegration:
 	) -> None:
 		"""When should_replan returns False, no replan warning is logged."""
 		config.target.name = "test"
-		config.continuous.max_wall_time_seconds = 5
+		config.continuous.max_wall_time_seconds = 1
+		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 
 		mock_strategist = MagicMock(spec=Strategist)
@@ -572,6 +592,9 @@ class TestControllerStrategistIntegration:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		warning_messages: list[str] = []
 
@@ -585,8 +608,9 @@ class TestControllerStrategistIntegration:
 				logging.getLogger("mission_control.continuous_controller"),
 				"warning", side_effect=capture_warning,
 			),
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			await ctrl.run()
+			await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		replan_warnings = [m for m in warning_messages if "replan" in m.lower()]
 		assert len(replan_warnings) == 0

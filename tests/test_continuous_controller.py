@@ -656,7 +656,8 @@ class TestEndToEnd:
 	async def test_units_flow_dispatch_to_completion(self, config: MissionConfig, db: Database) -> None:
 		"""Integration: dispatch loop feeds units, completion processor merges them."""
 		config.target.name = "test"
-		config.continuous.max_wall_time_seconds = 5
+		config.continuous.max_wall_time_seconds = 1
+		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 
 		executed_ids: list[str] = []
@@ -713,12 +714,16 @@ class TestEndToEnd:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		with (
 			patch.object(ctrl, "_init_components", mock_init),
 			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await ctrl.run()
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		assert len(executed_ids) >= 2
 		assert result.objective_met is True
@@ -1394,6 +1399,9 @@ class TestConcurrentDispatchAndCompletion:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		async def monitor_and_release() -> None:
 			"""Wait until all 3 units are merged, then let planner finish."""
@@ -1405,6 +1413,7 @@ class TestConcurrentDispatchAndCompletion:
 			with (
 				patch.object(ctrl, "_init_components", mock_init),
 				patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+				patch("mission_control.continuous_controller.EventStream"),
 			):
 				monitor_task = asyncio.create_task(monitor_and_release())
 				try:
@@ -1708,7 +1717,8 @@ class TestAmbitionScoringInDispatch:
 	async def test_ambition_score_persisted_on_mission(self, config: MissionConfig, db: Database) -> None:
 		"""Ambition score should be set on the mission object and result."""
 		config.target.name = "test"
-		config.continuous.max_wall_time_seconds = 5
+		config.continuous.max_wall_time_seconds = 1
+		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 
 		call_count = 0
@@ -1753,12 +1763,16 @@ class TestAmbitionScoringInDispatch:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		with (
 			patch.object(ctrl, "_init_components", mock_init),
 			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await ctrl.run()
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		assert result.ambition_score > 0
 		assert ctrl.ambition_score > 0
@@ -1774,7 +1788,7 @@ class TestAmbitionScoringInDispatch:
 	) -> None:
 		"""Low ambition with higher-priority backlog items should log a warning."""
 		config.target.name = "test"
-		config.continuous.max_wall_time_seconds = 5
+		config.continuous.max_wall_time_seconds = 1
 		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 
@@ -1823,6 +1837,9 @@ class TestAmbitionScoringInDispatch:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		warning_messages: list[str] = []
 
@@ -1836,8 +1853,9 @@ class TestAmbitionScoringInDispatch:
 				logging.getLogger("mission_control.continuous_controller"),
 				"warning", side_effect=capture_warning,
 			),
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await ctrl.run()
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		# Ambition should be low (single lint fix unit)
 		assert result.ambition_score < 4
@@ -1852,6 +1870,7 @@ class TestNextObjectivePopulation:
 		"""When objective not met and backlog exists, next_objective should be populated."""
 		config.target.name = "test"
 		config.continuous.max_wall_time_seconds = 2
+		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 
 		# Insert pending backlog items
@@ -1896,12 +1915,16 @@ class TestNextObjectivePopulation:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		with (
 			patch.object(ctrl, "_init_components", mock_init),
 			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await ctrl.run()
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		# Mission should have stopped by wall_time, not objective_met
 		assert result.objective_met is False
@@ -1913,7 +1936,8 @@ class TestNextObjectivePopulation:
 	async def test_next_objective_empty_when_objective_met(self, config: MissionConfig, db: Database) -> None:
 		"""When objective is met, next_objective should remain empty."""
 		config.target.name = "test"
-		config.continuous.max_wall_time_seconds = 5
+		config.continuous.max_wall_time_seconds = 1
+		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 
 		# Insert backlog items (they exist but shouldn't trigger chaining since objective is met)
@@ -1959,12 +1983,16 @@ class TestNextObjectivePopulation:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		with (
 			patch.object(ctrl, "_init_components", mock_init),
 			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await ctrl.run()
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		assert result.objective_met is True
 		assert result.next_objective == ""
@@ -1974,6 +2002,7 @@ class TestNextObjectivePopulation:
 		"""When objective not met but no backlog, next_objective should remain empty."""
 		config.target.name = "test"
 		config.continuous.max_wall_time_seconds = 2
+		config.discovery.enabled = False
 		ctrl = ContinuousController(config, db)
 
 		# No backlog items inserted
@@ -2009,12 +2038,16 @@ class TestNextObjectivePopulation:
 			ctrl._planner = mock_planner
 			ctrl._green_branch = mock_gbm
 			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
 
 		with (
 			patch.object(ctrl, "_init_components", mock_init),
 			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await ctrl.run()
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		assert result.objective_met is False
 		assert result.next_objective == ""
