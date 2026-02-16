@@ -436,3 +436,28 @@ class DiscoveryResult:
 	item_count: int = 0
 	error_type: str = ""  # timeout/budget_exceeded/permission_denied/workspace_corruption/unknown
 	error_detail: str = ""
+
+
+# -- Backlog models --
+
+
+@dataclass
+class BacklogItem:
+	"""A prioritized item in the mission backlog."""
+
+	id: str = field(default_factory=_new_id)
+	title: str = ""
+	description: str = ""
+	priority_score: float = 0.0
+	impact: int = 5
+	effort: int = 5
+	track: str = ""
+	status: str = "pending"  # pending/in_progress/completed/deferred
+	source_mission_id: str = ""
+	created_at: str = field(default_factory=_now_iso)
+	updated_at: str = field(default_factory=_now_iso)
+	attempt_count: int = 0
+	last_failure_reason: str = ""
+	pinned_score: float | None = None
+	depends_on: str = ""  # comma-separated backlog item IDs
+	tags: str = ""  # comma-separated tags
