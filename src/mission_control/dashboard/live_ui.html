@@ -20,6 +20,12 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+html, body {
+	overflow: hidden;
+	width: 100%;
+	max-width: 100vw;
+}
+
 body {
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
 	background: var(--bg);
@@ -32,6 +38,8 @@ body {
 	display: grid;
 	grid-template-rows: auto auto 1fr auto auto;
 	height: 100vh;
+	width: 100vw;
+	overflow: hidden;
 }
 
 /* Header */
@@ -85,25 +93,31 @@ body {
 /* Main content */
 .main {
 	display: grid;
-	grid-template-columns: minmax(200px, 280px) minmax(300px, 1fr) minmax(220px, 320px);
+	grid-template-columns: 220px 1fr 240px;
 	overflow: hidden;
+	min-width: 0;
+	max-width: 100%;
 }
 
 /* Plan tree panel */
 .plan-tree {
 	border-right: 1px solid var(--border);
-	overflow-y: auto;
+	overflow: auto;
 	padding: 12px;
 	min-height: 0;
+	min-width: 0;
 }
 
-.plan-tree h2 {
+/* Shared panel heading style */
+.panel-heading {
 	font-size: 13px;
 	text-transform: uppercase;
 	color: var(--text-muted);
 	margin-bottom: 8px;
 	letter-spacing: 0.5px;
 }
+
+.workers .panel-heading { margin-bottom: 12px; }
 
 .epoch-node {
 	margin-bottom: 8px;
@@ -123,6 +137,7 @@ body {
 .epoch-header:hover { background: var(--border); }
 
 .unit-node {
+	position: relative;
 	padding: 4px 8px;
 	border-radius: 4px;
 	font-size: 12px;
@@ -168,10 +183,6 @@ body {
 	margin-left: 12px;
 	padding-left: 14px;
 	border-left: 1px solid var(--border);
-}
-
-.unit-node {
-	position: relative;
 }
 
 .unit-node::before {
@@ -224,18 +235,12 @@ body {
 
 /* Worker cards panel */
 .workers {
-	overflow-y: auto;
+	overflow: auto;
 	padding: 16px;
 	min-height: 0;
+	min-width: 0;
 }
 
-.workers h2 {
-	font-size: 13px;
-	text-transform: uppercase;
-	color: var(--text-muted);
-	margin-bottom: 12px;
-	letter-spacing: 0.5px;
-}
 
 .worker-grid {
 	display: grid;
@@ -340,18 +345,12 @@ body {
 /* Event log panel */
 .event-log {
 	border-left: 1px solid var(--border);
-	overflow-y: auto;
+	overflow: auto;
 	padding: 12px;
 	min-height: 0;
+	min-width: 0;
 }
 
-.event-log h2 {
-	font-size: 13px;
-	text-transform: uppercase;
-	color: var(--text-muted);
-	margin-bottom: 8px;
-	letter-spacing: 0.5px;
-}
 
 /* Event filter bar */
 .event-filters {
@@ -378,10 +377,10 @@ body {
 .event-filter-btn.active { color: #fff; }
 .event-filter-btn.active[data-type="dispatched"] { background: var(--blue); border-color: var(--blue); }
 .event-filter-btn.active[data-type="merged"] { background: var(--green); border-color: var(--green); color: #000; }
-.event-filter-btn.active[data-type="failed"] { background: var(--red); border-color: var(--red); }
-.event-filter-btn.active[data-type="retry_queued"] { background: var(--yellow); border-color: var(--yellow); color: #000; }
-.event-filter-btn.active[data-type="rejected"] { background: var(--red); border-color: var(--red); }
+.event-filter-btn.active[data-type="failed"],
+.event-filter-btn.active[data-type="rejected"],
 .event-filter-btn.active[data-type="merge_failed"] { background: var(--red); border-color: var(--red); }
+.event-filter-btn.active[data-type="retry_queued"] { background: var(--yellow); border-color: var(--yellow); color: #000; }
 .event-filter-btn.active[data-type="research_completed"] { background: var(--green); border-color: var(--green); color: #000; }
 .event-filter-btn.active[data-type="all"] { background: var(--border); border-color: var(--text-muted); color: var(--text); }
 
@@ -400,7 +399,6 @@ body {
 }
 
 .event-group.multi .event-item { border-bottom: none; }
-.event-group.multi .event-item:last-child { border-bottom: none; }
 
 .event-group-label {
 	font-size: 10px;
@@ -443,8 +441,11 @@ body {
 	width: 80px;
 }
 .event-type.dispatched { color: var(--blue); }
-.event-type.merged, .event-type.research_completed { color: var(--green); }
-.event-type.failed, .event-type.rejected, .event-type.merge_failed { color: var(--red); }
+.event-type.merged,
+.event-type.research_completed { color: var(--green); }
+.event-type.failed,
+.event-type.rejected,
+.event-type.merge_failed { color: var(--red); }
 .event-type.retry_queued { color: var(--yellow); }
 
 .event-unit {
@@ -659,9 +660,9 @@ body {
 .modal .modal-actions button.primary { background: var(--blue); color: #000; border-color: var(--blue); }
 
 /* Responsive: 2-column -- plan tree + stacked workers/events */
-@media (max-width: 1024px) and (min-width: 769px) {
+@media (max-width: 1100px) and (min-width: 769px) {
 	.main {
-		grid-template-columns: minmax(200px, 260px) 1fr;
+		grid-template-columns: 200px 1fr;
 		grid-template-rows: 1fr 1fr;
 	}
 	.plan-tree {
@@ -720,9 +721,17 @@ body {
 	border-bottom: 1px solid var(--border);
 	padding: 10px 20px;
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	gap: 10px;
-	min-height: 40px;
+	max-height: 40px;
+	overflow: hidden;
+	transition: max-height 0.2s ease;
+	cursor: pointer;
+}
+
+.objective-banner.expanded {
+	max-height: 200px;
+	overflow-y: auto;
 }
 
 .objective-banner .objective-label {
@@ -732,15 +741,22 @@ body {
 	letter-spacing: 0.5px;
 	color: var(--blue);
 	flex-shrink: 0;
+	padding-top: 1px;
 }
 
 .objective-banner .objective-text {
 	font-size: 13px;
 	color: var(--text);
 	line-height: 1.4;
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.objective-banner.expanded .objective-text {
+	white-space: pre-wrap;
+	word-break: break-word;
 }
 
 .objective-banner.inactive {
@@ -870,8 +886,7 @@ body {
 }
 
 .history-badge.completed { background: rgba(63, 185, 80, 0.2); color: var(--green); }
-.history-badge.failed { background: rgba(248, 81, 73, 0.2); color: var(--red); }
-.history-badge.stopped { background: rgba(248, 81, 73, 0.2); color: var(--red); }
+.history-badge.failed, .history-badge.stopped { background: rgba(248, 81, 73, 0.2); color: var(--red); }
 .history-badge.running { background: rgba(210, 153, 34, 0.2); color: var(--yellow); }
 
 .history-counts {
@@ -909,7 +924,7 @@ body {
 
 <div class="layout">
 	<!-- Mission objective banner -->
-	<div class="objective-banner inactive" id="objective-banner">
+	<div class="objective-banner inactive" id="objective-banner" onclick="this.classList.toggle('expanded')"
 		<span class="objective-label">Objective</span>
 		<span class="objective-text" id="objective-text">No active mission</span>
 	</div>
@@ -935,19 +950,19 @@ body {
 	<div class="main">
 		<!-- Plan tree -->
 		<div class="plan-tree">
-			<h2>Plan Tree</h2>
+			<h2 class="panel-heading">Plan Tree</h2>
 			<div id="plan-tree-content"></div>
 		</div>
 
 		<!-- Worker cards -->
 		<div class="workers">
-			<h2>Work Units</h2>
+			<h2 class="panel-heading">Work Units</h2>
 			<div class="worker-grid" id="worker-grid"></div>
 		</div>
 
 		<!-- Event log -->
 		<div class="event-log">
-			<h2>Event Log</h2>
+			<h2 class="panel-heading">Event Log</h2>
 			<div class="event-filters" id="event-filters">
 				<button class="event-filter-btn active" data-type="all" onclick="toggleEventFilter('all')">All</button>
 				<button class="event-filter-btn active" data-type="dispatched" onclick="toggleEventFilter('dispatched')">Dispatched</button>
@@ -1202,10 +1217,6 @@ function formatUnitDuration(unit) {
 
 function updateWorkerCards(units) {
 	const grid = document.getElementById("worker-grid");
-	const mergedEl = document.getElementById("merged");
-	const failedEl = document.getElementById("failed-count");
-	const runningEl = document.getElementById("running-count");
-	const pendingEl = document.getElementById("pending-count");
 
 	if (!units || units.length === 0) {
 		grid.innerHTML = '<div class="empty-state">No work units</div>';
@@ -1216,16 +1227,10 @@ function updateWorkerCards(units) {
 	const order = { running: 0, pending: 1, claimed: 1, completed: 3, failed: 4 };
 	const sorted = [...units].sort((a, b) => (order[a.status] || 2) - (order[b.status] || 2));
 
-	let merged = 0, failed = 0, running = 0, pending = 0;
 	let html = "";
 
 	for (const unit of sorted) {
 		unitTitles[unit.id] = unit.title;
-
-		if (unit.status === "completed") merged++;
-		else if (unit.status === "failed") failed++;
-		else if (unit.status === "running") running++;
-		else if (unit.status === "pending" || unit.status === "claimed") pending++;
 
 		const expanded = expandedCards.has(unit.id) ? "expanded" : "";
 		const elapsed = unit.started_at && unit.status === "running"
@@ -1293,10 +1298,6 @@ function updateWorkerCards(units) {
 	}
 
 	grid.innerHTML = html;
-	mergedEl.textContent = merged;
-	failedEl.textContent = failed;
-	runningEl.textContent = running;
-	pendingEl.textContent = pending;
 }
 
 let activeEventFilters = new Set(["all", "dispatched", "merged", "failed", "retry_queued", "rejected", "merge_failed"]);
@@ -1396,10 +1397,6 @@ function formatRelativeTime(isoString) {
 }
 
 function refreshRelativeTimestamps() {
-	const timeEls = document.querySelectorAll("#event-log-content .event-time[data-timestamp]");
-	for (const el of timeEls) {
-		// data-timestamp is on the parent .event-item
-	}
 	const items = document.querySelectorAll("#event-log-content .event-item[data-timestamp]");
 	for (const item of items) {
 		const ts = item.getAttribute("data-timestamp");
@@ -1638,15 +1635,6 @@ function formatElapsed(isoString) {
 	const mins = Math.floor(diff / 60000);
 	if (mins < 1) return "<1m";
 	return `${mins}m`;
-}
-
-function formatTime(isoString) {
-	try {
-		const d = new Date(isoString);
-		return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-	} catch {
-		return "--:--";
-	}
 }
 
 function escapeHtml(text) {

@@ -58,6 +58,10 @@ class LiveDashboard:
 		self._signal_timestamps: dict[str, list[float]] = defaultdict(list)
 		self._setup_routes()
 
+	def _current_mission(self) -> Any | None:
+		"""Return the active mission, falling back to the latest."""
+		return self.db.get_active_mission() or self.db.get_latest_mission()
+
 	def _verify_token(self, credentials: HTTPAuthorizationCredentials) -> None:
 		if self.auth_token and credentials.credentials != self.auth_token:
 			raise HTTPException(status_code=401, detail="Invalid token")
@@ -139,7 +143,7 @@ class LiveDashboard:
 			client_ip = request.client.host if request.client else "unknown"
 			self._check_rate_limit(client_ip)
 
-			mission = self.db.get_active_mission() or self.db.get_latest_mission()
+			mission = self._current_mission()
 			if mission is None:
 				return {"status": "error", "message": "No mission found"}
 
@@ -155,14 +159,14 @@ class LiveDashboard:
 
 		@self.app.get("/api/mission", dependencies=[Depends(verify_token)])
 		async def get_mission() -> dict[str, Any]:
-			mission = self.db.get_active_mission() or self.db.get_latest_mission()
+			mission = self._current_mission()
 			if mission is None:
 				return {"status": "no_mission"}
 			return _serialize_mission(mission)
 
 		@self.app.get("/api/units", dependencies=[Depends(verify_token)])
 		async def get_units() -> list[dict[str, Any]]:
-			mission = self.db.get_active_mission() or self.db.get_latest_mission()
+			mission = self._current_mission()
 			if mission is None:
 				return []
 			units = self.db.get_work_units_for_mission(mission.id)
@@ -170,7 +174,7 @@ class LiveDashboard:
 
 		@self.app.get("/api/events", dependencies=[Depends(verify_token)])
 		async def get_events() -> list[dict[str, Any]]:
-			mission = self.db.get_active_mission() or self.db.get_latest_mission()
+			mission = self._current_mission()
 			if mission is None:
 				return []
 			events = self.db.get_unit_events_for_mission(mission.id, limit=200)
@@ -178,7 +182,7 @@ class LiveDashboard:
 
 		@self.app.get("/api/plan-tree", dependencies=[Depends(verify_token)])
 		async def get_plan_tree() -> list[dict[str, Any]]:
-			mission = self.db.get_active_mission() or self.db.get_latest_mission()
+			mission = self._current_mission()
 			if mission is None:
 				return []
 			return self._build_plan_tree(mission.id)
@@ -190,7 +194,7 @@ class LiveDashboard:
 
 		@self.app.get("/api/summary", dependencies=[Depends(verify_token)])
 		async def get_summary() -> dict[str, Any]:
-			mission = self.db.get_active_mission() or self.db.get_latest_mission()
+			mission = self._current_mission()
 			if mission is None:
 				return {"status": "no_mission"}
 			return self._build_summary(mission)
@@ -219,7 +223,7 @@ class LiveDashboard:
 
 	def _build_snapshot(self) -> dict[str, Any]:
 		"""Build current mission state from DB."""
-		mission = self.db.get_active_mission() or self.db.get_latest_mission()
+		mission = self._current_mission()
 		if mission is None:
 			return {
 				"mission": None, "units": [], "events": [],
@@ -244,14 +248,16 @@ class LiveDashboard:
 	def _build_plan_tree(self, mission_id: str) -> list[dict[str, Any]]:
 		"""Build plan tree from epochs and their plan nodes."""
 		epochs = self.db.get_epochs_for_mission(mission_id)
-		tree: list[dict[str, Any]] = []
+		all_units = self.db.get_work_units_for_mission(mission_id)
 
+		# Index units by epoch for O(1) lookup instead of repeated DB queries
+		units_by_epoch: dict[str, list[Any]] = defaultdict(list)
+		for u in all_units:
+			if u.epoch_id:
+				units_by_epoch[u.epoch_id].append(u)
+
+		tree: list[dict[str, Any]] = []
 		for epoch in epochs:
-			# Get units for this epoch
-			units = [
-				u for u in self.db.get_work_units_for_mission(mission_id)
-				if u.epoch_id == epoch.id
-			]
 			tree.append({
 				"type": "epoch",
 				"id": epoch.id,
@@ -269,7 +275,7 @@ class LiveDashboard:
 						"max_attempts": u.max_attempts,
 						"files_hint": u.files_hint,
 					}
-					for u in units
+					for u in units_by_epoch.get(epoch.id, [])
 				],
 			})
 

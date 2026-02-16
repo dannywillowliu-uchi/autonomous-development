@@ -70,6 +70,11 @@ STRATEGY_RESULT:{{"objective": "Actionable objective", "rationale": "Why this ma
 IMPORTANT: The STRATEGY_RESULT line must be the LAST line of your output."""
 
 
+def _effective_score(item: BacklogItem) -> float:
+	"""Return the effective priority score, preferring pinned_score if set."""
+	return item.pinned_score if item.pinned_score is not None else item.priority_score
+
+
 class Strategist:
 	"""Proposes mission objectives by analyzing project context."""
 
@@ -103,14 +108,12 @@ class Strategist:
 		missions = self.db.get_all_missions(limit=10)
 		if not missions:
 			return ""
-		lines = []
-		for m in missions:
-			lines.append(
-				f"- [{m.status}] {m.objective[:120]} "
-				f"(rounds={m.total_rounds}, score={m.final_score}, "
-				f"reason={m.stopped_reason or 'n/a'})"
-			)
-		return "\n".join(lines)
+		return "\n".join(
+			f"- [{m.status}] {m.objective[:120]} "
+			f"(rounds={m.total_rounds}, score={m.final_score}, "
+			f"reason={m.stopped_reason or 'n/a'})"
+			for m in missions
+		)
 
 	def _get_strategic_context(self) -> str:
 		if not hasattr(self.db, "get_strategic_context"):
@@ -119,10 +122,7 @@ class Strategist:
 			entries = self.db.get_strategic_context(limit=10)
 			if not entries:
 				return ""
-			lines = []
-			for e in entries:
-				lines.append(f"- {e}")
-			return "\n".join(lines)
+			return "\n".join(f"- {e}" for e in entries)
 		except Exception:
 			log.debug("get_strategic_context not available", exc_info=True)
 			return ""
@@ -131,11 +131,10 @@ class Strategist:
 		items = self.db.get_pending_backlog(limit=10)
 		if not items:
 			return ""
-		lines = []
-		for item in items:
-			score = item.pinned_score if item.pinned_score is not None else item.priority_score
-			lines.append(f"- [score={score:.1f}] {item.title}: {item.description[:100]}")
-		return "\n".join(lines)
+		return "\n".join(
+			f"- [score={_effective_score(item):.1f}] {item.title}: {item.description[:100]}"
+			for item in items
+		)
 
 	def _parse_strategy_output(self, output: str) -> tuple[str, str, int]:
 		"""Parse STRATEGY_RESULT from LLM output. Returns (objective, rationale, ambition_score)."""
@@ -273,45 +272,33 @@ class Strategist:
 		# Check if any backlog item has meaningful priority (> 5.0)
 		high_priority_items = [
 			item for item in backlog_items
-			if (item.pinned_score if item.pinned_score is not None else item.priority_score) > 5.0
+			if _effective_score(item) > 5.0
 		]
 
 		if not high_priority_items:
 			return False, "No high-priority backlog items found"
 
 		top = high_priority_items[0]
-		score = top.pinned_score if top.pinned_score is not None else top.priority_score
+		score = _effective_score(top)
 		return True, (
 			f"Ambition score {ambition_score} is low. "
 			f"Higher-priority backlog item available: '{top.title}' (priority={score:.1f}). "
 			f"Consider replanning with a more ambitious objective."
 		)
 
-	async def propose_objective(self) -> tuple[str, str, int]:
-		"""Gather context and propose a mission objective via Claude.
+	async def _invoke_llm(self, prompt: str, label: str, raise_on_failure: bool = True) -> str:
+		"""Run a prompt through the Claude subprocess and return raw output.
 
-		Returns:
-			Tuple of (objective, rationale, ambition_score).
+		Args:
+			prompt: The prompt text to send.
+			label: Human-readable label for logging (e.g. "strategist", "followup").
+			raise_on_failure: If True, raise on non-zero exit. If False, return "".
 		"""
-		backlog_md = self._read_backlog()
-		git_log = self._get_git_log()
-		past_missions = self._get_past_missions()
-		strategic_context = self._get_strategic_context()
-		pending_backlog = self._get_pending_backlog()
-
-		prompt = _build_strategy_prompt(
-			backlog_md=backlog_md,
-			git_log=git_log,
-			past_missions=past_missions,
-			strategic_context=strategic_context,
-			pending_backlog=pending_backlog,
-		)
-
 		budget = self.config.planner.budget_per_call_usd
 		model = self.config.scheduler.model
 		timeout = self.config.target.verification.timeout
 
-		log.info("Invoking strategist LLM to propose objective")
+		log.info("Invoking %s LLM", label)
 
 		try:
 			proc = await asyncio.create_subprocess_exec(
@@ -331,19 +318,39 @@ class Strategist:
 			)
 			output = stdout.decode() if stdout else ""
 		except asyncio.TimeoutError:
-			log.error("Strategist LLM timed out after %ds", timeout)
+			log.error("%s LLM timed out after %ds", label, timeout)
 			try:
 				proc.kill()
 				await proc.wait()
 			except ProcessLookupError:
 				pass
-			raise
+			if raise_on_failure:
+				raise
+			return ""
 
 		if proc.returncode != 0:
 			err_msg = stderr.decode()[:200] if stderr else "unknown error"
-			log.error("Strategist LLM failed (rc=%d): %s", proc.returncode, err_msg)
-			raise RuntimeError(f"Strategist subprocess failed (rc={proc.returncode}): {err_msg}")
+			log.error("%s LLM failed (rc=%d): %s", label, proc.returncode, err_msg)
+			if raise_on_failure:
+				raise RuntimeError(f"{label} subprocess failed (rc={proc.returncode}): {err_msg}")
+			return ""
 
+		return output
+
+	async def propose_objective(self) -> tuple[str, str, int]:
+		"""Gather context and propose a mission objective via Claude.
+
+		Returns:
+			Tuple of (objective, rationale, ambition_score).
+		"""
+		prompt = _build_strategy_prompt(
+			backlog_md=self._read_backlog(),
+			git_log=self._get_git_log(),
+			past_missions=self._get_past_missions(),
+			strategic_context=self._get_strategic_context(),
+			pending_backlog=self._get_pending_backlog(),
+		)
+		output = await self._invoke_llm(prompt, "strategist")
 		return self._parse_strategy_output(output)
 
 	def _build_followup_prompt(self, mission_result: object, strategic_context: str) -> str:
@@ -424,41 +431,7 @@ IMPORTANT: The FOLLOWUP_RESULT line must be the LAST line of your output."""
 			A next_objective string if follow-up is warranted, or empty string.
 		"""
 		prompt = self._build_followup_prompt(mission_result, strategic_context)
-		budget = self.config.planner.budget_per_call_usd
-		model = self.config.scheduler.model
-		timeout = self.config.target.verification.timeout
-
-		log.info("Invoking strategist LLM to evaluate follow-up")
-
-		try:
-			proc = await asyncio.create_subprocess_exec(
-				"claude", "-p",
-				"--output-format", "text",
-				"--max-budget-usd", str(budget),
-				"--model", model,
-				stdin=asyncio.subprocess.PIPE,
-				stdout=asyncio.subprocess.PIPE,
-				stderr=asyncio.subprocess.PIPE,
-				env=claude_subprocess_env(),
-				cwd=str(self.config.target.resolved_path),
-			)
-			stdout, stderr = await asyncio.wait_for(
-				proc.communicate(input=prompt.encode()),
-				timeout=timeout,
-			)
-			output = stdout.decode() if stdout else ""
-		except asyncio.TimeoutError:
-			log.error("Followup LLM timed out after %ds", timeout)
-			try:
-				proc.kill()
-				await proc.wait()
-			except ProcessLookupError:
-				pass
+		output = await self._invoke_llm(prompt, "followup", raise_on_failure=False)
+		if not output:
 			return ""
-
-		if proc.returncode != 0:
-			err_msg = stderr.decode()[:200] if stderr else "unknown error"
-			log.error("Followup LLM failed (rc=%d): %s", proc.returncode, err_msg)
-			return ""
-
 		return self._parse_followup_output(output)
