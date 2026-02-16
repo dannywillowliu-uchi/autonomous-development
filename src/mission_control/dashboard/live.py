@@ -7,6 +7,7 @@ import json
 import logging
 import time
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -194,6 +195,10 @@ class LiveDashboard:
 				return {"status": "no_mission"}
 			return self._build_summary(mission)
 
+		@self.app.get("/api/history", dependencies=[Depends(verify_token)])
+		async def get_history() -> list[dict[str, Any]]:
+			return self._build_history()
+
 	async def _broadcast_loop(self) -> None:
 		"""Poll DB every 1s, push snapshot to all connected clients."""
 		while True:
@@ -219,6 +224,7 @@ class LiveDashboard:
 			return {
 				"mission": None, "units": [], "events": [],
 				"plan_tree": [], "workers": [], "summary": None,
+				"history": [],
 			}
 
 		units = self.db.get_work_units_for_mission(mission.id)
@@ -232,6 +238,7 @@ class LiveDashboard:
 			"plan_tree": self._build_plan_tree(mission.id),
 			"workers": [_serialize_worker(w) for w in workers],
 			"summary": self._build_summary(mission),
+			"history": self._build_history(),
 		}
 
 	def _build_plan_tree(self, mission_id: str) -> list[dict[str, Any]]:
@@ -282,6 +289,35 @@ class LiveDashboard:
 			"current_epoch": max((e["number"] for e in epochs), default=0),
 			"started_at": mission.started_at,
 		}
+
+	def _build_history(self) -> list[dict[str, Any]]:
+		"""Build mission history from all past missions."""
+		missions = self.db.get_all_missions(limit=50)
+		result: list[dict[str, Any]] = []
+		for m in missions:
+			summary = self.db.get_mission_summary(m.id)
+			units = summary["units_by_status"]
+			duration: float | None = None
+			if m.started_at and m.finished_at:
+				try:
+					start = datetime.fromisoformat(m.started_at)
+					end = datetime.fromisoformat(m.finished_at)
+					duration = (end - start).total_seconds()
+				except (ValueError, TypeError):
+					pass
+			result.append({
+				"id": m.id,
+				"objective": m.objective,
+				"status": m.status,
+				"started_at": m.started_at,
+				"finished_at": m.finished_at,
+				"duration": duration,
+				"units_merged": units.get("completed", 0),
+				"units_failed": units.get("failed", 0),
+				"total_cost_usd": m.total_cost_usd,
+				"stopped_reason": m.stopped_reason,
+			})
+		return result
 
 
 def _serialize_mission(m: Any) -> dict[str, Any]:

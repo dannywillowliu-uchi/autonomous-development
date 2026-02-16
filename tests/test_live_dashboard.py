@@ -480,7 +480,11 @@ class TestBearerTokenAuth:
 
 	def test_auth_on_all_api_endpoints(self) -> None:
 		client = _make_authed_client()
-		for path in ["/api/mission", "/api/units", "/api/events", "/api/plan-tree", "/api/workers", "/api/summary"]:
+		paths = [
+			"/api/mission", "/api/units", "/api/events",
+			"/api/plan-tree", "/api/workers", "/api/summary", "/api/history",
+		]
+		for path in paths:
 			resp = client.get(path)
 			assert resp.status_code == 401, f"{path} should require auth"
 
@@ -588,3 +592,162 @@ class TestRateLimiting:
 		resp = client.post("/api/signal", json={"signal_type": "pause", "payload": {}})
 		assert resp.status_code == 429
 		assert "Rate limit" in resp.json()["detail"]
+
+
+def _setup_db_with_history(*, check_same_thread: bool = True) -> Database:
+	"""Create an in-memory DB with current + completed missions for history tests."""
+	db = Database.__new__(Database)
+	import asyncio
+	db.conn = sqlite3.connect(":memory:", check_same_thread=check_same_thread)
+	db.conn.row_factory = sqlite3.Row
+	db.conn.execute("PRAGMA foreign_keys=ON")
+	db._lock = asyncio.Lock()
+	db._create_tables()
+
+	# Completed mission with timestamps for duration
+	m_old = Mission(
+		id="m-old", objective="Old mission", status="completed",
+		started_at="2025-01-01T00:00:00", finished_at="2025-01-01T01:30:00",
+		total_cost_usd=2.5, stopped_reason="objective_met",
+	)
+	db.insert_mission(m_old)
+	epoch_old = Epoch(id="ep-old", mission_id="m-old", number=1, units_planned=2, units_completed=2)
+	db.insert_epoch(epoch_old)
+	plan_old = Plan(id="p-old", objective="Old mission")
+	db.insert_plan(plan_old)
+	for uid in ("wu-old1", "wu-old2"):
+		db.insert_work_unit(WorkUnit(
+			id=uid, plan_id="p-old", title=f"Task {uid}",
+			status="completed", epoch_id="ep-old",
+		))
+
+	# Currently running mission
+	m_cur = Mission(id="m-cur", objective="Current mission", status="running", total_cost_usd=1.0)
+	db.insert_mission(m_cur)
+	epoch_cur = Epoch(id="ep-cur", mission_id="m-cur", number=1, units_planned=1)
+	db.insert_epoch(epoch_cur)
+	plan_cur = Plan(id="p-cur", objective="Current mission")
+	db.insert_plan(plan_cur)
+	db.insert_work_unit(WorkUnit(
+		id="wu-cur1", plan_id="p-cur", title="Running task",
+		status="running", epoch_id="ep-cur",
+	))
+
+	return db
+
+
+class TestHistoryEndpoint:
+	def _make_client(self) -> TestClient:
+		db = _setup_db_with_history(check_same_thread=False)
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+		dashboard.auth_token = ""
+		dashboard._connections = set()
+		dashboard._broadcast_task = None
+		dashboard._signal_timestamps = defaultdict(list)
+		from fastapi import FastAPI
+		dashboard.app = FastAPI()
+		dashboard._setup_routes()
+		return TestClient(dashboard.app)
+
+	def test_history_returns_all_missions(self) -> None:
+		client = self._make_client()
+		resp = client.get("/api/history")
+		assert resp.status_code == 200
+		data = resp.json()
+		assert len(data) == 2
+		ids = {m["id"] for m in data}
+		assert ids == {"m-old", "m-cur"}
+
+	def test_history_entry_fields(self) -> None:
+		client = self._make_client()
+		resp = client.get("/api/history")
+		data = resp.json()
+		expected_keys = {
+			"id", "objective", "status", "started_at", "finished_at",
+			"duration", "units_merged", "units_failed", "total_cost_usd",
+			"stopped_reason",
+		}
+		for entry in data:
+			assert set(entry.keys()) == expected_keys
+
+	def test_history_completed_mission_has_duration(self) -> None:
+		client = self._make_client()
+		resp = client.get("/api/history")
+		data = resp.json()
+		completed = [m for m in data if m["id"] == "m-old"][0]
+		assert completed["duration"] == 5400.0  # 1.5 hours
+		assert completed["status"] == "completed"
+		assert completed["units_merged"] == 2
+		assert completed["total_cost_usd"] == 2.5
+		assert completed["stopped_reason"] == "objective_met"
+
+	def test_history_running_mission_has_null_duration(self) -> None:
+		client = self._make_client()
+		resp = client.get("/api/history")
+		data = resp.json()
+		running = [m for m in data if m["id"] == "m-cur"][0]
+		assert running["duration"] is None
+		assert running["status"] == "running"
+
+	def test_history_empty_when_no_missions(self) -> None:
+		db = Database.__new__(Database)
+		import asyncio
+		db.conn = sqlite3.connect(":memory:", check_same_thread=False)
+		db.conn.row_factory = sqlite3.Row
+		db.conn.execute("PRAGMA foreign_keys=ON")
+		db._lock = asyncio.Lock()
+		db._create_tables()
+
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+		dashboard.auth_token = ""
+		dashboard._connections = set()
+		dashboard._broadcast_task = None
+		dashboard._signal_timestamps = defaultdict(list)
+		from fastapi import FastAPI
+		dashboard.app = FastAPI()
+		dashboard._setup_routes()
+
+		client = TestClient(dashboard.app)
+		resp = client.get("/api/history")
+		assert resp.status_code == 200
+		assert resp.json() == []
+
+
+class TestSnapshotHistory:
+	def test_snapshot_includes_history(self) -> None:
+		db = _setup_db_with_history()
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+
+		snapshot = dashboard._build_snapshot()
+		assert "history" in snapshot
+		assert len(snapshot["history"]) == 2
+
+	def test_snapshot_no_mission_includes_empty_history(self) -> None:
+		db = Database(":memory:")
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+
+		snapshot = dashboard._build_snapshot()
+		assert "history" in snapshot
+		assert snapshot["history"] == []
+
+	def test_snapshot_history_matches_api(self) -> None:
+		db = _setup_db_with_history(check_same_thread=False)
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+		dashboard.auth_token = ""
+		dashboard._connections = set()
+		dashboard._broadcast_task = None
+		dashboard._signal_timestamps = defaultdict(list)
+		from fastapi import FastAPI
+		dashboard.app = FastAPI()
+		dashboard._setup_routes()
+
+		snapshot = dashboard._build_snapshot()
+		client = TestClient(dashboard.app)
+		resp = client.get("/api/history")
+
+		assert snapshot["history"] == resp.json()
