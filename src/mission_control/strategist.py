@@ -13,6 +13,7 @@ import subprocess
 from mission_control.config import MissionConfig, claude_subprocess_env
 from mission_control.db import Database
 from mission_control.json_utils import extract_json_from_text
+from mission_control.models import BacklogItem, WorkUnit
 
 log = logging.getLogger(__name__)
 
@@ -161,6 +162,129 @@ class Strategist:
 			raise ValueError("Empty objective in STRATEGY_RESULT")
 
 		return objective, rationale, ambition_score
+
+	def evaluate_ambition(self, planned_units: list[WorkUnit]) -> int:
+		"""Score planned work on a 1-10 scale based on heuristics.
+
+		1-3 = busywork (lint fixes, minor refactors)
+		4-6 = moderate (new features, meaningful improvements)
+		7-10 = ambitious (architecture changes, new systems, multi-file refactors)
+		"""
+		if not planned_units:
+			return 1
+
+		# Keywords that indicate low-ambition work
+		low_keywords = {
+			"lint", "typo", "format", "formatting", "whitespace", "style",
+			"cleanup", "clean up", "rename", "comment", "docstring",
+			"minor", "trivial", "nit", "fixup",
+		}
+		# Keywords that indicate high-ambition work
+		high_keywords = {
+			"architecture", "architect", "system", "framework", "engine",
+			"redesign", "rewrite", "new module", "new system", "pipeline",
+			"infrastructure", "migration", "integrate", "integration",
+			"distributed", "concurrent", "async", "multi",
+		}
+		# Keywords that indicate moderate work
+		mid_keywords = {
+			"feature", "add", "implement", "create", "build", "test",
+			"refactor", "improve", "enhance", "update", "extend", "fix",
+		}
+
+		low_count = 0
+		mid_count = 0
+		high_count = 0
+		total_files: set[str] = set()
+
+		for unit in planned_units:
+			text = f"{unit.title} {unit.description}".lower()
+
+			if any(kw in text for kw in high_keywords):
+				high_count += 1
+			elif any(kw in text for kw in low_keywords):
+				low_count += 1
+			elif any(kw in text for kw in mid_keywords):
+				mid_count += 1
+			else:
+				mid_count += 1  # default to moderate
+
+			if unit.files_hint:
+				for f in unit.files_hint.split(","):
+					f = f.strip()
+					if f:
+						total_files.add(f)
+
+		n = len(planned_units)
+
+		# Base score from unit type distribution
+		if n > 0:
+			high_ratio = high_count / n
+			low_ratio = low_count / n
+		else:
+			high_ratio = 0.0
+			low_ratio = 0.0
+
+		if high_ratio >= 0.5:
+			type_score = 8.0
+		elif high_ratio > 0:
+			type_score = 6.0
+		elif low_ratio >= 0.7:
+			type_score = 2.0
+		elif low_ratio >= 0.4:
+			type_score = 3.0
+		else:
+			type_score = 5.0
+
+		# File count modifier: more files = more ambitious
+		file_count = len(total_files)
+		if file_count >= 10:
+			file_mod = 1.5
+		elif file_count >= 5:
+			file_mod = 1.0
+		elif file_count >= 2:
+			file_mod = 0.5
+		else:
+			file_mod = 0.0
+
+		# Unit count modifier
+		if n >= 5:
+			count_mod = 1.0
+		elif n >= 3:
+			count_mod = 0.5
+		else:
+			count_mod = 0.0
+
+		raw = type_score + file_mod + count_mod
+		return max(1, min(10, round(raw)))
+
+	def should_replan(self, ambition_score: int, backlog_items: list[BacklogItem]) -> tuple[bool, str]:
+		"""Determine if the planner should be re-invoked with a more ambitious objective.
+
+		Returns True if ambition < 4 AND there are higher-priority backlog items available.
+		"""
+		if ambition_score >= 4:
+			return False, ""
+
+		if not backlog_items:
+			return False, "No higher-priority backlog items available"
+
+		# Check if any backlog item has meaningful priority (> 5.0)
+		high_priority_items = [
+			item for item in backlog_items
+			if (item.pinned_score if item.pinned_score is not None else item.priority_score) > 5.0
+		]
+
+		if not high_priority_items:
+			return False, "No high-priority backlog items found"
+
+		top = high_priority_items[0]
+		score = top.pinned_score if top.pinned_score is not None else top.priority_score
+		return True, (
+			f"Ambition score {ambition_score} is low. "
+			f"Higher-priority backlog item available: '{top.title}' (priority={score:.1f}). "
+			f"Consider replanning with a more ambitious objective."
+		)
 
 	async def propose_objective(self) -> tuple[str, str, int]:
 		"""Gather context and propose a mission objective via Claude.
