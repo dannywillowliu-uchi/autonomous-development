@@ -723,3 +723,119 @@ class TestValidateIdentifier:
 		db._migrate_epoch_columns()
 		db._migrate_token_columns()
 		db._migrate_unit_type_column()
+
+
+class TestMissionAmbitionScore:
+	def test_insert_mission_with_ambition_score(self, db: Database) -> None:
+		"""Mission with ambition_score round-trips through insert/get."""
+		m = Mission(id="m1", objective="Build new system", ambition_score=7)
+		db.insert_mission(m)
+		result = db.get_mission("m1")
+		assert result is not None
+		assert result.ambition_score == 7
+
+	def test_insert_mission_ambition_score_default(self, db: Database) -> None:
+		"""Mission without explicit ambition_score defaults to 0."""
+		m = Mission(id="m2", objective="Lint fixes")
+		db.insert_mission(m)
+		result = db.get_mission("m2")
+		assert result is not None
+		assert result.ambition_score == 0
+
+	def test_update_mission_ambition_score(self, db: Database) -> None:
+		"""ambition_score can be updated after insert."""
+		m = Mission(id="m3", objective="Refactor")
+		db.insert_mission(m)
+		m.ambition_score = 5
+		db.update_mission(m)
+		result = db.get_mission("m3")
+		assert result is not None
+		assert result.ambition_score == 5
+
+	def test_insert_mission_with_next_objective(self, db: Database) -> None:
+		"""Mission with next_objective round-trips through insert/get."""
+		m = Mission(id="m4", objective="Phase 1", next_objective="Phase 2: integrate API")
+		db.insert_mission(m)
+		result = db.get_mission("m4")
+		assert result is not None
+		assert result.next_objective == "Phase 2: integrate API"
+
+	def test_insert_mission_with_proposed_by_strategist(self, db: Database) -> None:
+		"""Mission with proposed_by_strategist=True round-trips correctly."""
+		m = Mission(id="m5", objective="Auto-proposed", proposed_by_strategist=True)
+		db.insert_mission(m)
+		result = db.get_mission("m5")
+		assert result is not None
+		assert result.proposed_by_strategist is True
+
+	def test_update_mission_all_strategy_fields(self, db: Database) -> None:
+		"""All strategy fields can be updated together."""
+		m = Mission(id="m6", objective="Initial")
+		db.insert_mission(m)
+		m.ambition_score = 8
+		m.next_objective = "Follow-up work"
+		m.proposed_by_strategist = True
+		db.update_mission(m)
+		result = db.get_mission("m6")
+		assert result is not None
+		assert result.ambition_score == 8
+		assert result.next_objective == "Follow-up work"
+		assert result.proposed_by_strategist is True
+
+	def test_migration_idempotent(self, db: Database) -> None:
+		"""Calling _migrate_mission_strategy_columns twice does not raise."""
+		db._migrate_mission_strategy_columns()
+		db._migrate_mission_strategy_columns()
+
+	def test_migration_adds_columns_to_old_schema(self) -> None:
+		"""Migration adds ambition_score/next_objective/proposed_by_strategist to a DB without them."""
+		db = Database(":memory:")
+		# Drop and recreate missions without strategy columns to simulate old schema
+		db.conn.execute("DROP TABLE missions")
+		db.conn.execute("""CREATE TABLE missions (
+			id TEXT PRIMARY KEY,
+			objective TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			started_at TEXT NOT NULL DEFAULT '',
+			finished_at TEXT,
+			total_rounds INTEGER NOT NULL DEFAULT 0,
+			total_cost_usd REAL NOT NULL DEFAULT 0.0,
+			final_score REAL NOT NULL DEFAULT 0.0,
+			stopped_reason TEXT NOT NULL DEFAULT ''
+		)""")
+		db.conn.commit()
+		# Run migration
+		db._migrate_mission_strategy_columns()
+		# Insert and read back
+		m = Mission(id="mig1", objective="Test migration", ambition_score=9)
+		db.insert_mission(m)
+		result = db.get_mission("mig1")
+		assert result is not None
+		assert result.ambition_score == 9
+		assert result.next_objective == ""
+		assert result.proposed_by_strategist is False
+		db.close()
+
+	def test_get_latest_mission_includes_ambition_score(self, db: Database) -> None:
+		"""get_latest_mission returns ambition_score correctly."""
+		db.insert_mission(Mission(
+			id="old", objective="Old", ambition_score=2,
+			started_at="2025-01-01T00:00:00",
+		))
+		db.insert_mission(Mission(
+			id="new", objective="New", ambition_score=8,
+			started_at="2025-01-02T00:00:00",
+		))
+		latest = db.get_latest_mission()
+		assert latest is not None
+		assert latest.id == "new"
+		assert latest.ambition_score == 8
+
+	def test_get_all_missions_includes_ambition_score(self, db: Database) -> None:
+		"""get_all_missions returns ambition_score for each mission."""
+		db.insert_mission(Mission(id="m1", objective="A", ambition_score=3))
+		db.insert_mission(Mission(id="m2", objective="B", ambition_score=7))
+		missions = db.get_all_missions()
+		scores = {m.id: m.ambition_score for m in missions}
+		assert scores["m1"] == 3
+		assert scores["m2"] == 7
