@@ -119,6 +119,55 @@ class TestGenerateReportBasic:
 		db.close()
 
 
+class TestGenerateReportBacklogItemIds:
+	def test_backlog_item_ids_appear_in_report(self, tmp_path: Path) -> None:
+		db = Database()
+		config = _make_config(tmp_path)
+		mission, epoch, plan = _seed_mission(db)
+
+		_seed_unit_and_handoff(
+			db, mission, epoch, plan,
+			unit_id="u010", files=["src/main.py"],
+		)
+
+		result = ContinuousMissionResult(
+			mission_id=mission.id,
+			objective=mission.objective,
+			total_units_dispatched=1,
+			total_units_merged=1,
+			wall_time_seconds=120.0,
+			backlog_item_ids=["bl_001", "bl_002", "bl_003"],
+		)
+
+		report = generate_mission_report(result, mission, db, config)
+
+		assert report["backlog_item_ids"] == ["bl_001", "bl_002", "bl_003"]
+
+		# Verify it's also written to disk
+		report_path = tmp_path / "mission_report.json"
+		written = json.loads(report_path.read_text())
+		assert written["backlog_item_ids"] == ["bl_001", "bl_002", "bl_003"]
+
+		db.close()
+
+	def test_backlog_item_ids_empty_when_none(self, tmp_path: Path) -> None:
+		db = Database()
+		config = _make_config(tmp_path)
+		mission = Mission(objective="no backlog", status="running")
+		db.insert_mission(mission)
+
+		result = ContinuousMissionResult(
+			mission_id=mission.id,
+			objective=mission.objective,
+		)
+
+		report = generate_mission_report(result, mission, db, config)
+
+		assert report["backlog_item_ids"] == []
+
+		db.close()
+
+
 class TestGenerateReportEmptyMission:
 	def test_generate_report_empty_mission(self, tmp_path: Path) -> None:
 		db = Database()
