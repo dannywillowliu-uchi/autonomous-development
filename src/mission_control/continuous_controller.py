@@ -180,6 +180,11 @@ class ContinuousController:
 					except Exception as exc:
 						logger.error("Failed to update mission objective: %s", exc)
 
+			# Pass loaded backlog items to planner for richer planning context
+			if self._planner and self._backlog_item_ids:
+				items = [self.db.get_backlog_item(bid) for bid in self._backlog_item_ids]
+				self._planner.set_backlog_items([i for i in items if i is not None])
+
 			# Initialize JSONL event stream
 			target_dir = Path(self.config.target.resolved_path)
 			self._event_stream = EventStream(target_dir / "events.jsonl")

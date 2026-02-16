@@ -7,7 +7,7 @@ import logging
 
 from mission_control.config import MissionConfig
 from mission_control.db import Database
-from mission_control.models import Epoch, Handoff, Mission, Plan, WorkUnit
+from mission_control.models import BacklogItem, Epoch, Handoff, Mission, Plan, WorkUnit
 from mission_control.recursive_planner import RecursivePlanner
 
 log = logging.getLogger(__name__)
@@ -31,6 +31,7 @@ class ContinuousPlanner:
 		self._concerns: list[str] = []
 		self._epoch_count: int = 0
 		self._unit_to_backlog: dict[str, str] = {}
+		self._backlog_items: list[BacklogItem] = []
 
 	def ingest_handoff(self, handoff: Handoff) -> None:
 		"""Accumulate discoveries and concerns from worker feedback."""
@@ -48,6 +49,10 @@ class ContinuousPlanner:
 					self._concerns.extend(conc_list)
 			except (json.JSONDecodeError, TypeError):
 				pass
+
+	def set_backlog_items(self, items: list[BacklogItem]) -> None:
+		"""Store backlog items as context for planning prompts."""
+		self._backlog_items = list(items)
 
 	@property
 	def backlog_size(self) -> int:
@@ -150,6 +155,14 @@ class ContinuousPlanner:
 				f"- {bid}" for bid in backlog_item_ids
 			)
 			enriched_context = (enriched_context + backlog_section) if enriched_context else backlog_section
+
+		# Add rich backlog item details from set_backlog_items()
+		if self._backlog_items:
+			items_section = "\nPriority backlog items for this mission:\n" + "\n".join(
+				f"- [{item.track}] {item.title} (priority={item.priority_score:.1f}): {item.description}"
+				for item in self._backlog_items
+			)
+			enriched_context = (enriched_context + items_section) if enriched_context else items_section
 
 		plan, root_node = await self._inner.plan_round(
 			objective=mission.objective,
