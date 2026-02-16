@@ -17,6 +17,7 @@ from mission_control.models import (
 	DiscoveryResult,
 	Epoch,
 	Experience,
+	ExperimentResult,
 	Handoff,
 	MergeRequest,
 	Mission,
@@ -128,6 +129,7 @@ CREATE TABLE IF NOT EXISTS work_units (
 	max_attempts INTEGER NOT NULL DEFAULT 3,
 	timeout INTEGER,
 	verification_command TEXT,
+	experiment_mode INTEGER NOT NULL DEFAULT 0,
 	FOREIGN KEY (plan_id) REFERENCES plans(id)
 );
 
@@ -402,6 +404,23 @@ CREATE TABLE IF NOT EXISTS strategic_context (
 );
 
 CREATE INDEX IF NOT EXISTS idx_strategic_context_timestamp ON strategic_context(timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS experiment_results (
+	id TEXT PRIMARY KEY,
+	work_unit_id TEXT NOT NULL,
+	epoch_id TEXT,
+	mission_id TEXT NOT NULL,
+	timestamp TEXT NOT NULL,
+	approach_count INTEGER NOT NULL DEFAULT 2,
+	comparison_report TEXT NOT NULL DEFAULT '',
+	recommended_approach TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL,
+	FOREIGN KEY (work_unit_id) REFERENCES work_units(id),
+	FOREIGN KEY (mission_id) REFERENCES missions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_experiment_results_mission ON experiment_results(mission_id);
+CREATE INDEX IF NOT EXISTS idx_experiment_results_unit ON experiment_results(work_unit_id);
 """
 
 
@@ -435,6 +454,7 @@ class Database:
 		self._migrate_backlog_table()
 		self._migrate_strategic_context()
 		self._migrate_mission_strategy_columns()
+		self._migrate_experiment_mode_column()
 
 	def _migrate_epoch_columns(self) -> None:
 		"""Add epoch_id columns to existing tables (idempotent)."""
@@ -520,6 +540,18 @@ class Database:
 				else:
 					logger.warning("Migration failed for %s.%s: %s", table, column, exc)
 					raise
+
+	def _migrate_experiment_mode_column(self) -> None:
+		"""Add experiment_mode column to work_units table (idempotent)."""
+		try:
+			self.conn.execute("ALTER TABLE work_units ADD COLUMN experiment_mode INTEGER NOT NULL DEFAULT 0")
+			logger.debug("Migration: added column work_units.experiment_mode")
+		except sqlite3.OperationalError as exc:
+			if "duplicate column name" in str(exc):
+				pass
+			else:
+				logger.warning("Migration failed for work_units.experiment_mode: %s", exc)
+				raise
 
 	def close(self) -> None:
 		logger.debug("Closing database connection")
@@ -852,8 +884,8 @@ class Database:
 			 claimed_at, heartbeat_at, started_at, finished_at,
 			 exit_code, commit_hash, output_summary, attempt, max_attempts,
 			 unit_type, timeout, verification_command,
-			 epoch_id, input_tokens, output_tokens, cost_usd)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			 epoch_id, input_tokens, output_tokens, cost_usd, experiment_mode)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				unit.id, unit.plan_id, unit.title, unit.description,
 				unit.files_hint, unit.verification_hint, unit.priority,
@@ -864,6 +896,7 @@ class Database:
 				unit.output_summary, unit.attempt, unit.max_attempts,
 				unit.unit_type, unit.timeout, unit.verification_command,
 				unit.epoch_id, unit.input_tokens, unit.output_tokens, unit.cost_usd,
+				int(unit.experiment_mode),
 			),
 		)
 		self.conn.commit()
@@ -879,7 +912,8 @@ class Database:
 			started_at=?, finished_at=?, exit_code=?, commit_hash=?,
 			output_summary=?, attempt=?, max_attempts=?,
 			unit_type=?, timeout=?, verification_command=?,
-			epoch_id=?, input_tokens=?, output_tokens=?, cost_usd=?
+			epoch_id=?, input_tokens=?, output_tokens=?, cost_usd=?,
+			experiment_mode=?
 			WHERE id=?""",
 			(
 				unit.plan_id, unit.title, unit.description, unit.files_hint,
@@ -891,6 +925,7 @@ class Database:
 				unit.output_summary, unit.attempt, unit.max_attempts,
 				unit.unit_type, unit.timeout, unit.verification_command,
 				unit.epoch_id, unit.input_tokens, unit.output_tokens, unit.cost_usd,
+				int(unit.experiment_mode),
 				unit.id,
 			),
 		)
@@ -1045,6 +1080,7 @@ class Database:
 			input_tokens=row["input_tokens"] if "input_tokens" in keys else 0,
 			output_tokens=row["output_tokens"] if "output_tokens" in keys else 0,
 			cost_usd=row["cost_usd"] if "cost_usd" in keys else 0.0,
+			experiment_mode=bool(row["experiment_mode"]) if "experiment_mode" in keys else False,
 		)
 
 	# -- Workers --
@@ -2209,4 +2245,50 @@ class Database:
 			what_worked=row["what_worked"],
 			what_failed=row["what_failed"],
 			recommended_next=row["recommended_next"],
+		)
+
+	# -- Experiment Results --
+
+	def insert_experiment_result(self, result: ExperimentResult) -> None:
+		self.conn.execute(
+			"""INSERT INTO experiment_results
+			(id, work_unit_id, epoch_id, mission_id, timestamp,
+			 approach_count, comparison_report, recommended_approach, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				result.id, result.work_unit_id, result.epoch_id,
+				result.mission_id, result.timestamp,
+				result.approach_count, result.comparison_report,
+				result.recommended_approach, result.created_at,
+			),
+		)
+		self.conn.commit()
+
+	def get_experiment_result(self, result_id: str) -> ExperimentResult | None:
+		row = self.conn.execute(
+			"SELECT * FROM experiment_results WHERE id=?", (result_id,)
+		).fetchone()
+		if row is None:
+			return None
+		return self._row_to_experiment_result(row)
+
+	def get_experiment_results_for_mission(self, mission_id: str) -> list[ExperimentResult]:
+		rows = self.conn.execute(
+			"SELECT * FROM experiment_results WHERE mission_id=? ORDER BY timestamp DESC",
+			(mission_id,),
+		).fetchall()
+		return [self._row_to_experiment_result(r) for r in rows]
+
+	@staticmethod
+	def _row_to_experiment_result(row: sqlite3.Row) -> ExperimentResult:
+		return ExperimentResult(
+			id=row["id"],
+			work_unit_id=row["work_unit_id"],
+			epoch_id=row["epoch_id"],
+			mission_id=row["mission_id"],
+			timestamp=row["timestamp"],
+			approach_count=row["approach_count"],
+			comparison_report=row["comparison_report"],
+			recommended_approach=row["recommended_approach"],
+			created_at=row["created_at"],
 		)

@@ -159,6 +159,7 @@ class WorkUnit:
 	attempt: int = 0
 	max_attempts: int = 3
 	unit_type: str = "implementation"  # implementation/research
+	experiment_mode: bool = False
 	timeout: int | None = None  # per-unit timeout override (seconds)
 	verification_command: str | None = None  # per-unit verification override
 	epoch_id: str | None = None  # continuous mode epoch
@@ -421,6 +422,24 @@ class StrategicContext:
 	what_worked: str = ""
 	what_failed: str = ""
 	recommended_next: str = ""
+
+
+# -- Experiment models --
+
+
+@dataclass
+class ExperimentResult:
+	"""Result of an experiment-mode work unit comparing multiple approaches."""
+
+	id: str = field(default_factory=_new_id)
+	work_unit_id: str = ""
+	epoch_id: str | None = None
+	mission_id: str = ""
+	timestamp: str = field(default_factory=_now_iso)
+	approach_count: int = 2
+	comparison_report: str = ""  # JSON blob
+	recommended_approach: str = ""
+	created_at: str = field(default_factory=_now_iso)
 
 
 # -- Discovery models --
