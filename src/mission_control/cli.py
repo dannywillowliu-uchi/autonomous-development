@@ -63,6 +63,10 @@ def build_parser() -> argparse.ArgumentParser:
 		"--approve-all", action="store_true",
 		help="Auto-approve all discovery items (skip checkpoint)",
 	)
+	mission.add_argument(
+		"--strategist", action="store_true",
+		help="Run strategist to propose an objective before the mission",
+	)
 
 	# mc discover
 	discover = sub.add_parser("discover", help="Run codebase discovery analysis")
@@ -365,6 +369,25 @@ def cmd_mission(args: argparse.Namespace) -> int:
 				asyncio.run(controller.run(dry_run=True))
 		return 0
 
+	# Strategist mode: propose an objective before the mission
+	if args.strategist:
+		from mission_control.strategist import Strategist
+
+		with Database(db_path) as db:
+			strategist = Strategist(config, db)
+			proposal = strategist.propose_objective()
+
+		print(f"Proposed objective: {proposal.objective}")
+		print(f"Rationale: {proposal.rationale}")
+
+		if not args.approve_all:
+			answer = input("Approve this objective? [y/N] ").strip().lower()
+			if answer != "y":
+				print("Objective rejected. Exiting.")
+				return 0
+
+		config.target.objective = proposal.objective
+
 	# Auto-discover mode: run discovery, then use results as objective
 	if args.auto_discover:
 		from mission_control.auto_discovery import DiscoveryEngine
@@ -406,6 +429,8 @@ def cmd_mission(args: argparse.Namespace) -> int:
 	with Database(db_path) as db:
 		from mission_control.continuous_controller import ContinuousController
 		controller = ContinuousController(config, db)
+		if args.strategist:
+			controller.proposed_by_strategist = True
 		result = asyncio.run(controller.run())
 		print(f"Mission: {result.mission_id}")
 		print(f"Objective met: {result.objective_met}")
