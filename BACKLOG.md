@@ -24,24 +24,17 @@ Derived from cross-system research (Feb 2026). Ordered by priority.
 
 ---
 
-## P1 (was P0): Replace LLM Evaluator with Objective Signals
+## P1 (was P0): Replace LLM Evaluator with Objective Signals -- DONE
 
-**Problem**: The evaluator spawns a full Claude session per round to assign a subjective 0.0-1.0 score. This is expensive, noisy (Round 2 scored 0.0 despite real work), and contradicts our "objective signals only" design.
+**Status**: Completed with deliberate exception.
 
-**Solution**: Replace `evaluator.py`'s LLM call with a deterministic scoring function that uses:
-- Test count delta from verification snapshots (passing tests before vs after)
-- Lint/type error delta
-- Verification pass/fail (binary)
-- Completion rate (units completed / planned)
-- Files changed count
+The old `evaluator.py` LLM call (which blocked progress with subjective 0.0-1.0 scores) has been replaced by deterministic grading in `grading.py`. However, `diff_reviewer.py` intentionally reintroduces LLM evaluation (alignment/approach/tests scoring on a 1-10 scale). This is a deliberate exception: LLM diff reviews provide richer quality signals for the planner feedback loop; they are fire-and-forget and do NOT gate merges (unlike the old evaluator which blocked progress). Reviews run asynchronously after merge, and failures are silently tolerated.
 
-**Formula**: `score = 0.4 * test_improvement + 0.2 * lint_improvement + 0.2 * completion_rate + 0.2 * no_regression`
+**Original problem** (resolved): The evaluator spawned a full Claude session per round to assign a subjective 0.0-1.0 score. This was expensive, noisy (Round 2 scored 0.0 despite real work), and contradicted our "objective signals only" design.
 
-Where each component is 0.0-1.0 based on objective deltas from SnapshotDelta.
-
-**Files**: `evaluator.py` (rewrite), `round_controller.py` (simplify evaluate step), `tests/test_evaluator.py`
-
-**Source inspiration**: Our own feedback.py already computes objective rewards -- the evaluator should use the same pattern.
+**What changed**:
+- `evaluator.py` replaced by `grading.py` (deterministic, multi-dimensional scoring)
+- `diff_reviewer.py` added as post-merge quality signal (LLM-based, fire-and-forget, non-blocking)
 
 ---
 

@@ -30,6 +30,7 @@ Before ANY commit, run:
 - `green_branch.py` -- mc/green branch lifecycle, merge_unit() for direct merge without verification
 - `heartbeat.py` -- Time-based progress monitor (checks merge activity, sends Telegram alerts)
 - `notifier.py` -- Telegram notifications (mission start/end, merge conflicts, heartbeat)
+- `diff_reviewer.py` -- Fire-and-forget LLM diff review (alignment/approach/tests scoring); feeds quality signals to planner but does NOT gate merges
 - `feedback.py` -- Worker context from past experiences
 - `overlap.py` -- File overlap detection and dependency injection
 
