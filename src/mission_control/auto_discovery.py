@@ -138,6 +138,11 @@ Analyze the codebase thoroughly and identify:
 2. **Patterns**: Key design patterns and conventions used
 3. **Gaps**: Areas where the codebase falls short of best practices
 
+Look beyond code quality gaps -- identify missing features, architectural \
+improvements, and strategic enhancements that would make this project \
+significantly more capable. Prioritize high-impact opportunities even if \
+they require significant effort.
+
 For each gap, classify it into one of these categories: {categories}.
 
 You MUST output a JSON block with an ANALYSIS_RESULT: marker:
@@ -360,7 +365,8 @@ Your job is to produce concrete, actionable improvements across these tracks:
 {track_text}
 
 For each track, identify up to {max_per_track} improvements.
-Each item must be specific and scoped enough for a single developer to complete in 1-4 hours.
+Prefer improvements with high impact, even if they require significant effort. \
+Do not self-constrain to small tasks -- architecture changes and feature additions are encouraged.
 {past_section}{handoff_section}
 ## Output Format
 

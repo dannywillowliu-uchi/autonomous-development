@@ -614,3 +614,78 @@ class TestControllerStrategistIntegration:
 
 		replan_warnings = [m for m in warning_messages if "replan" in m.lower()]
 		assert len(replan_warnings) == 0
+
+	@pytest.mark.asyncio
+	async def test_ambition_enforcement_replans_then_proceeds(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""Low ambition triggers replanning; after max_replan_attempts, proceeds anyway."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 2
+		config.continuous.min_ambition_score = 5
+		config.continuous.max_replan_attempts = 2
+		config.discovery.enabled = False
+		ctrl = ContinuousController(config, db)
+		# No strategist -- uses _score_ambition
+		ctrl._strategist = None
+
+		call_count = 0
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "",
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			plan = Plan(id=f"p{call_count}", objective="test")
+			epoch = Epoch(id=f"ep{call_count}", mission_id=mission.id, number=call_count)
+			if call_count <= 3:
+				# Always return trivial units -- low ambition
+				units = [WorkUnit(
+					id=f"wu-{call_count}", plan_id=plan.id,
+					title="Fix lint warning", priority=1,
+				)]
+				return plan, units, epoch
+			return plan, [], epoch
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			unit.status = "completed"
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
+			)
+			semaphore.release()
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
+
+		with (
+			patch.object(ctrl, "_init_components", mock_init),
+			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch.object(ctrl, "_score_ambition", return_value=2),
+			patch("mission_control.continuous_controller.EventStream"),
+		):
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
+
+		# Planner called: 1 (initial) + 2 (replans) + 1 (next loop, returns []) = 4
+		assert mock_planner.get_next_units.call_count >= 3
+		# Second and third calls should contain rejection feedback
+		for i in [1, 2]:
+			call_args = mock_planner.get_next_units.call_args_list[i]
+			feedback = call_args.kwargs.get("feedback_context", call_args.args[2] if len(call_args.args) > 2 else "")
+			assert "PREVIOUS PLAN REJECTED" in feedback

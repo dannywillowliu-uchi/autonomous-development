@@ -837,7 +837,7 @@ class ContinuousController:
 					)
 				break
 
-			# Score ambition of planned work
+			# Score ambition of planned work -- enforce minimum
 			if self._strategist:
 				ambition = self._strategist.evaluate_ambition(units)
 			else:
@@ -847,25 +847,50 @@ class ContinuousController:
 			result.ambition_score = ambition
 			logger.info("Ambition score for planned units: %d/10", ambition)
 
-			if self._strategist:
-				pending_backlog = self.db.get_pending_backlog(limit=5)
-				should_replan, replan_reason = self._strategist.should_replan(ambition, pending_backlog)
-				if should_replan:
-					logger.warning(
-						"Strategist recommends replanning: %s", replan_reason,
+			min_ambition = self.config.continuous.min_ambition_score
+			max_replans = self.config.continuous.max_replan_attempts
+			replan_attempts = 0
+
+			while ambition < min_ambition and replan_attempts < max_replans:
+				replan_attempts += 1
+				logger.warning(
+					"Ambition score %d < minimum %d (attempt %d/%d) -- replanning",
+					ambition, min_ambition, replan_attempts, max_replans,
+				)
+				rejection_feedback = (
+					f"PREVIOUS PLAN REJECTED: ambition score {ambition}/10 is below the "
+					f"minimum threshold of {min_ambition}. Plan more impactful work -- "
+					f"avoid trivial lint/quality fixes and target architecture improvements "
+					f"or feature additions instead."
+				)
+				enriched_context = feedback_context + "\n\n" + rejection_feedback
+				try:
+					plan, units, epoch = await self._planner.get_next_units(
+						mission,
+						max_units=min(num_workers, 3),
+						feedback_context=enriched_context,
 					)
-			elif ambition < 4:
-				pending_backlog = self.db.get_pending_backlog(limit=5)
-				higher_priority = [
-					item for item in pending_backlog
-					if item.priority_score > max(u.priority for u in units)
-				]
-				if higher_priority:
-					logger.warning(
-						"Ambition score %d is low and %d higher-priority backlog items exist. "
-						"Consider replanning with a more ambitious objective.",
-						ambition, len(higher_priority),
-					)
+				except Exception as exc:
+					logger.error("Replan failed: %s", exc, exc_info=True)
+					break
+
+				if not units:
+					break
+
+				if self._strategist:
+					ambition = self._strategist.evaluate_ambition(units)
+				else:
+					ambition = self._score_ambition(units)
+				self.ambition_score = ambition
+				mission.ambition_score = ambition
+				result.ambition_score = ambition
+				logger.info("Replanned ambition score: %d/10", ambition)
+
+			if ambition < min_ambition:
+				logger.info(
+					"Proceeding with ambition %d after %d replan attempts (max %d)",
+					ambition, replan_attempts, max_replans,
+				)
 
 			try:
 				self.db.update_mission(mission)

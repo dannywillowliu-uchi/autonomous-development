@@ -128,6 +128,8 @@ class ContinuousConfig:
 	chain_max_depth: int = 3
 	max_consecutive_failures: int = 3
 	failure_backoff_seconds: int = 60
+	min_ambition_score: int = 4  # replan if ambition below this
+	max_replan_attempts: int = 2  # max replans before proceeding anyway
 
 
 @dataclass
@@ -400,6 +402,7 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 	for key in (
 		"retry_base_delay_seconds", "retry_max_delay_seconds", "chain_max_depth",
 		"max_consecutive_failures", "failure_backoff_seconds",
+		"min_ambition_score", "max_replan_attempts",
 	):
 		if key in data:
 			setattr(cc, key, int(data[key]))
