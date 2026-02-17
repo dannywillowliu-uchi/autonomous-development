@@ -23,6 +23,20 @@ from mission_control.green_branch import UnitMergeResult
 from mission_control.models import BacklogItem, Epoch, Handoff, Mission, Plan, Signal, Worker, WorkUnit
 
 
+def _assert_semaphore_available(sem: asyncio.Semaphore, expected: int) -> None:
+	"""Assert the number of available permits on an asyncio.Semaphore.
+
+	For 0 expected, checks locked(). For N > 0, reads the internal _value
+	counter. Reading _value in tests is safe; the production fix was removing
+	_value *mutation* from _handle_adjust_signal.
+	"""
+	if expected == 0:
+		assert sem.locked(), "Expected 0 available permits but semaphore is not locked"
+		return
+	actual = sem._value
+	assert actual == expected, f"Expected {expected} available permits, got {actual}"
+
+
 class TestShouldStop:
 	def test_running_false(self, config: MissionConfig, db: Database) -> None:
 		ctrl = ContinuousController(config, db)
@@ -926,7 +940,7 @@ class TestHandleAdjustSemaphoreRebuild:
 		assert config.scheduler.parallel.num_workers == 6
 		assert ctrl._semaphore is not None
 		# With 0 in-flight, all 6 slots should be available
-		assert ctrl._semaphore._value == 6
+		_assert_semaphore_available(ctrl._semaphore, 6)
 
 	def test_semaphore_accounts_for_in_flight(self, config: MissionConfig, db: Database) -> None:
 		"""Semaphore rebuild should subtract in-flight count from new capacity."""
@@ -946,7 +960,7 @@ class TestHandleAdjustSemaphoreRebuild:
 		assert config.scheduler.parallel.num_workers == 5
 		assert ctrl._semaphore is not None
 		# 5 total - 3 in-flight = 2 available
-		assert ctrl._semaphore._value == 2
+		_assert_semaphore_available(ctrl._semaphore, 2)
 
 	def test_semaphore_clamps_to_zero_when_in_flight_exceeds(self, config: MissionConfig, db: Database) -> None:
 		"""When in-flight exceeds new worker count, available slots should be 0."""
@@ -966,7 +980,7 @@ class TestHandleAdjustSemaphoreRebuild:
 		assert config.scheduler.parallel.num_workers == 2
 		assert ctrl._semaphore is not None
 		# 2 total - 4 in-flight = clamped to 0
-		assert ctrl._semaphore._value == 0
+		_assert_semaphore_available(ctrl._semaphore, 0)
 
 
 
@@ -1107,7 +1121,7 @@ class TestAdjustWorkersDuringDispatch:
 		assert config.scheduler.parallel.num_workers == 4
 		# Semaphore rebuilt: 4 total - 2 in-flight = 2 available
 		assert ctrl._semaphore is not None
-		assert ctrl._semaphore._value == 2
+		_assert_semaphore_available(ctrl._semaphore, 2)
 		# Old semaphore replaced
 		assert ctrl._semaphore is not semaphore
 
@@ -2073,7 +2087,7 @@ class TestInFlightCount:
 
 		# Should use _in_flight_count (1), not len(_active_tasks) (3)
 		assert ctrl._semaphore is not None
-		assert ctrl._semaphore._value == 3  # 4 - 1
+		_assert_semaphore_available(ctrl._semaphore, 3)  # 4 - 1
 
 	def test_adjust_without_semaphore_skips_rebuild(self, config: MissionConfig, db: Database) -> None:
 		"""When semaphore is None, adjust only updates config."""
