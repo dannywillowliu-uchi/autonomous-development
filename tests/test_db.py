@@ -11,6 +11,7 @@ import pytest
 from mission_control.db import Database
 from mission_control.models import (
 	Decision,
+	DecompositionGrade,
 	Epoch,
 	MergeRequest,
 	Mission,
@@ -18,7 +19,9 @@ from mission_control.models import (
 	Session,
 	Snapshot,
 	TaskRecord,
+	TrajectoryRating,
 	UnitEvent,
+	UnitReview,
 	Worker,
 	WorkUnit,
 )
@@ -596,3 +599,129 @@ class TestMissionAmbitionScore:
 		result = db.get_mission("m3")
 		assert result is not None
 		assert result.ambition_score == 5
+
+
+class TestUnitReviews:
+	def _setup(self, db: Database) -> None:
+		db.insert_mission(Mission(id="m1", objective="Build API"))
+		db.insert_plan(Plan(id="p1", objective="Build API"))
+		db.insert_work_unit(WorkUnit(id="wu1", plan_id="p1", title="Unit 1"))
+		db.insert_work_unit(WorkUnit(id="wu2", plan_id="p1", title="Unit 2"))
+
+	def test_insert_and_get_for_mission(self, db: Database) -> None:
+		self._setup(db)
+		review = UnitReview(
+			id="r1", work_unit_id="wu1", mission_id="m1", epoch_id="ep1",
+			alignment_score=7, approach_score=8, test_score=6,
+			avg_score=7.0, rationale="Clean implementation",
+			model="sonnet", cost_usd=0.05,
+		)
+		db.insert_unit_review(review)
+		reviews = db.get_unit_reviews_for_mission("m1")
+		assert len(reviews) == 1
+		assert reviews[0].alignment_score == 7
+		assert reviews[0].approach_score == 8
+		assert reviews[0].test_score == 6
+		assert reviews[0].avg_score == 7.0
+		assert reviews[0].rationale == "Clean implementation"
+
+	def test_get_for_unit(self, db: Database) -> None:
+		self._setup(db)
+		db.insert_unit_review(UnitReview(
+			id="r1", work_unit_id="wu1", mission_id="m1",
+			alignment_score=5, approach_score=6, test_score=4, avg_score=5.0,
+		))
+		result = db.get_unit_review_for_unit("wu1")
+		assert result is not None
+		assert result.alignment_score == 5
+
+	def test_get_for_unit_nonexistent(self, db: Database) -> None:
+		self._setup(db)
+		assert db.get_unit_review_for_unit("missing") is None
+
+	def test_multiple_reviews_for_mission(self, db: Database) -> None:
+		self._setup(db)
+		db.insert_unit_review(UnitReview(
+			id="r1", work_unit_id="wu1", mission_id="m1",
+			timestamp="2025-01-01T00:00:00",
+		))
+		db.insert_unit_review(UnitReview(
+			id="r2", work_unit_id="wu2", mission_id="m1",
+			timestamp="2025-01-02T00:00:00",
+		))
+		reviews = db.get_unit_reviews_for_mission("m1")
+		assert len(reviews) == 2
+		assert reviews[0].id == "r1"  # ordered by timestamp ASC
+
+
+class TestTrajectoryRatings:
+	def _setup(self, db: Database) -> None:
+		db.insert_mission(Mission(id="m1", objective="Build API"))
+
+	def test_insert_and_get(self, db: Database) -> None:
+		self._setup(db)
+		rating = TrajectoryRating(
+			id="tr1", mission_id="m1", rating=8,
+			feedback="Great mission, ambitious scope",
+		)
+		db.insert_trajectory_rating(rating)
+		ratings = db.get_trajectory_ratings_for_mission("m1")
+		assert len(ratings) == 1
+		assert ratings[0].rating == 8
+		assert ratings[0].feedback == "Great mission, ambitious scope"
+
+	def test_multiple_ratings(self, db: Database) -> None:
+		self._setup(db)
+		db.insert_trajectory_rating(TrajectoryRating(
+			id="tr1", mission_id="m1", rating=7,
+			timestamp="2025-01-01T00:00:00",
+		))
+		db.insert_trajectory_rating(TrajectoryRating(
+			id="tr2", mission_id="m1", rating=9,
+			timestamp="2025-01-02T00:00:00",
+		))
+		ratings = db.get_trajectory_ratings_for_mission("m1")
+		assert len(ratings) == 2
+		assert ratings[0].id == "tr2"  # ordered by timestamp DESC (most recent first)
+
+	def test_empty_ratings(self, db: Database) -> None:
+		self._setup(db)
+		assert db.get_trajectory_ratings_for_mission("m1") == []
+
+
+class TestDecompositionGrades:
+	def _setup(self, db: Database) -> None:
+		db.insert_mission(Mission(id="m1", objective="Build API"))
+
+	def test_insert_and_get(self, db: Database) -> None:
+		self._setup(db)
+		grade = DecompositionGrade(
+			id="dg1", plan_id="p1", epoch_id="ep1", mission_id="m1",
+			avg_review_score=7.2, retry_rate=0.2, overlap_rate=0.1,
+			completion_rate=1.0, composite_score=0.72, unit_count=5,
+		)
+		db.insert_decomposition_grade(grade)
+		grades = db.get_decomposition_grades_for_mission("m1")
+		assert len(grades) == 1
+		assert grades[0].avg_review_score == 7.2
+		assert grades[0].retry_rate == 0.2
+		assert grades[0].composite_score == 0.72
+		assert grades[0].unit_count == 5
+
+	def test_multiple_grades(self, db: Database) -> None:
+		self._setup(db)
+		db.insert_decomposition_grade(DecompositionGrade(
+			id="dg1", plan_id="p1", epoch_id="ep1", mission_id="m1",
+			timestamp="2025-01-01T00:00:00", composite_score=0.6,
+		))
+		db.insert_decomposition_grade(DecompositionGrade(
+			id="dg2", plan_id="p2", epoch_id="ep2", mission_id="m1",
+			timestamp="2025-01-02T00:00:00", composite_score=0.8,
+		))
+		grades = db.get_decomposition_grades_for_mission("m1")
+		assert len(grades) == 2
+		assert grades[0].id == "dg2"  # ordered by timestamp DESC
+
+	def test_empty_grades(self, db: Database) -> None:
+		self._setup(db)
+		assert db.get_decomposition_grades_for_mission("m1") == []

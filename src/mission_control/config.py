@@ -231,11 +231,21 @@ class DeployConfig:
 
 
 @dataclass
+class ReviewConfig:
+	"""LLM diff review settings."""
+
+	enabled: bool = True
+	model: str = "sonnet"
+	budget_per_review_usd: float = 0.10
+
+
+@dataclass
 class MissionConfig:
 	"""Top-level mission-control configuration."""
 
 	target: TargetConfig = field(default_factory=TargetConfig)
 	scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+	review: ReviewConfig = field(default_factory=ReviewConfig)
 	rounds: RoundsConfig = field(default_factory=RoundsConfig)
 	continuous: ContinuousConfig = field(default_factory=ContinuousConfig)
 	planner: PlannerConfig = field(default_factory=PlannerConfig)
@@ -477,6 +487,17 @@ def _build_notifications(data: dict[str, Any]) -> NotificationConfig:
 	return nc
 
 
+def _build_review(data: dict[str, Any]) -> ReviewConfig:
+	rc = ReviewConfig()
+	if "enabled" in data:
+		rc.enabled = bool(data["enabled"])
+	if "model" in data:
+		rc.model = str(data["model"])
+	if "budget_per_review_usd" in data:
+		rc.budget_per_review_usd = float(data["budget_per_review_usd"])
+	return rc
+
+
 def _build_deploy(data: dict[str, Any]) -> DeployConfig:
 	dc = DeployConfig()
 	if "enabled" in data:
@@ -552,6 +573,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.notifications = _build_notifications(data["notifications"])
 	if "dashboard" in data:
 		mc.dashboard = _build_dashboard(data["dashboard"])
+	if "review" in data:
+		mc.review = _build_review(data["review"])
 	if "deploy" in data:
 		mc.deploy = _build_deploy(data["deploy"])
 	# Allow env vars as fallback for Telegram credentials

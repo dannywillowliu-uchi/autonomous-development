@@ -68,6 +68,7 @@ class ContinuousPlanner:
 		max_units: int = 3,
 		feedback_context: str = "",
 		backlog_item_ids: list[str] | None = None,
+		decomposition_feedback: str = "",
 	) -> tuple[Plan, list[WorkUnit], Epoch]:
 		"""Return next work units from backlog, replanning if needed.
 
@@ -79,11 +80,20 @@ class ContinuousPlanner:
 			max_units: Maximum units to return.
 			feedback_context: Context from recent worker feedback.
 			backlog_item_ids: Optional backlog item IDs being worked on.
+			decomposition_feedback: Quality feedback from previous epoch grading.
 
 		Returns:
 			(plan, units, epoch) -- the plan, selected work units, and the epoch.
 		"""
 		min_size = self._config.continuous.backlog_min_size
+
+		# Merge decomposition feedback into the feedback context
+		if decomposition_feedback:
+			feedback_context = (
+				(feedback_context + "\n\n" + decomposition_feedback)
+				if feedback_context
+				else decomposition_feedback
+			)
 
 		if len(self._backlog) < min_size:
 			# Need to replan

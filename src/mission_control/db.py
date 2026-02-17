@@ -13,6 +13,7 @@ from typing import Any, Generator, Sequence
 from mission_control.models import (
 	BacklogItem,
 	Decision,
+	DecompositionGrade,
 	DiscoveryItem,
 	DiscoveryResult,
 	Epoch,
@@ -31,7 +32,9 @@ from mission_control.models import (
 	Snapshot,
 	StrategicContext,
 	TaskRecord,
+	TrajectoryRating,
 	UnitEvent,
+	UnitReview,
 	Worker,
 	WorkUnit,
 )
@@ -421,6 +424,54 @@ CREATE TABLE IF NOT EXISTS experiment_results (
 
 CREATE INDEX IF NOT EXISTS idx_experiment_results_mission ON experiment_results(mission_id);
 CREATE INDEX IF NOT EXISTS idx_experiment_results_unit ON experiment_results(work_unit_id);
+
+CREATE TABLE IF NOT EXISTS unit_reviews (
+	id TEXT PRIMARY KEY,
+	work_unit_id TEXT NOT NULL,
+	mission_id TEXT NOT NULL,
+	epoch_id TEXT NOT NULL DEFAULT '',
+	timestamp TEXT NOT NULL,
+	alignment_score INTEGER NOT NULL DEFAULT 0,
+	approach_score INTEGER NOT NULL DEFAULT 0,
+	test_score INTEGER NOT NULL DEFAULT 0,
+	avg_score REAL NOT NULL DEFAULT 0.0,
+	rationale TEXT NOT NULL DEFAULT '',
+	model TEXT NOT NULL DEFAULT '',
+	cost_usd REAL NOT NULL DEFAULT 0.0,
+	FOREIGN KEY (work_unit_id) REFERENCES work_units(id),
+	FOREIGN KEY (mission_id) REFERENCES missions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_unit_reviews_mission ON unit_reviews(mission_id);
+CREATE INDEX IF NOT EXISTS idx_unit_reviews_unit ON unit_reviews(work_unit_id);
+
+CREATE TABLE IF NOT EXISTS trajectory_ratings (
+	id TEXT PRIMARY KEY,
+	mission_id TEXT NOT NULL,
+	rating INTEGER NOT NULL DEFAULT 0,
+	feedback TEXT NOT NULL DEFAULT '',
+	timestamp TEXT NOT NULL,
+	FOREIGN KEY (mission_id) REFERENCES missions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trajectory_ratings_mission ON trajectory_ratings(mission_id);
+
+CREATE TABLE IF NOT EXISTS decomposition_grades (
+	id TEXT PRIMARY KEY,
+	plan_id TEXT NOT NULL DEFAULT '',
+	epoch_id TEXT NOT NULL DEFAULT '',
+	mission_id TEXT NOT NULL,
+	timestamp TEXT NOT NULL,
+	avg_review_score REAL NOT NULL DEFAULT 0.0,
+	retry_rate REAL NOT NULL DEFAULT 0.0,
+	overlap_rate REAL NOT NULL DEFAULT 0.0,
+	completion_rate REAL NOT NULL DEFAULT 0.0,
+	composite_score REAL NOT NULL DEFAULT 0.0,
+	unit_count INTEGER NOT NULL DEFAULT 0,
+	FOREIGN KEY (mission_id) REFERENCES missions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_decomposition_grades_mission ON decomposition_grades(mission_id);
 """
 
 
@@ -2291,4 +2342,129 @@ class Database:
 			comparison_report=row["comparison_report"],
 			recommended_approach=row["recommended_approach"],
 			created_at=row["created_at"],
+		)
+
+	# -- Unit Reviews --
+
+	def insert_unit_review(self, review: UnitReview) -> None:
+		self.conn.execute(
+			"""INSERT INTO unit_reviews
+			(id, work_unit_id, mission_id, epoch_id, timestamp,
+			 alignment_score, approach_score, test_score, avg_score,
+			 rationale, model, cost_usd)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				review.id, review.work_unit_id, review.mission_id,
+				review.epoch_id, review.timestamp,
+				review.alignment_score, review.approach_score,
+				review.test_score, review.avg_score,
+				review.rationale, review.model, review.cost_usd,
+			),
+		)
+		self.conn.commit()
+
+	def get_unit_reviews_for_mission(self, mission_id: str) -> list[UnitReview]:
+		rows = self.conn.execute(
+			"SELECT * FROM unit_reviews WHERE mission_id=? ORDER BY timestamp ASC",
+			(mission_id,),
+		).fetchall()
+		return [self._row_to_unit_review(r) for r in rows]
+
+	def get_unit_review_for_unit(self, work_unit_id: str) -> UnitReview | None:
+		row = self.conn.execute(
+			"SELECT * FROM unit_reviews WHERE work_unit_id=? ORDER BY timestamp DESC LIMIT 1",
+			(work_unit_id,),
+		).fetchone()
+		if row is None:
+			return None
+		return self._row_to_unit_review(row)
+
+	@staticmethod
+	def _row_to_unit_review(row: sqlite3.Row) -> UnitReview:
+		return UnitReview(
+			id=row["id"],
+			work_unit_id=row["work_unit_id"],
+			mission_id=row["mission_id"],
+			epoch_id=row["epoch_id"],
+			timestamp=row["timestamp"],
+			alignment_score=row["alignment_score"],
+			approach_score=row["approach_score"],
+			test_score=row["test_score"],
+			avg_score=row["avg_score"],
+			rationale=row["rationale"],
+			model=row["model"],
+			cost_usd=row["cost_usd"],
+		)
+
+	# -- Trajectory Ratings --
+
+	def insert_trajectory_rating(self, rating: TrajectoryRating) -> None:
+		self.conn.execute(
+			"""INSERT INTO trajectory_ratings
+			(id, mission_id, rating, feedback, timestamp)
+			VALUES (?, ?, ?, ?, ?)""",
+			(
+				rating.id, rating.mission_id, rating.rating,
+				rating.feedback, rating.timestamp,
+			),
+		)
+		self.conn.commit()
+
+	def get_trajectory_ratings_for_mission(self, mission_id: str) -> list[TrajectoryRating]:
+		rows = self.conn.execute(
+			"SELECT * FROM trajectory_ratings WHERE mission_id=? ORDER BY timestamp DESC",
+			(mission_id,),
+		).fetchall()
+		return [self._row_to_trajectory_rating(r) for r in rows]
+
+	@staticmethod
+	def _row_to_trajectory_rating(row: sqlite3.Row) -> TrajectoryRating:
+		return TrajectoryRating(
+			id=row["id"],
+			mission_id=row["mission_id"],
+			rating=row["rating"],
+			feedback=row["feedback"],
+			timestamp=row["timestamp"],
+		)
+
+	# -- Decomposition Grades --
+
+	def insert_decomposition_grade(self, grade: DecompositionGrade) -> None:
+		self.conn.execute(
+			"""INSERT INTO decomposition_grades
+			(id, plan_id, epoch_id, mission_id, timestamp,
+			 avg_review_score, retry_rate, overlap_rate,
+			 completion_rate, composite_score, unit_count)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				grade.id, grade.plan_id, grade.epoch_id,
+				grade.mission_id, grade.timestamp,
+				grade.avg_review_score, grade.retry_rate,
+				grade.overlap_rate, grade.completion_rate,
+				grade.composite_score, grade.unit_count,
+			),
+		)
+		self.conn.commit()
+
+	def get_decomposition_grades_for_mission(self, mission_id: str) -> list[DecompositionGrade]:
+		rows = self.conn.execute(
+			"SELECT * FROM decomposition_grades WHERE mission_id=? ORDER BY timestamp DESC",
+			(mission_id,),
+		).fetchall()
+		return [self._row_to_decomposition_grade(r) for r in rows]
+
+	@staticmethod
+	def _row_to_decomposition_grade(row: sqlite3.Row) -> DecompositionGrade:
+		return DecompositionGrade(
+			id=row["id"],
+			plan_id=row["plan_id"],
+			epoch_id=row["epoch_id"],
+			mission_id=row["mission_id"],
+			timestamp=row["timestamp"],
+			avg_review_score=row["avg_review_score"],
+			retry_rate=row["retry_rate"],
+			overlap_rate=row["overlap_rate"],
+			completion_rate=row["completion_rate"],
+			composite_score=row["composite_score"],
+			unit_count=row["unit_count"],
 		)

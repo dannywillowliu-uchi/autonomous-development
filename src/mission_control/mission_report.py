@@ -49,6 +49,40 @@ def generate_mission_report(
 		if isinstance(files, list):
 			all_files.update(f for f in files if isinstance(f, str))
 
+	# Collect quality data
+	reviews = db.get_unit_reviews_for_mission(mission.id)
+	review_data = [
+		{
+			"work_unit_id": r.work_unit_id,
+			"alignment": r.alignment_score,
+			"approach": r.approach_score,
+			"tests": r.test_score,
+			"avg": r.avg_score,
+			"rationale": r.rationale,
+		}
+		for r in reviews
+	]
+
+	ratings = db.get_trajectory_ratings_for_mission(mission.id)
+	rating_data = [
+		{"rating": r.rating, "feedback": r.feedback, "timestamp": r.timestamp}
+		for r in ratings
+	]
+
+	grades = db.get_decomposition_grades_for_mission(mission.id)
+	grade_data = [
+		{
+			"epoch_id": g.epoch_id,
+			"composite_score": g.composite_score,
+			"avg_review_score": g.avg_review_score,
+			"retry_rate": g.retry_rate,
+			"overlap_rate": g.overlap_rate,
+			"completion_rate": g.completion_rate,
+			"unit_count": g.unit_count,
+		}
+		for g in grades
+	]
+
 	report: dict[str, Any] = {
 		"objective": mission.objective,
 		"outcome": {
@@ -65,6 +99,9 @@ def generate_mission_report(
 		"verification_passed": result.final_verification_passed,
 		"verification_output": result.final_verification_output,
 		"backlog_item_ids": result.backlog_item_ids or [],
+		"unit_reviews": review_data,
+		"trajectory_ratings": rating_data,
+		"decomposition_grades": grade_data,
 		"timeline": timeline,
 	}
 

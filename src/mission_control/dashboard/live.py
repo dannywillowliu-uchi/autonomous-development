@@ -17,7 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from mission_control.db import Database
-from mission_control.models import Signal
+from mission_control.models import Signal, TrajectoryRating
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,14 @@ _SIGNAL_PAYLOAD_REQUIREMENTS: dict[str, set[str]] = {
 
 _RATE_LIMIT_MAX = 10
 _RATE_LIMIT_WINDOW = 60  # seconds
+
+
+class RatingRequest(BaseModel):
+	"""Request body for submitting a trajectory rating."""
+
+	mission_id: str
+	rating: int
+	feedback: str = ""
 
 
 class SignalRequest(BaseModel):
@@ -203,6 +211,41 @@ class LiveDashboard:
 		async def get_history() -> list[dict[str, Any]]:
 			return self._build_history()
 
+		@self.app.post("/api/rating", dependencies=[Depends(verify_token)])
+		async def submit_rating(body: RatingRequest) -> dict[str, str]:
+			if not 1 <= body.rating <= 10:
+				raise HTTPException(
+					status_code=422,
+					detail="Rating must be between 1 and 10",
+				)
+			mission = self.db.get_mission(body.mission_id)
+			if mission is None:
+				raise HTTPException(status_code=404, detail="Mission not found")
+			rating = TrajectoryRating(
+				mission_id=body.mission_id,
+				rating=body.rating,
+				feedback=body.feedback,
+			)
+			self.db.insert_trajectory_rating(rating)
+			return {"status": "ok", "rating_id": rating.id}
+
+		@self.app.get(
+			"/api/ratings/{mission_id}",
+			dependencies=[Depends(verify_token)],
+		)
+		async def get_ratings(mission_id: str) -> list[dict[str, Any]]:
+			ratings = self.db.get_trajectory_ratings_for_mission(mission_id)
+			return [
+				{
+					"id": r.id,
+					"mission_id": r.mission_id,
+					"rating": r.rating,
+					"feedback": r.feedback,
+					"timestamp": r.timestamp,
+				}
+				for r in ratings
+			]
+
 	async def _broadcast_loop(self) -> None:
 		"""Poll DB every 1s, push snapshot to all connected clients."""
 		while True:
@@ -235,6 +278,25 @@ class LiveDashboard:
 		events = self.db.get_unit_events_for_mission(mission.id, limit=100)
 		workers = self.db.get_all_workers()
 
+		# Include trajectory ratings
+		ratings = self.db.get_trajectory_ratings_for_mission(mission.id)
+		rating_data = [
+			{"rating": r.rating, "feedback": r.feedback, "timestamp": r.timestamp}
+			for r in ratings
+		]
+
+		# Include per-unit review scores
+		reviews = self.db.get_unit_reviews_for_mission(mission.id)
+		review_by_unit: dict[str, dict[str, Any]] = {}
+		for r in reviews:
+			review_by_unit[r.work_unit_id] = {
+				"alignment": r.alignment_score,
+				"approach": r.approach_score,
+				"tests": r.test_score,
+				"avg": r.avg_score,
+				"rationale": r.rationale[:200],
+			}
+
 		return {
 			"mission": _serialize_mission(mission),
 			"units": [_serialize_unit(u) for u in units],
@@ -243,6 +305,8 @@ class LiveDashboard:
 			"workers": [_serialize_worker(w) for w in workers],
 			"summary": self._build_summary(mission),
 			"history": self._build_history(),
+			"ratings": rating_data,
+			"unit_reviews": review_by_unit,
 		}
 
 	def _build_plan_tree(self, mission_id: str) -> list[dict[str, Any]]:
@@ -311,6 +375,8 @@ class LiveDashboard:
 					duration = (end - start).total_seconds()
 				except (ValueError, TypeError):
 					pass
+			ratings = self.db.get_trajectory_ratings_for_mission(m.id)
+			latest_rating = ratings[0].rating if ratings else None
 			result.append({
 				"id": m.id,
 				"objective": m.objective,
@@ -322,6 +388,7 @@ class LiveDashboard:
 				"units_failed": units.get("failed", 0),
 				"total_cost_usd": m.total_cost_usd,
 				"stopped_reason": m.stopped_reason,
+				"trajectory_rating": latest_rating,
 			})
 		return result
 

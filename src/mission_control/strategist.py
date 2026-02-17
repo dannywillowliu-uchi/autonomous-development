@@ -27,6 +27,7 @@ def _build_strategy_prompt(
 	past_missions: str,
 	strategic_context: str,
 	pending_backlog: str,
+	human_preferences: str = "",
 ) -> str:
 	return f"""You are a strategic engineering lead for an autonomous development system.
 
@@ -48,6 +49,9 @@ Your job: propose the SINGLE most impactful mission objective to work on next.
 
 ### Priority Queue (pending backlog items)
 {pending_backlog or "(No pending backlog items)"}
+
+### Human Quality Signals
+{human_preferences or "(No human ratings available yet)"}
 
 ## Instructions
 
@@ -108,12 +112,21 @@ class Strategist:
 		missions = self.db.get_all_missions(limit=10)
 		if not missions:
 			return ""
-		return "\n".join(
-			f"- [{m.status}] {m.objective[:120]} "
-			f"(rounds={m.total_rounds}, score={m.final_score}, "
-			f"reason={m.stopped_reason or 'n/a'})"
-			for m in missions
-		)
+		lines = []
+		for m in missions:
+			rating_str = ""
+			try:
+				ratings = self.db.get_trajectory_ratings_for_mission(m.id)
+				if ratings:
+					rating_str = f", human_rating={ratings[0].rating}/10"
+			except Exception:
+				pass
+			lines.append(
+				f"- [{m.status}] {m.objective[:120]} "
+				f"(rounds={m.total_rounds}, score={m.final_score}, "
+				f"reason={m.stopped_reason or 'n/a'}{rating_str})"
+			)
+		return "\n".join(lines)
 
 	def _get_strategic_context(self) -> str:
 		if not hasattr(self.db, "get_strategic_context"):
@@ -337,6 +350,36 @@ class Strategist:
 
 		return output
 
+	def _get_human_preferences(self) -> str:
+		"""Build a human preference signals section from trajectory ratings."""
+		try:
+			missions = self.db.get_all_missions(limit=20)
+			high_rated: list[str] = []
+			low_rated: list[str] = []
+			for m in missions:
+				ratings = self.db.get_trajectory_ratings_for_mission(m.id)
+				if not ratings:
+					continue
+				r = ratings[0]  # most recent
+				label = f"\"{m.objective[:80]}\" ({r.rating}/10)"
+				if r.rating >= 7:
+					high_rated.append(label)
+				elif r.rating <= 4:
+					low_rated.append(label)
+			if not high_rated and not low_rated:
+				return ""
+			lines = []
+			if high_rated:
+				lines.append("Highly-rated: " + ", ".join(high_rated[:5]))
+			if low_rated:
+				lines.append("Low-rated: " + ", ".join(low_rated[:5]))
+			lines.append(
+				"Prefer work similar to highly-rated missions."
+			)
+			return "\n".join(lines)
+		except Exception:
+			return ""
+
 	async def propose_objective(self) -> tuple[str, str, int]:
 		"""Gather context and propose a mission objective via Claude.
 
@@ -349,6 +392,7 @@ class Strategist:
 			past_missions=self._get_past_missions(),
 			strategic_context=self._get_strategic_context(),
 			pending_backlog=self._get_pending_backlog(),
+			human_preferences=self._get_human_preferences(),
 		)
 		output = await self._invoke_llm(prompt, "strategist")
 		return self._parse_strategy_output(output)

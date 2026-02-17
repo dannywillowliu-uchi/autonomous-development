@@ -468,6 +468,52 @@ class BacklogItem:
 
 
 @dataclass
+class UnitReview:
+	"""LLM review of a merged work unit's code changes."""
+
+	id: str = field(default_factory=_new_id)
+	work_unit_id: str = ""
+	mission_id: str = ""
+	epoch_id: str = ""
+	timestamp: str = field(default_factory=_now_iso)
+	alignment_score: int = 0  # 1-10: how well the diff aligns with the objective
+	approach_score: int = 0  # 1-10: quality of the implementation approach
+	test_score: int = 0  # 1-10: meaningfulness of the tests
+	avg_score: float = 0.0
+	rationale: str = ""
+	model: str = ""
+	cost_usd: float = 0.0
+
+
+@dataclass
+class TrajectoryRating:
+	"""Human rating of a mission's overall trajectory."""
+
+	id: str = field(default_factory=_new_id)
+	mission_id: str = ""
+	rating: int = 0  # 1-10
+	feedback: str = ""
+	timestamp: str = field(default_factory=_now_iso)
+
+
+@dataclass
+class DecompositionGrade:
+	"""Algorithmic grading of a planner's decomposition quality."""
+
+	id: str = field(default_factory=_new_id)
+	plan_id: str = ""
+	epoch_id: str = ""
+	mission_id: str = ""
+	timestamp: str = field(default_factory=_now_iso)
+	avg_review_score: float = 0.0
+	retry_rate: float = 0.0
+	overlap_rate: float = 0.0
+	completion_rate: float = 0.0
+	composite_score: float = 0.0
+	unit_count: int = 0
+
+
+@dataclass
 class DiscoveryItem:
 	"""A single improvement discovered during codebase analysis."""
 

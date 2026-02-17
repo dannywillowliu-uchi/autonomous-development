@@ -15,8 +15,10 @@ from mission_control.backends import LocalBackend, SSHBackend, WorkerBackend
 from mission_control.config import ContinuousConfig, MissionConfig
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
+from mission_control.diff_reviewer import DiffReviewer
 from mission_control.event_stream import EventStream
 from mission_control.feedback import get_worker_context
+from mission_control.grading import compute_decomposition_grade, format_decomposition_feedback
 from mission_control.green_branch import GreenBranchManager
 from mission_control.heartbeat import Heartbeat
 from mission_control.models import (
@@ -104,6 +106,7 @@ class ContinuousController:
 		self.ambition_score: float = 0.0
 		self.proposed_by_strategist: bool = False
 		self._strategist: Strategist | None = None
+		self._diff_reviewer: DiffReviewer = DiffReviewer(config)
 
 	async def run(self, dry_run: bool = False) -> ContinuousMissionResult:
 		"""Run the continuous mission loop until objective met or stopping condition."""
@@ -1190,6 +1193,15 @@ class ContinuousController:
 								output_tokens=unit.output_tokens,
 								cost_usd=unit.cost_usd,
 							)
+						# Fire-and-forget LLM diff review
+						if self.config.review.enabled:
+							task = asyncio.create_task(
+								self._review_merged_unit(
+									unit, workspace, mission, epoch,
+								),
+							)
+							self._active_tasks.add(task)
+							task.add_done_callback(self._active_tasks.discard)
 					else:
 						logger.warning(
 							"Unit %s failed merge: %s",
@@ -1353,6 +1365,48 @@ class ContinuousController:
 				self.db.update_mission(mission)
 			except Exception:
 				pass
+
+	async def _review_merged_unit(
+		self,
+		unit: WorkUnit,
+		workspace: str,
+		mission: Mission,
+		epoch: Epoch,
+	) -> None:
+		"""Fire-and-forget: review a merged unit's diff via LLM."""
+		try:
+			# Get the diff from the green branch
+			green_branch = self.config.green_branch.green_branch
+			diff_cmd = ["git", "diff", f"{green_branch}~1..{green_branch}", "--", "."]
+			proc = await asyncio.create_subprocess_exec(
+				*diff_cmd,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				cwd=str(self.config.target.resolved_path),
+			)
+			stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+			diff = stdout.decode() if stdout else ""
+
+			if not diff.strip():
+				logger.debug("No diff for unit %s, skipping review", unit.id)
+				return
+
+			review = await self._diff_reviewer.review_unit(
+				unit=unit,
+				diff=diff,
+				objective=mission.objective,
+				mission_id=mission.id,
+				epoch_id=epoch.id,
+			)
+			if review:
+				await self.db.locked_call("insert_unit_review", review)
+				logger.info(
+					"Review for unit %s: alignment=%d approach=%d tests=%d avg=%.1f",
+					unit.id, review.alignment_score, review.approach_score,
+					review.test_score, review.avg_score,
+				)
+		except Exception as exc:
+			logger.warning("Review failed for unit %s: %s", unit.id, exc)
 
 	def _schedule_retry(
 		self,
@@ -1795,6 +1849,67 @@ class ContinuousController:
 			f"\nMerge stats: {merged_count} merged, {failed_count} failed "
 			f"(of last {len(handoffs)} units)",
 		)
+
+		# Append quality review aggregates
+		try:
+			reviews = self.db.get_unit_reviews_for_mission(mission_id)
+			if reviews:
+				# Get reviews from the most recent epoch
+				recent = reviews[-10:]
+				avg_align = sum(r.alignment_score for r in recent) / len(recent)
+				avg_approach = sum(r.approach_score for r in recent) / len(recent)
+				avg_tests = sum(r.test_score for r in recent) / len(recent)
+				lines.append(
+					f"\n## Quality Review Scores (last {len(recent)} units)"
+				)
+				lines.append(
+					f"Average: alignment={avg_align:.1f}, "
+					f"approach={avg_approach:.1f}, tests={avg_tests:.1f}"
+				)
+				# Identify weakest area
+				scores = {
+					"objective alignment": avg_align,
+					"approach quality": avg_approach,
+					"test meaningfulness": avg_tests,
+				}
+				weakest = min(scores, key=scores.get)  # type: ignore[arg-type]
+				if scores[weakest] < 7.0:
+					lines.append(
+						f"Weak area: {weakest} -- prioritize improvement here"
+					)
+		except Exception:
+			pass
+
+		# Compute decomposition grade for the most recent completed epoch
+		try:
+			epochs = self.db.get_epochs_for_mission(mission_id)
+			if epochs:
+				latest_epoch = epochs[-1]
+				all_units = self.db.get_work_units_for_mission(mission_id)
+				epoch_units = [u for u in all_units if u.epoch_id == latest_epoch.id]
+				resolved = all(
+					u.status in ("completed", "failed") for u in epoch_units
+				)
+				if epoch_units and resolved:
+					epoch_reviews = self.db.get_unit_reviews_for_mission(mission_id)
+					epoch_reviews = [
+						r for r in epoch_reviews if r.epoch_id == latest_epoch.id
+					]
+					grade = compute_decomposition_grade(
+						epoch_units, epoch_reviews,
+						epoch_id=latest_epoch.id, mission_id=mission_id,
+					)
+					# Store grade if not already persisted
+					existing = self.db.get_decomposition_grades_for_mission(
+						mission_id,
+					)
+					if not any(g.epoch_id == latest_epoch.id for g in existing):
+						self.db.insert_decomposition_grade(grade)
+					lines.append("")
+					lines.append(format_decomposition_feedback(grade))
+		except Exception:
+			pass
+
 		return "\n".join(lines)
 
 	def _update_mission_state(self, mission: Mission) -> None:
@@ -1868,6 +1983,30 @@ class ContinuousController:
 			lines.append("## Files Modified")
 			lines.append(", ".join(sorted(all_files)))
 			lines.append("")
+
+		# Quality Reviews section
+		try:
+			reviews = self.db.get_unit_reviews_for_mission(mission.id)
+			if reviews:
+				lines.append("## Quality Reviews")
+				for r in reviews[-20:]:  # show last 20
+					# Look up unit title
+					try:
+						wu = self.db.get_work_unit(r.work_unit_id)
+						title = wu.title[:40] if wu else r.work_unit_id[:8]
+					except Exception:
+						title = r.work_unit_id[:8]
+					rationale_short = r.rationale[:80] if r.rationale else ""
+					lines.append(
+						f"- {r.work_unit_id[:8]} ({title}): "
+						f"alignment={r.alignment_score} approach={r.approach_score} "
+						f"tests={r.test_score} avg={r.avg_score}"
+					)
+					if rationale_short:
+						lines.append(f"  \"{rationale_short}\"")
+				lines.append("")
+		except Exception:
+			pass
 
 		lines.extend([
 			"## Remaining",
