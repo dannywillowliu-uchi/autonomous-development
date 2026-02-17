@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytest.importorskip("mcp", reason="mcp package not installed")
+
 from mission_control.db import Database
 from mission_control.models import Mission
 

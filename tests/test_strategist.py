@@ -252,7 +252,7 @@ class TestProposeObjective:
 		mock_proc.returncode = 1
 
 		with patch("mission_control.strategist.asyncio.create_subprocess_exec", return_value=mock_proc):
-			with pytest.raises(RuntimeError, match="Strategist subprocess failed"):
+			with pytest.raises(RuntimeError, match="strategist subprocess failed"):
 				await s.propose_objective()
 
 	@pytest.mark.asyncio

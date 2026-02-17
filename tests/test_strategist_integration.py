@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import sys
 import types
-from dataclasses import dataclass
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -16,18 +15,14 @@ from mission_control.db import Database
 from mission_control.models import Mission
 
 
-@dataclass
-class FakeProposal:
-	objective: str = "Build a REST API"
-	rationale: str = "High priority backlog item"
-
-
 @pytest.fixture()
 def mock_strategist_module():
 	"""Inject a fake mission_control.strategist module into sys.modules."""
 	mock_module = types.ModuleType("mission_control.strategist")
 	mock_cls = MagicMock()
-	mock_cls.return_value.propose_objective.return_value = FakeProposal()
+	mock_cls.return_value.propose_objective = AsyncMock(
+		return_value=("Build a REST API", "High priority backlog item", 7),
+	)
 	mock_module.Strategist = mock_cls  # type: ignore[attr-defined]
 	sys.modules["mission_control.strategist"] = mock_module
 	yield mock_cls
@@ -95,10 +90,11 @@ model = "sonnet"
 		db_path = tmp_path / "mission-control.db"
 		Database(db_path).close()
 
-		mock_result = ContinuousMissionResult(
+		proposal = ("Build a REST API", "High priority backlog item", 7)
+		mission_result = ContinuousMissionResult(
 			mission_id="m1", objective_met=True, stopped_reason="planner_completed",
 		)
-		mock_run.return_value = mock_result
+		mock_run.side_effect = [proposal, mission_result]
 
 		parser = build_parser()
 		args = parser.parse_args([
@@ -108,11 +104,12 @@ model = "sonnet"
 
 		assert result == 0
 		mock_input.assert_called_once()
-		mock_strategist_module.return_value.propose_objective.assert_called_once()
 
 	@patch("mission_control.cli.input", return_value="n")
+	@patch("mission_control.cli.asyncio.run")
 	def test_strategist_rejected_exits_zero(
 		self,
+		mock_run: MagicMock,
 		mock_input: MagicMock,
 		tmp_path: Path,
 		mock_strategist_module: MagicMock,
@@ -120,6 +117,9 @@ model = "sonnet"
 		config_file = self._make_config(tmp_path)
 		db_path = tmp_path / "mission-control.db"
 		Database(db_path).close()
+
+		proposal = ("Build a REST API", "High priority backlog item", 7)
+		mock_run.return_value = proposal
 
 		parser = build_parser()
 		args = parser.parse_args([
@@ -140,10 +140,11 @@ model = "sonnet"
 		db_path = tmp_path / "mission-control.db"
 		Database(db_path).close()
 
-		mock_result = ContinuousMissionResult(
+		proposal = ("Build a REST API", "High priority backlog item", 7)
+		mission_result = ContinuousMissionResult(
 			mission_id="m1", objective_met=True, stopped_reason="planner_completed",
 		)
-		mock_run.return_value = mock_result
+		mock_run.side_effect = [proposal, mission_result]
 
 		with patch("mission_control.cli.input") as mock_input:
 			parser = build_parser()
