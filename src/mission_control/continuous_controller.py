@@ -55,6 +55,23 @@ class WorkerCompletion:
 
 
 @dataclass
+class _RoundTracker:
+	"""Tracks unit outcomes within a single dispatch round."""
+
+	unit_ids: set[str]
+	completed_ids: set[str]
+	failed_ids: set[str]
+
+	@property
+	def all_resolved(self) -> bool:
+		return self.completed_ids | self.failed_ids == self.unit_ids
+
+	@property
+	def all_failed(self) -> bool:
+		return self.all_resolved and self.failed_ids == self.unit_ids
+
+
+@dataclass
 class ContinuousMissionResult:
 	"""Summary of a completed continuous mission."""
 
@@ -103,6 +120,10 @@ class ContinuousController:
 		self._total_merged: int = 0
 		self._total_failed: int = 0
 		self._event_stream: EventStream | None = None
+		self._consecutive_all_fail_rounds: int = 0
+		self._round_tracker: dict[str, _RoundTracker] = {}  # epoch_id -> tracker
+		self._failure_backoff_until: float = 0.0
+		self._all_fail_stop_reason: str = ""
 		self.ambition_score: float = 0.0
 		self.proposed_by_strategist: bool = False
 		self._strategist: Strategist | None = None
@@ -712,6 +733,12 @@ class ContinuousController:
 					break
 				continue
 
+			# Honor failure backoff (auto-pause after all-fail round)
+			if self._failure_backoff_until > 0 and time.monotonic() < self._failure_backoff_until:
+				await asyncio.sleep(1)
+				continue
+			self._failure_backoff_until = 0.0
+
 			# Expire stale signals
 			try:
 				self.db.expire_stale_signals(timeout_minutes=10)
@@ -821,6 +848,13 @@ class ContinuousController:
 			except Exception as exc:
 				logger.error("Failed to insert epoch: %s", exc, exc_info=True)
 
+			# Track this round for all-fail detection
+			self._round_tracker[epoch.id] = _RoundTracker(
+				unit_ids={u.id for u in units},
+				completed_ids=set(),
+				failed_ids=set(),
+			)
+
 			# Dispatch each unit
 			for unit in units:
 				logger.info("Waiting for semaphore to dispatch unit %s: %s", unit.id[:12], unit.title[:60])
@@ -906,6 +940,7 @@ class ContinuousController:
 						self.db.update_mission(mission)
 					except Exception as exc:
 						logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
+					self._record_round_outcome(unit, epoch, merged=False)
 					continue
 				logger.info("Research unit %s completed -- skipping merge", unit.id)
 				self._total_merged += 1
@@ -935,6 +970,7 @@ class ContinuousController:
 					self.db.update_mission(mission)
 				except Exception as exc:
 					logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
+				self._record_round_outcome(unit, epoch, merged=True)
 				continue
 
 			# Experiment units: skip merge, store comparison report
@@ -949,6 +985,7 @@ class ContinuousController:
 						self.db.update_mission(mission)
 					except Exception as exc:
 						logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
+					self._record_round_outcome(unit, epoch, merged=False)
 					continue
 				logger.info("Experiment unit %s completed -- skipping merge", unit.id)
 				self._total_merged += 1
@@ -1013,6 +1050,7 @@ class ContinuousController:
 					self.db.update_mission(mission)
 				except Exception as exc:
 					logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
+				self._record_round_outcome(unit, epoch, merged=True)
 				continue
 
 			# Merge if the unit completed with commits
@@ -1178,6 +1216,54 @@ class ContinuousController:
 				self.db.update_mission(mission)
 			except Exception:
 				pass
+
+			# Track round outcomes for all-fail detection
+			self._record_round_outcome(unit, epoch, merged)
+
+	def _record_round_outcome(self, unit: WorkUnit, epoch: Epoch, merged: bool) -> None:
+		"""Record a unit outcome in its round tracker and handle all-fail rounds."""
+		round_tracker = getattr(self, "_round_tracker", None)
+		if round_tracker is None:
+			return
+		tracker = round_tracker.get(epoch.id)
+		if tracker is None or unit.id not in tracker.unit_ids:
+			return
+
+		if merged:
+			tracker.completed_ids.add(unit.id)
+		else:
+			tracker.failed_ids.add(unit.id)
+
+		if not tracker.all_resolved:
+			return
+
+		# Round fully resolved -- check if all failed
+		if tracker.all_failed:
+			self._consecutive_all_fail_rounds += 1
+			cont = self.config.continuous
+			logger.warning(
+				"All %d units in round %s failed (consecutive all-fail rounds: %d/%d)",
+				len(tracker.unit_ids), epoch.id[:12],
+				self._consecutive_all_fail_rounds, cont.max_consecutive_failures,
+			)
+			if self._consecutive_all_fail_rounds >= cont.max_consecutive_failures:
+				logger.error(
+					"Stopping mission: %d consecutive all-fail rounds",
+					self._consecutive_all_fail_rounds,
+				)
+				self._all_fail_stop_reason = "repeated_total_failure"
+			else:
+				self._failure_backoff_until = time.monotonic() + cont.failure_backoff_seconds
+				logger.info(
+					"Auto-pausing for %ds before retry (all-fail round %d/%d)",
+					cont.failure_backoff_seconds,
+					self._consecutive_all_fail_rounds, cont.max_consecutive_failures,
+				)
+		else:
+			self._consecutive_all_fail_rounds = 0
+
+		# Clean up resolved round
+		del round_tracker[epoch.id]
 
 	async def _review_merged_unit(
 		self,
@@ -1618,6 +1704,10 @@ class ContinuousController:
 			return signal_reason
 
 		cont = self.config.continuous
+
+		# All-fail stop
+		if self._all_fail_stop_reason:
+			return self._all_fail_stop_reason
 
 		# Wall time limit
 		if self._start_time > 0:

@@ -16,6 +16,7 @@ from mission_control.continuous_controller import (
 	ContinuousController,
 	ContinuousMissionResult,
 	WorkerCompletion,
+	_RoundTracker,
 )
 from mission_control.db import Database
 from mission_control.green_branch import UnitMergeResult
@@ -1718,4 +1719,294 @@ class TestLogUnitEvent:
 		assert call_kwargs["input_tokens"] == 1000
 		assert call_kwargs["output_tokens"] == 500
 		assert call_kwargs["cost_usd"] == 0.05
+
+
+class TestRoundTracker:
+	def test_all_resolved_when_all_tracked(self) -> None:
+		tracker = _RoundTracker(
+			unit_ids={"a", "b"},
+			completed_ids={"a"},
+			failed_ids={"b"},
+		)
+		assert tracker.all_resolved is True
+
+	def test_not_resolved_when_missing(self) -> None:
+		tracker = _RoundTracker(
+			unit_ids={"a", "b"},
+			completed_ids={"a"},
+			failed_ids=set(),
+		)
+		assert tracker.all_resolved is False
+
+	def test_all_failed(self) -> None:
+		tracker = _RoundTracker(
+			unit_ids={"a", "b"},
+			completed_ids=set(),
+			failed_ids={"a", "b"},
+		)
+		assert tracker.all_failed is True
+
+	def test_not_all_failed_when_some_succeed(self) -> None:
+		tracker = _RoundTracker(
+			unit_ids={"a", "b"},
+			completed_ids={"a"},
+			failed_ids={"b"},
+		)
+		assert tracker.all_failed is False
+
+
+class TestAutoFailurePause:
+	def _make_ctrl(self, config: MissionConfig, db: Database) -> ContinuousController:
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._green_branch = MagicMock()
+		return ctrl
+
+	def test_single_all_fail_sets_backoff(self, config: MissionConfig, db: Database) -> None:
+		"""After one all-fail round, backoff timer is set and counter increments."""
+		config.continuous.failure_backoff_seconds = 30
+		config.continuous.max_consecutive_failures = 3
+		ctrl = self._make_ctrl(config, db)
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		units = [
+			WorkUnit(id="wu1", title="T1"),
+			WorkUnit(id="wu2", title="T2"),
+		]
+		ctrl._round_tracker["ep1"] = _RoundTracker(
+			unit_ids={"wu1", "wu2"},
+			completed_ids=set(),
+			failed_ids=set(),
+		)
+
+		# Record both as failed
+		ctrl._record_round_outcome(units[0], epoch, merged=False)
+		assert ctrl._consecutive_all_fail_rounds == 0  # not resolved yet
+		ctrl._record_round_outcome(units[1], epoch, merged=False)
+
+		assert ctrl._consecutive_all_fail_rounds == 1
+		assert ctrl._failure_backoff_until > 0
+		assert ctrl.running is True  # not stopped yet
+
+	def test_counter_increments_on_consecutive_all_fail(self, config: MissionConfig, db: Database) -> None:
+		"""Counter increments with each consecutive all-fail round."""
+		config.continuous.failure_backoff_seconds = 10
+		config.continuous.max_consecutive_failures = 5
+		ctrl = self._make_ctrl(config, db)
+
+		for i in range(3):
+			epoch_id = f"ep{i}"
+			unit_id = f"wu{i}"
+			epoch = Epoch(id=epoch_id, mission_id="m1", number=i)
+			ctrl._round_tracker[epoch_id] = _RoundTracker(
+				unit_ids={unit_id},
+				completed_ids=set(),
+				failed_ids=set(),
+			)
+			ctrl._record_round_outcome(
+				WorkUnit(id=unit_id, title=f"T{i}"), epoch, merged=False,
+			)
+
+		assert ctrl._consecutive_all_fail_rounds == 3
+		assert ctrl.running is True  # max is 5, only at 3
+
+	def test_stop_after_max_consecutive_failures(self, config: MissionConfig, db: Database) -> None:
+		"""Mission stops after max_consecutive_failures all-fail rounds."""
+		config.continuous.max_consecutive_failures = 2
+		ctrl = self._make_ctrl(config, db)
+
+		for i in range(2):
+			epoch_id = f"ep{i}"
+			unit_id = f"wu{i}"
+			epoch = Epoch(id=epoch_id, mission_id="m1", number=i)
+			ctrl._round_tracker[epoch_id] = _RoundTracker(
+				unit_ids={unit_id},
+				completed_ids=set(),
+				failed_ids=set(),
+			)
+			ctrl._record_round_outcome(
+				WorkUnit(id=unit_id, title=f"T{i}"), epoch, merged=False,
+			)
+
+		assert ctrl._consecutive_all_fail_rounds == 2
+		assert ctrl._all_fail_stop_reason == "repeated_total_failure"
+
+	def test_should_stop_returns_repeated_total_failure(self, config: MissionConfig, db: Database) -> None:
+		"""_should_stop returns 'repeated_total_failure' when flag is set."""
+		ctrl = self._make_ctrl(config, db)
+		ctrl._all_fail_stop_reason = "repeated_total_failure"
+
+		reason = ctrl._should_stop(Mission(id="m1"))
+		assert reason == "repeated_total_failure"
+
+	def test_counter_resets_on_successful_round(self, config: MissionConfig, db: Database) -> None:
+		"""Counter resets to 0 when a round has at least one success."""
+		config.continuous.max_consecutive_failures = 3
+		ctrl = self._make_ctrl(config, db)
+
+		# First round: all fail
+		epoch1 = Epoch(id="ep1", mission_id="m1", number=1)
+		ctrl._round_tracker["ep1"] = _RoundTracker(
+			unit_ids={"wu1"},
+			completed_ids=set(),
+			failed_ids=set(),
+		)
+		ctrl._record_round_outcome(
+			WorkUnit(id="wu1", title="T1"), epoch1, merged=False,
+		)
+		assert ctrl._consecutive_all_fail_rounds == 1
+
+		# Second round: one succeeds
+		epoch2 = Epoch(id="ep2", mission_id="m1", number=2)
+		ctrl._round_tracker["ep2"] = _RoundTracker(
+			unit_ids={"wu2", "wu3"},
+			completed_ids=set(),
+			failed_ids=set(),
+		)
+		ctrl._record_round_outcome(
+			WorkUnit(id="wu2", title="T2"), epoch2, merged=True,
+		)
+		ctrl._record_round_outcome(
+			WorkUnit(id="wu3", title="T3"), epoch2, merged=False,
+		)
+		assert ctrl._consecutive_all_fail_rounds == 0
+
+	def test_untracked_unit_is_noop(self, config: MissionConfig, db: Database) -> None:
+		"""Units not in any round tracker are silently ignored."""
+		ctrl = self._make_ctrl(config, db)
+		epoch = Epoch(id="ep_unknown", mission_id="m1", number=1)
+
+		# Should not raise or modify state
+		ctrl._record_round_outcome(
+			WorkUnit(id="wu_orphan", title="Orphan"), epoch, merged=False,
+		)
+		assert ctrl._consecutive_all_fail_rounds == 0
+
+	@pytest.mark.asyncio
+	async def test_all_fail_round_pauses_then_retries(self, config: MissionConfig, db: Database) -> None:
+		"""Integration: all-fail round pauses dispatch, then retries after backoff."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 10
+		config.continuous.max_consecutive_failures = 3
+		config.continuous.failure_backoff_seconds = 0  # instant backoff for test speed
+		config.discovery.enabled = False
+		ctrl = ContinuousController(config, db)
+
+		call_count = 0
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "",
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			plan = Plan(id=f"p{call_count}", objective="test")
+			epoch = Epoch(id=f"ep{call_count}", mission_id=mission.id, number=call_count)
+			if call_count <= 2:
+				# First two rounds: return units (both will fail)
+				units = [WorkUnit(id=f"wu-{call_count}", plan_id=plan.id, title=f"Task {call_count}", max_attempts=1)]
+				return plan, units, epoch
+			# Third call: return empty (mission done)
+			return plan, [], epoch
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			# All units fail
+			unit.status = "failed"
+			unit.attempt = 1
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
+			)
+			semaphore.release()
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
+
+		with (
+			patch.object(ctrl, "_init_components", mock_init),
+			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch("mission_control.continuous_controller.EventStream"),
+		):
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
+
+		# After 2 all-fail rounds and counter < max(3), planner eventually returns empty
+		assert call_count >= 3
+		assert result.objective_met is True
+
+	@pytest.mark.asyncio
+	async def test_repeated_total_failure_stops_mission(self, config: MissionConfig, db: Database) -> None:
+		"""Integration: mission stops with 'repeated_total_failure' after max all-fail rounds."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 10
+		config.continuous.max_consecutive_failures = 2
+		config.continuous.failure_backoff_seconds = 0
+		config.discovery.enabled = False
+		ctrl = ContinuousController(config, db)
+
+		call_count = 0
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "",
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			plan = Plan(id=f"p{call_count}", objective="test")
+			epoch = Epoch(id=f"ep{call_count}", mission_id=mission.id, number=call_count)
+			# Always return units (every round will fail)
+			units = [WorkUnit(id=f"wu-{call_count}", plan_id=plan.id, title=f"Task {call_count}", max_attempts=1)]
+			return plan, units, epoch
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			unit.status = "failed"
+			unit.attempt = 1
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
+			)
+			semaphore.release()
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
+
+		with (
+			patch.object(ctrl, "_init_components", mock_init),
+			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch("mission_control.continuous_controller.EventStream"),
+		):
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
+
+		assert result.stopped_reason == "repeated_total_failure"
+		assert result.objective_met is False
+		assert ctrl._consecutive_all_fail_rounds >= 2
 
