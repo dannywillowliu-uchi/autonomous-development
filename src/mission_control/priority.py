@@ -19,9 +19,16 @@ STALENESS_PENALTY = 0.1
 STALENESS_THRESHOLD_HOURS = 72
 
 
-def _compute_base_score(impact: int, effort: int) -> float:
-	"""Base score: impact * (11 - effort) / 10."""
-	return impact * (11 - effort) / 10
+def _compute_base_score(impact: int, effort: int, effort_weight: float = 0.3) -> float:
+	"""Base score: impact * (1.0 - effort_weight * (effort - 1) / 9).
+
+	With default effort_weight=0.3, high-impact hard work isn't penalized heavily:
+	  Architecture(10, 9) = 7.33, Lint(2, 1) = 2.0, Feature(8, 6) = 6.67
+	Old formula punished effort equally to impact, making trivial fixes score
+	the same as architecture work.
+	"""
+	effort_factor = 1.0 - effort_weight * (effort - 1) / 9
+	return impact * effort_factor
 
 
 def _compute_failure_penalty(attempt_count: int, last_failure_reason: str | None) -> float:
@@ -55,7 +62,7 @@ def recalculate_priorities(db: Database) -> list[BacklogItem]:
 	"""Recalculate priority scores for all pending/in_progress backlog items.
 
 	Scoring:
-	- Base: impact * (11 - effort) / 10
+	- Base: impact * (1.0 - effort_weight * (effort - 1) / 9)
 	- Failure penalty: -20% per failed attempt (cap 60%), skip if infrastructure
 	- Staleness: -10% if not updated in last 72 hours
 	- Pinned override: if pinned_score is set, use it directly

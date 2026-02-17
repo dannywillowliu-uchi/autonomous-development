@@ -143,6 +143,7 @@ class DiscoveryConfig:
 	research_enabled: bool = True
 	research_model: str = "sonnet"
 	research_parallel_queries: int = 3
+	effort_weight: float = 0.3  # how much effort penalizes priority (0=ignore, 1=old formula)
 
 
 @dataclass
@@ -444,6 +445,8 @@ def _build_discovery(data: dict[str, Any]) -> DiscoveryConfig:
 		dc.research_model = str(data["research_model"])
 	if "research_parallel_queries" in data:
 		dc.research_parallel_queries = int(data["research_parallel_queries"])
+	if "effort_weight" in data:
+		dc.effort_weight = float(data["effort_weight"])
 	return dc
 
 
