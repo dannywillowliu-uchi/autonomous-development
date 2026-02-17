@@ -28,6 +28,10 @@ Priority backlog items to address:
 - [x] c65fd5bc (2026-02-17T08:13:23.020594+00:00) -- Fixed test_uses_scheduler_model_when_no_models_config by setting planner.config.models.planner_model (files: tests/test_recursive_planner.py)
 - [x] 0470f118 (2026-02-17T08:13:25.741024+00:00) -- Architect/editor two-pass mode already fully implemented and merged into mc/green (commit 8d45d3c).  (files: src/mission_control/worker.py, tests/test_worker.py)
 - [x] 6ec2fcbc (2026-02-17T08:18:06.416050+00:00) -- Both features (_task_done_callback and _log_unit_event) were already fully implemented by prior unit (files: src/mission_control/continuous_controller.py, tests/test_continuous_controller.py)
+- [x] 01925a8a (2026-02-17T08:19:27.451316+00:00) -- Added architect failure fallback to single-pass and research/experiment unit bypass for two-pass mod (files: src/mission_control/worker.py, tests/test_worker.py)
+- [x] 4361746f (2026-02-17T08:22:08.392021+00:00) -- Both features already fully implemented: _task_done_callback (fire-and-forget exception logging) rep (files: src/mission_control/continuous_controller.py, tests/test_continuous_controller.py)
+- [x] 2461bbdd (2026-02-17T08:22:42.869873+00:00) -- Added output_format parameter to _spawn_and_wait (architect uses 'text', editor uses 'stream-json'), (files: src/mission_control/worker.py, tests/test_worker.py)
+- [x] 667d2d46 (2026-02-17T08:23:24.044548+00:00) -- Architect/editor two-pass mode already fully implemented and passing all 37 tests. No changes needed
 
 ## Files Modified
 src/mission_control/continuous_controller.py, src/mission_control/worker.py, tests/test_continuous_controller.py, tests/test_recursive_planner.py, tests/test_worker.py
@@ -37,6 +41,8 @@ src/mission_control/continuous_controller.py, src/mission_control/worker.py, tes
   "This diff only updates MISSION_STATE.md tracking entries — no actual implementat"
 - 0470f118 (Implement architect/editor two-pass mode): alignment=4 approach=3 tests=3 avg=3.3
   "Diff contains only MISSION_STATE.md log updates with no reviewable code; the wor"
+- 01925a8a (Implement architect/editor two-pass mode): alignment=2 approach=2 tests=1 avg=1.7
+  "This diff contains only MISSION_STATE.md log updates with no actual code changes"
 
 ## Remaining
 The planner should focus on what hasn't been done yet.
@@ -50,3 +56,6 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 - 2026-02-17T08:13:23.020594+00:00 | c65fd5bc merged (commit: 49e65d1) -- Fixed test_uses_scheduler_model_when_no_models_config by setting planner.config.
 - 2026-02-17T08:13:25.741024+00:00 | 0470f118 merged (commit: 8d45d3c) -- Architect/editor two-pass mode already fully implemented and merged into mc/gree
 - 2026-02-17T08:18:06.416050+00:00 | 6ec2fcbc merged (commit: no-commit) -- Both features (_task_done_callback and _log_unit_event) were already fully imple
+- 2026-02-17T08:19:27.451316+00:00 | 01925a8a merged (commit: 5b628bc) -- Added architect failure fallback to single-pass and research/experiment unit byp
+- 2026-02-17T08:22:08.392021+00:00 | 4361746f merged (commit: no-commit) -- Both features already fully implemented: _task_done_callback (fire-and-forget ex
+- 2026-02-17T08:23:24.044548+00:00 | 667d2d46 merged (commit: no-commit) -- Architect/editor two-pass mode already fully implemented and passing all 37 test
