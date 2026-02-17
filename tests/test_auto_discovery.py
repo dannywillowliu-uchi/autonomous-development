@@ -21,7 +21,7 @@ from mission_control.config import (
 	VerificationConfig,
 )
 from mission_control.db import Database
-from mission_control.models import BacklogItem, DiscoveryItem, DiscoveryResult
+from mission_control.models import BacklogItem, DiscoveryResult
 
 
 def _config(*, research_enabled: bool = True) -> MissionConfig:
@@ -219,11 +219,10 @@ class TestComposeObjective:
 
 	def test_basic(self) -> None:
 		items = [
-			DiscoveryItem(
+			BacklogItem(
 				track="feature",
 				title="Add endpoint",
 				description="Add /users endpoint",
-				files_hint="src/api.py",
 				priority_score=8.0,
 			),
 		]
@@ -238,8 +237,8 @@ class TestDBIntegration:
 		db = Database(":memory:")
 		dr = DiscoveryResult(target_path="/tmp/test", model="sonnet", item_count=2)
 		items = [
-			DiscoveryItem(track="feature", title="Item 1", priority_score=8.0),
-			DiscoveryItem(track="quality", title="Item 2", priority_score=5.0),
+			BacklogItem(track="feature", title="Item 1", priority_score=8.0),
+			BacklogItem(track="quality", title="Item 2", priority_score=5.0),
 		]
 		db.insert_discovery_result(dr, items)
 
@@ -450,14 +449,14 @@ class TestDiscoveryToBacklog:
 	"""Test that DiscoveryEngine._insert_items_to_backlog inserts into backlog_items."""
 
 	def test_discovery_items_inserted_into_backlog(self, config: MissionConfig, db: Database) -> None:
-		"""Discovery items are converted to BacklogItems and inserted."""
+		"""BacklogItems are inserted into backlog."""
 		engine = DiscoveryEngine(config, db)
 		items = [
-			DiscoveryItem(
+			BacklogItem(
 				id="d1", title="Add caching", description="Redis layer",
 				priority_score=7.0, impact=8, effort=5, track="feature",
 			),
-			DiscoveryItem(
+			BacklogItem(
 				id="d2", title="Fix XSS", description="Sanitize inputs",
 				priority_score=9.0, impact=10, effort=3, track="security",
 			),
@@ -481,11 +480,11 @@ class TestDiscoveryToBacklog:
 
 		engine = DiscoveryEngine(config, db)
 		items = [
-			DiscoveryItem(
+			BacklogItem(
 				id="d1", title="Add caching", description="Redis layer",
 				priority_score=7.0, impact=8, effort=5, track="feature",
 			),
-			DiscoveryItem(
+			BacklogItem(
 				id="d2", title="New item", description="Something new",
 				priority_score=6.0, impact=7, effort=4, track="quality",
 			),

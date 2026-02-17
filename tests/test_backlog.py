@@ -11,7 +11,7 @@ from mission_control.config import ContinuousConfig, MissionConfig, PlannerConfi
 from mission_control.continuous_controller import ContinuousController
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
-from mission_control.models import BacklogItem, DiscoveryItem, Handoff, Mission, Plan, PlanNode, WorkUnit
+from mission_control.models import BacklogItem, Handoff, Mission, Plan, PlanNode, WorkUnit
 
 
 class TestBacklogCRUD:
@@ -437,11 +437,11 @@ class TestDiscoveryToBacklog:
 	async def test_discovery_items_inserted_to_backlog(self, config: MissionConfig, db: Database) -> None:
 		"""Discovery items are converted to BacklogItems and inserted."""
 		mock_items = [
-			DiscoveryItem(
+			BacklogItem(
 				id="d1", title="Add caching", description="Redis caching layer",
 				priority_score=7.0, impact=8, effort=5, track="feature",
 			),
-			DiscoveryItem(
+			BacklogItem(
 				id="d2", title="Fix SQL injection", description="Parameterize queries",
 				priority_score=9.0, impact=10, effort=3, track="security",
 			),

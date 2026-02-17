@@ -18,7 +18,7 @@ from typing import Any
 from mission_control.config import MissionConfig, claude_subprocess_env
 from mission_control.db import Database
 from mission_control.json_utils import extract_json_from_text
-from mission_control.models import BacklogItem, DiscoveryItem, DiscoveryResult
+from mission_control.models import BacklogItem, DiscoveryResult
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class DiscoveryEngine:
 
 	# -- Public API (unchanged signature) --
 
-	async def discover(self) -> tuple[DiscoveryResult, list[DiscoveryItem]]:
+	async def discover(self) -> tuple[DiscoveryResult, list[BacklogItem]]:
 		"""Run multi-stage discovery pipeline on the target codebase.
 
 		Stage 1 (analyze) -> if research_enabled: Stage 2 (research) -> Stage 3 (synthesize)
@@ -92,8 +92,8 @@ class DiscoveryEngine:
 		self._insert_items_to_backlog(items)
 		return result, items
 
-	def _insert_items_to_backlog(self, items: list[DiscoveryItem]) -> None:
-		"""Convert DiscoveryItems to BacklogItems and insert, skipping duplicate titles."""
+	def _insert_items_to_backlog(self, items: list[BacklogItem]) -> None:
+		"""Insert BacklogItems, skipping duplicate titles."""
 		if not items:
 			return
 		existing_titles: set[str] = {
@@ -104,15 +104,7 @@ class DiscoveryEngine:
 			if item.title in existing_titles:
 				logger.debug("Skipping duplicate backlog item: %s", item.title)
 				continue
-			backlog_item = BacklogItem(
-				title=item.title,
-				description=item.description,
-				priority_score=item.priority_score,
-				impact=item.impact,
-				effort=item.effort,
-				track=item.track,
-			)
-			self.db.insert_backlog_item(backlog_item)
+			self.db.insert_backlog_item(item)
 			existing_titles.add(item.title)
 
 	# -- Stage 1: Analyze --
@@ -550,8 +542,8 @@ Target path: {target.resolved_path}
 
 		return output, "", ""
 
-	def _parse_discovery_output(self, output: str) -> tuple[DiscoveryResult, list[DiscoveryItem]]:
-		"""Extract DISCOVERY_RESULT: JSON from output."""
+	def _parse_discovery_output(self, output: str) -> tuple[DiscoveryResult, list[BacklogItem]]:
+		"""Extract DISCOVERY_RESULT: JSON from output and return BacklogItems directly."""
 		dc = self.config.discovery
 		target_path = str(self.config.target.resolved_path)
 
@@ -584,7 +576,7 @@ Target path: {target.resolved_path}
 		if not isinstance(raw_items, list):
 			return result, []
 
-		items: list[DiscoveryItem] = []
+		items: list[BacklogItem] = []
 		for raw in raw_items:
 			if not isinstance(raw, dict):
 				continue
@@ -599,12 +591,10 @@ Target path: {target.resolved_path}
 			if priority < dc.min_priority_score:
 				continue
 
-			item = DiscoveryItem(
+			item = BacklogItem(
 				track=track,
 				title=str(raw.get("title", "")),
 				description=str(raw.get("description", "")),
-				rationale=str(raw.get("rationale", "")),
-				files_hint=str(raw.get("files_hint", "")),
 				impact=impact,
 				effort=effort,
 				priority_score=priority,
@@ -617,13 +607,13 @@ Target path: {target.resolved_path}
 		result.item_count = len(items)
 		return result, items
 
-	def compose_objective(self, items: list[DiscoveryItem]) -> str:
+	def compose_objective(self, items: list[BacklogItem]) -> str:
 		"""Turn approved discovery items into a mission objective string."""
 		if not items:
 			return ""
 
 		# Group by track
-		by_track: dict[str, list[DiscoveryItem]] = {}
+		by_track: dict[str, list[BacklogItem]] = {}
 		for item in items:
 			by_track.setdefault(item.track, []).append(item)
 
@@ -640,8 +630,6 @@ Target path: {target.resolved_path}
 			lines.append(f"## {label}")
 			for item in track_items:
 				lines.append(f"- {item.title}: {item.description}")
-				if item.files_hint:
-					lines.append(f"  Files: {item.files_hint}")
 			lines.append("")
 
 		return "\n".join(lines)

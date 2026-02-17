@@ -1977,8 +1977,12 @@ class Database:
 
 	# -- Discoveries --
 
-	def insert_discovery_result(self, result: DiscoveryResult, items: list[DiscoveryItem]) -> None:
-		"""Insert a discovery result and its items atomically."""
+	def insert_discovery_result(self, result: DiscoveryResult, items: list[BacklogItem] | list[DiscoveryItem]) -> None:
+		"""Insert a discovery result and its items atomically.
+
+		Accepts either BacklogItem (new pipeline) or DiscoveryItem (historical reads)
+		for the audit trail in the discovery_items table.
+		"""
 		try:
 			self.conn.execute(
 				"""INSERT INTO discoveries
@@ -1990,16 +1994,17 @@ class Database:
 				),
 			)
 			for item in items:
-				item.discovery_id = result.id
 				self.conn.execute(
 					"""INSERT INTO discovery_items
 					(id, discovery_id, track, title, description, rationale,
 					 files_hint, impact, effort, priority_score, status)
 					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 					(
-						item.id, item.discovery_id, item.track, item.title,
-						item.description, item.rationale, item.files_hint,
-						item.impact, item.effort, item.priority_score, item.status,
+						item.id, result.id, item.track, item.title,
+						item.description, getattr(item, "rationale", ""),
+						getattr(item, "files_hint", ""),
+						item.impact, item.effort, item.priority_score,
+						getattr(item, "status", "proposed"),
 					),
 				)
 			self.conn.commit()
