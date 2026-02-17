@@ -17,6 +17,7 @@ from mission_control.config import ContinuousConfig, MissionConfig
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
 from mission_control.diff_reviewer import DiffReviewer
+from mission_control.ema import ExponentialMovingAverage
 from mission_control.event_stream import EventStream
 from mission_control.feedback import get_worker_context
 from mission_control.green_branch import GreenBranchManager
@@ -129,6 +130,12 @@ class ContinuousController:
 		self._strategist: Strategist | None = None
 		self._diff_reviewer: DiffReviewer = DiffReviewer(config)
 		self._backlog_manager: BacklogManager = BacklogManager(db, config)
+		budget = config.scheduler.budget
+		self._ema: ExponentialMovingAverage = ExponentialMovingAverage(
+			alpha=budget.ema_alpha,
+			outlier_multiplier=budget.outlier_multiplier,
+			conservatism_base=budget.conservatism_base,
+		)
 
 	def _task_done_callback(self, task: asyncio.Task[None]) -> None:
 		"""Callback for fire-and-forget tasks: discard from tracking set and log exceptions."""
@@ -902,6 +909,21 @@ class ContinuousController:
 			if cooldown > 0:
 				await asyncio.sleep(cooldown)
 
+			# Adaptive cooldown: increase sleep when costs approach budget
+			budget_limit = self.config.scheduler.budget.max_per_run_usd
+			if budget_limit > 0 and mission.total_cost_usd > 0:
+				budget_fraction = mission.total_cost_usd / budget_limit
+				if budget_fraction > 0.8:
+					adaptive_sleep = cooldown + 30
+					logger.info(
+						"Adaptive cooldown: %.0f%% of budget used, sleeping %ds",
+						budget_fraction * 100, adaptive_sleep,
+					)
+					await asyncio.sleep(adaptive_sleep)
+				elif budget_fraction > 0.5:
+					adaptive_sleep = cooldown + 10
+					await asyncio.sleep(adaptive_sleep)
+
 	async def _process_completions(
 		self,
 		mission: Mission,
@@ -936,6 +958,8 @@ class ContinuousController:
 					if handoff and self._planner:
 						self._planner.ingest_handoff(handoff)
 					mission.total_cost_usd += unit.cost_usd
+					if unit.cost_usd > 0:
+						self._ema.update(unit.cost_usd)
 					try:
 						self.db.update_mission(mission)
 					except Exception as exc:
@@ -966,6 +990,8 @@ class ContinuousController:
 					logger.warning("Failed to update MISSION_STATE.md: %s", exc)
 
 				mission.total_cost_usd += unit.cost_usd
+				if unit.cost_usd > 0:
+					self._ema.update(unit.cost_usd)
 				try:
 					self.db.update_mission(mission)
 				except Exception as exc:
@@ -981,6 +1007,8 @@ class ContinuousController:
 					if handoff and self._planner:
 						self._planner.ingest_handoff(handoff)
 					mission.total_cost_usd += unit.cost_usd
+					if unit.cost_usd > 0:
+						self._ema.update(unit.cost_usd)
 					try:
 						self.db.update_mission(mission)
 					except Exception as exc:
@@ -1046,6 +1074,8 @@ class ContinuousController:
 					logger.warning("Failed to update MISSION_STATE.md: %s", exc)
 
 				mission.total_cost_usd += unit.cost_usd
+				if unit.cost_usd > 0:
+					self._ema.update(unit.cost_usd)
 				try:
 					self.db.update_mission(mission)
 				except Exception as exc:
@@ -1209,8 +1239,10 @@ class ContinuousController:
 			except Exception as exc:
 				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
 
-			# Accumulate cost
+			# Accumulate cost and feed EMA tracker
 			mission.total_cost_usd += unit.cost_usd
+			if unit.cost_usd > 0:
+				self._ema.update(unit.cost_usd)
 
 			try:
 				self.db.update_mission(mission)
@@ -1714,6 +1746,11 @@ class ContinuousController:
 			elapsed = time.monotonic() - self._start_time
 			if elapsed >= cont.max_wall_time_seconds:
 				return "wall_time_exceeded"
+
+		# EMA budget gate: stop if projected next unit cost exceeds remaining budget
+		budget_limit = self.config.scheduler.budget.max_per_run_usd
+		if budget_limit > 0 and self._ema.would_exceed_budget(mission.total_cost_usd, budget_limit):
+			return "ema_budget_exceeded"
 
 		return ""
 
