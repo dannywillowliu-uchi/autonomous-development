@@ -142,8 +142,8 @@ class ContinuousController:
 				input_tokens=input_tokens,
 				output_tokens=output_tokens,
 			))
-		except Exception:
-			pass
+		except Exception as exc:
+			logger.debug("Failed to insert unit event: %s", exc)
 		if self._event_stream:
 			kwargs: dict[str, object] = {
 				"mission_id": mission_id,
