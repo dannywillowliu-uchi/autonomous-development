@@ -123,6 +123,8 @@ class ContinuousConfig:
 	retry_base_delay_seconds: int = 30
 	retry_max_delay_seconds: int = 300
 	chain_max_depth: int = 3
+	max_consecutive_failures: int = 3
+	failure_backoff_seconds: int = 60
 
 
 @dataclass
@@ -389,7 +391,10 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 		cc.verify_before_merge = bool(data["verify_before_merge"])
 	if "timeout_multiplier" in data:
 		cc.timeout_multiplier = float(data["timeout_multiplier"])
-	for key in ("retry_base_delay_seconds", "retry_max_delay_seconds", "chain_max_depth"):
+	for key in (
+		"retry_base_delay_seconds", "retry_max_delay_seconds", "chain_max_depth",
+		"max_consecutive_failures", "failure_backoff_seconds",
+	):
 		if key in data:
 			setattr(cc, key, int(data[key]))
 	return cc

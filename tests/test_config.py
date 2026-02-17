@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from mission_control.config import MissionConfig, ModelsConfig, load_config, validate_config
+from mission_control.config import ContinuousConfig, MissionConfig, ModelsConfig, load_config, validate_config
 
 
 @pytest.fixture()
@@ -294,3 +294,34 @@ def test_models_dataclass_defaults() -> None:
 	assert mc.worker_model == "opus"
 	assert mc.fixup_model == "opus"
 	assert mc.architect_editor_mode is False
+
+
+def test_continuous_failure_fields_defaults() -> None:
+	"""ContinuousConfig has correct defaults for failure fields."""
+	cc = ContinuousConfig()
+	assert cc.max_consecutive_failures == 3
+	assert cc.failure_backoff_seconds == 60
+
+
+def test_continuous_failure_fields_parsed(tmp_path: Path) -> None:
+	"""[continuous] failure fields are parsed from TOML."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[continuous]
+max_consecutive_failures = 5
+failure_backoff_seconds = 120
+""")
+	cfg = load_config(toml)
+	assert cfg.continuous.max_consecutive_failures == 5
+	assert cfg.continuous.failure_backoff_seconds == 120
+
+
+def test_continuous_failure_fields_defaults_when_omitted(minimal_config: Path) -> None:
+	"""Without failure fields in [continuous], defaults are used."""
+	cfg = load_config(minimal_config)
+	assert cfg.continuous.max_consecutive_failures == 3
+	assert cfg.continuous.failure_backoff_seconds == 60
