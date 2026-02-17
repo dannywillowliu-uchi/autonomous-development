@@ -1101,8 +1101,9 @@ class TestPerComponentModelUsage:
 
 	@pytest.mark.asyncio
 	async def test_uses_scheduler_model_when_no_models_config(self) -> None:
-		"""Without config.models, falls back to scheduler.model."""
+		"""Without config.models.planner_model, falls back to scheduler.model."""
 		planner = _planner()
+		planner.config.models.planner_model = ""
 		node = PlanNode(depth=0, scope="Test scope", node_type="branch")
 
 		response = json.dumps({
