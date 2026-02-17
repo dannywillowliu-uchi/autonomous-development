@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from mission_control.constants import GRADING_WEIGHTS
 from mission_control.models import DecompositionGrade, UnitReview, WorkUnit
 
 if TYPE_CHECKING:
@@ -22,11 +23,7 @@ def compute_decomposition_grade(
 ) -> DecompositionGrade:
 	"""Compute a decomposition quality grade for an epoch's units.
 
-	Composite formula:
-		0.30 * avg_review_score_normalized  (from LLM reviews, /10)
-		+ 0.25 * (1 - retry_rate)           (units needing retries)
-		+ 0.25 * (1 - overlap_rate)         (file conflicts between units)
-		+ 0.20 * completion_rate            (units completed / total)
+	Weights are defined in constants.GRADING_WEIGHTS.
 	"""
 	unit_count = len(units)
 	if unit_count == 0:
@@ -68,11 +65,12 @@ def compute_decomposition_grade(
 	avg_review_normalized = avg_review / 10.0
 
 	# Composite score
+	w_review, w_retry, w_overlap, w_completion = GRADING_WEIGHTS
 	composite = (
-		0.30 * avg_review_normalized
-		+ 0.25 * (1.0 - retry_rate)
-		+ 0.25 * (1.0 - overlap_rate)
-		+ 0.20 * completion_rate
+		w_review * avg_review_normalized
+		+ w_retry * (1.0 - retry_rate)
+		+ w_overlap * (1.0 - overlap_rate)
+		+ w_completion * completion_rate
 	)
 	composite = round(composite, 3)
 

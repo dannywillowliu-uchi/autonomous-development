@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mission_control.constants import EVALUATOR_WEIGHTS
 from mission_control.models import Snapshot, SnapshotDelta
 
 
@@ -62,17 +63,15 @@ def evaluate_round(
 ) -> EvalResult:
 	"""Score a round deterministically using objective signals.
 
-	score = 0.4 * test_improvement
-	      + 0.2 * lint_improvement
-	      + 0.2 * completion_rate
-	      + 0.2 * no_regression
+	Weights are defined in constants.EVALUATOR_WEIGHTS.
 	"""
 	ti = compute_test_improvement(before, after)
 	li = compute_lint_improvement(before, after)
 	cr = compute_completion_rate(units_completed, units_planned)
 	nr = compute_no_regression(delta)
 
-	score = 0.4 * ti + 0.2 * li + 0.2 * cr + 0.2 * nr
+	w_ti, w_li, w_cr, w_nr = EVALUATOR_WEIGHTS
+	score = w_ti * ti + w_li * li + w_cr * cr + w_nr * nr
 	return EvalResult(
 		score=round(score, 6),
 		test_improvement=round(ti, 6),
