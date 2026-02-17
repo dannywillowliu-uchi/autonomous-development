@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1504,4 +1503,185 @@ class TestInFlightUnitsPreventPrematureCompletion:
 		assert result.objective_met is True
 		assert result.stopped_reason == "planner_completed"
 		assert result.total_units_dispatched >= 1
+
+
+class TestTaskDoneCallback:
+	@pytest.mark.asyncio
+	async def test_exception_is_logged(
+		self, config: MissionConfig, db: Database, caplog: pytest.LogCaptureFixture,
+	) -> None:
+		"""Exceptions from fire-and-forget tasks should be logged, not swallowed."""
+		ctrl = ContinuousController(config, db)
+
+		async def failing_coro() -> None:
+			raise RuntimeError("boom")
+
+		task = asyncio.create_task(failing_coro())
+		ctrl._active_tasks.add(task)
+		task.add_done_callback(ctrl._task_done_callback)
+		# Let the task complete and callback fire
+		await asyncio.sleep(0)
+		await asyncio.sleep(0)
+
+		assert task not in ctrl._active_tasks
+		assert any("Fire-and-forget task failed" in r.message and "boom" in r.message for r in caplog.records)
+
+	@pytest.mark.asyncio
+	async def test_successful_task_no_error_logged(
+		self, config: MissionConfig, db: Database, caplog: pytest.LogCaptureFixture,
+	) -> None:
+		"""Successful tasks should not produce error log messages."""
+		ctrl = ContinuousController(config, db)
+
+		async def ok_coro() -> None:
+			pass
+
+		task = asyncio.create_task(ok_coro())
+		ctrl._active_tasks.add(task)
+		task.add_done_callback(ctrl._task_done_callback)
+		await asyncio.sleep(0)
+		await asyncio.sleep(0)
+
+		assert task not in ctrl._active_tasks
+		assert not any("Fire-and-forget task failed" in r.message for r in caplog.records)
+
+	@pytest.mark.asyncio
+	async def test_cancelled_task_no_error_logged(
+		self, config: MissionConfig, db: Database, caplog: pytest.LogCaptureFixture,
+	) -> None:
+		"""Cancelled tasks should not produce error log messages."""
+		ctrl = ContinuousController(config, db)
+
+		async def slow_coro() -> None:
+			await asyncio.sleep(100)
+
+		task = asyncio.create_task(slow_coro())
+		ctrl._active_tasks.add(task)
+		task.add_done_callback(ctrl._task_done_callback)
+		task.cancel()
+		try:
+			await task
+		except asyncio.CancelledError:
+			pass
+
+		assert task not in ctrl._active_tasks
+		assert not any("Fire-and-forget task failed" in r.message for r in caplog.records)
+
+
+class TestLogUnitEvent:
+	def test_inserts_event_and_emits_to_stream(self, config: MissionConfig, db: Database) -> None:
+		"""_log_unit_event should insert into DB and emit to event stream."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+
+		ctrl = ContinuousController(config, db)
+		mock_stream = MagicMock()
+		ctrl._event_stream = mock_stream
+
+		ctrl._log_unit_event(
+			mission_id="m1",
+			epoch_id="ep1",
+			work_unit_id="wu1",
+			event_type="dispatched",
+			stream_details={"title": "Task", "files": "a.py"},
+		)
+
+		# Verify DB insert
+		events = db.conn.execute(
+			"SELECT * FROM unit_events WHERE work_unit_id = 'wu1' AND event_type = 'dispatched'"
+		).fetchall()
+		assert len(events) == 1
+
+		# Verify event stream emit
+		mock_stream.emit.assert_called_once()
+		call_kwargs = mock_stream.emit.call_args
+		assert call_kwargs[0][0] == "dispatched"
+		assert call_kwargs[1]["mission_id"] == "m1"
+		assert call_kwargs[1]["details"] == {"title": "Task", "files": "a.py"}
+
+	def test_db_error_does_not_prevent_stream_emit(self, config: MissionConfig, db: Database) -> None:
+		"""If DB insert fails, event stream emit should still happen."""
+		ctrl = ContinuousController(config, db)
+		mock_stream = MagicMock()
+		ctrl._event_stream = mock_stream
+
+		# Patch insert_unit_event to fail
+		with patch.object(db, "insert_unit_event", side_effect=Exception("db error")):
+			ctrl._log_unit_event(
+				mission_id="m1",
+				epoch_id="ep1",
+				work_unit_id="wu1",
+				event_type="merged",
+			)
+
+		# Stream emit should still be called
+		mock_stream.emit.assert_called_once()
+
+	def test_no_stream_does_not_raise(self, config: MissionConfig, db: Database) -> None:
+		"""_log_unit_event should work without an event stream."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+
+		ctrl = ContinuousController(config, db)
+		# _event_stream is None by default
+
+		ctrl._log_unit_event(
+			mission_id="m1",
+			epoch_id="ep1",
+			work_unit_id="wu1",
+			event_type="dispatched",
+		)
+
+		events = db.conn.execute(
+			"SELECT * FROM unit_events WHERE work_unit_id = 'wu1' AND event_type = 'dispatched'"
+		).fetchall()
+		assert len(events) == 1
+
+	def test_token_and_cost_fields_forwarded(self, config: MissionConfig, db: Database) -> None:
+		"""Token counts and cost should be forwarded to both DB and stream."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+
+		ctrl = ContinuousController(config, db)
+		mock_stream = MagicMock()
+		ctrl._event_stream = mock_stream
+
+		ctrl._log_unit_event(
+			mission_id="m1",
+			epoch_id="ep1",
+			work_unit_id="wu1",
+			event_type="merged",
+			input_tokens=1000,
+			output_tokens=500,
+			cost_usd=0.05,
+		)
+
+		# Verify DB has token counts
+		row = db.conn.execute(
+			"SELECT input_tokens, output_tokens FROM unit_events WHERE work_unit_id = 'wu1'"
+		).fetchone()
+		assert row is not None
+		assert row[0] == 1000
+		assert row[1] == 500
+
+		# Verify stream emit includes tokens and cost
+		call_kwargs = mock_stream.emit.call_args[1]
+		assert call_kwargs["input_tokens"] == 1000
+		assert call_kwargs["output_tokens"] == 500
+		assert call_kwargs["cost_usd"] == 0.05
 

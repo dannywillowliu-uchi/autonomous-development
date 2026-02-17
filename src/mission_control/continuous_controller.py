@@ -109,6 +109,57 @@ class ContinuousController:
 		self._diff_reviewer: DiffReviewer = DiffReviewer(config)
 		self._backlog_manager: BacklogManager = BacklogManager(db, config)
 
+	def _task_done_callback(self, task: asyncio.Task[None]) -> None:
+		"""Callback for fire-and-forget tasks: discard from tracking set and log exceptions."""
+		self._active_tasks.discard(task)
+		if task.cancelled():
+			return
+		exc = task.exception()
+		if exc is not None:
+			logger.error("Fire-and-forget task failed: %s", exc, exc_info=exc)
+
+	def _log_unit_event(
+		self,
+		*,
+		mission_id: str,
+		epoch_id: str,
+		work_unit_id: str,
+		event_type: str,
+		details: str | None = None,
+		input_tokens: int = 0,
+		output_tokens: int = 0,
+		stream_details: dict[str, object] | None = None,
+		cost_usd: float = 0.0,
+	) -> None:
+		"""Insert a UnitEvent into the DB and emit to the JSONL event stream."""
+		try:
+			self.db.insert_unit_event(UnitEvent(
+				mission_id=mission_id,
+				epoch_id=epoch_id,
+				work_unit_id=work_unit_id,
+				event_type=event_type,
+				details=details or "",
+				input_tokens=input_tokens,
+				output_tokens=output_tokens,
+			))
+		except Exception:
+			pass
+		if self._event_stream:
+			kwargs: dict[str, object] = {
+				"mission_id": mission_id,
+				"epoch_id": epoch_id,
+				"unit_id": work_unit_id,
+			}
+			if input_tokens:
+				kwargs["input_tokens"] = input_tokens
+			if output_tokens:
+				kwargs["output_tokens"] = output_tokens
+			if cost_usd:
+				kwargs["cost_usd"] = cost_usd
+			if stream_details is not None:
+				kwargs["details"] = stream_details
+			self._event_stream.emit(event_type, **kwargs)
+
 	async def run(self, dry_run: bool = False) -> ContinuousMissionResult:
 		"""Run the continuous mission loop until objective met or stopping condition."""
 		result = ContinuousMissionResult(objective=self.config.target.objective)
@@ -786,23 +837,13 @@ class ContinuousController:
 					continue
 
 				# Log dispatch event
-				try:
-					self.db.insert_unit_event(UnitEvent(
-						mission_id=mission.id,
-						epoch_id=epoch.id,
-						work_unit_id=unit.id,
-						event_type="dispatched",
-					))
-				except Exception:
-					pass
-				if self._event_stream:
-					self._event_stream.emit(
-						"dispatched",
-						mission_id=mission.id,
-						epoch_id=epoch.id,
-						unit_id=unit.id,
-						details={"title": unit.title, "files": unit.files_hint},
-					)
+				self._log_unit_event(
+					mission_id=mission.id,
+					epoch_id=epoch.id,
+					work_unit_id=unit.id,
+					event_type="dispatched",
+					stream_details={"title": unit.title, "files": unit.files_hint},
+				)
 
 				self._total_dispatched += 1
 
@@ -817,6 +858,10 @@ class ContinuousController:
 				def _on_task_done(t: asyncio.Task[None], uid: str = unit.id) -> None:
 					self._active_tasks.discard(t)
 					self._unit_tasks.pop(uid, None)
+					if not t.cancelled():
+						exc = t.exception()
+						if exc is not None:
+							logger.error("Fire-and-forget task failed: %s", exc, exc_info=exc)
 
 				task.add_done_callback(_on_task_done)
 
@@ -864,22 +909,12 @@ class ContinuousController:
 					continue
 				logger.info("Research unit %s completed -- skipping merge", unit.id)
 				self._total_merged += 1
-				try:
-					self.db.insert_unit_event(UnitEvent(
-						mission_id=mission.id,
-						epoch_id=epoch.id,
-						work_unit_id=unit.id,
-						event_type="research_completed",
-					))
-				except Exception as exc:
-					logger.warning("Failed to insert research_completed event for unit %s: %s", unit.id, exc)
-				if self._event_stream:
-					self._event_stream.emit(
-						"research_completed",
-						mission_id=mission.id,
-						epoch_id=epoch.id,
-						unit_id=unit.id,
-					)
+				self._log_unit_event(
+					mission_id=mission.id,
+					epoch_id=epoch.id,
+					work_unit_id=unit.id,
+					event_type="research_completed",
+				)
 
 				if handoff and self._planner:
 					self._planner.ingest_handoff(handoff)
@@ -952,22 +987,12 @@ class ContinuousController:
 				except Exception as exc:
 					logger.warning("Failed to insert experiment result for unit %s: %s", unit.id, exc)
 
-				try:
-					self.db.insert_unit_event(UnitEvent(
-						mission_id=mission.id,
-						epoch_id=epoch.id,
-						work_unit_id=unit.id,
-						event_type="experiment_completed",
-					))
-				except Exception as exc:
-					logger.warning("Failed to insert experiment_completed event for unit %s: %s", unit.id, exc)
-				if self._event_stream:
-					self._event_stream.emit(
-						"experiment_completed",
-						mission_id=mission.id,
-						epoch_id=epoch.id,
-						unit_id=unit.id,
-					)
+				self._log_unit_event(
+					mission_id=mission.id,
+					epoch_id=epoch.id,
+					work_unit_id=unit.id,
+					event_type="experiment_completed",
+				)
 
 				if handoff and self._planner:
 					self._planner.ingest_handoff(handoff)
@@ -1006,27 +1031,15 @@ class ContinuousController:
 						)
 						self._total_merged += 1
 						# Log merge event
-						try:
-							self.db.insert_unit_event(UnitEvent(
-								mission_id=mission.id,
-								epoch_id=epoch.id,
-								work_unit_id=unit.id,
-								event_type="merged",
-								input_tokens=unit.input_tokens,
-								output_tokens=unit.output_tokens,
-							))
-						except Exception:
-							pass
-						if self._event_stream:
-							self._event_stream.emit(
-								"merged",
-								mission_id=mission.id,
-								epoch_id=epoch.id,
-								unit_id=unit.id,
-								input_tokens=unit.input_tokens,
-								output_tokens=unit.output_tokens,
-								cost_usd=unit.cost_usd,
-							)
+						self._log_unit_event(
+							mission_id=mission.id,
+							epoch_id=epoch.id,
+							work_unit_id=unit.id,
+							event_type="merged",
+							input_tokens=unit.input_tokens,
+							output_tokens=unit.output_tokens,
+							cost_usd=unit.cost_usd,
+						)
 						# Fire-and-forget LLM diff review
 						if self.config.review.enabled:
 							task = asyncio.create_task(
@@ -1035,7 +1048,7 @@ class ContinuousController:
 								),
 							)
 							self._active_tasks.add(task)
-							task.add_done_callback(self._active_tasks.discard)
+							task.add_done_callback(self._task_done_callback)
 					else:
 						logger.warning(
 							"Unit %s failed merge: %s",
@@ -1043,30 +1056,18 @@ class ContinuousController:
 						)
 
 						# Log merge_failed event
-						try:
-							self.db.insert_unit_event(UnitEvent(
-								mission_id=mission.id,
-								epoch_id=epoch.id,
-								work_unit_id=unit.id,
-								event_type="merge_failed",
-								details=json.dumps({
-									"failure_output": merge_result.failure_output[:500],
-									"failure_stage": merge_result.failure_stage,
-								}),
-							))
-						except Exception:
-							pass
-						if self._event_stream:
-							self._event_stream.emit(
-								"merge_failed",
-								mission_id=mission.id,
-								epoch_id=epoch.id,
-								unit_id=unit.id,
-								details={
-									"failure_output": merge_result.failure_output[:500],
-									"failure_stage": merge_result.failure_stage,
-								},
-							)
+						_fail_details = {
+							"failure_output": merge_result.failure_output[:500],
+							"failure_stage": merge_result.failure_stage,
+						}
+						self._log_unit_event(
+							mission_id=mission.id,
+							epoch_id=epoch.id,
+							work_unit_id=unit.id,
+							event_type="merge_failed",
+							details=json.dumps(_fail_details),
+							stream_details=_fail_details,
+						)
 
 						# Append merge failure to handoff concerns
 						if handoff:
@@ -1087,24 +1088,14 @@ class ContinuousController:
 						else:
 							self._total_failed += 1
 							# Log rejection event
-							try:
-								self.db.insert_unit_event(UnitEvent(
-									mission_id=mission.id,
-									epoch_id=epoch.id,
-									work_unit_id=unit.id,
-									event_type="rejected",
-									details=merge_result.failure_output[:500],
-								))
-							except Exception:
-								pass
-							if self._event_stream:
-								self._event_stream.emit(
-									"rejected",
-									mission_id=mission.id,
-									epoch_id=epoch.id,
-									unit_id=unit.id,
-									details={"failure_output": merge_result.failure_output[:500]},
-								)
+							self._log_unit_event(
+								mission_id=mission.id,
+								epoch_id=epoch.id,
+								work_unit_id=unit.id,
+								event_type="rejected",
+								details=merge_result.failure_output[:500],
+								stream_details={"failure_output": merge_result.failure_output[:500]},
+							)
 
 							# Notify merge conflict via Telegram
 							if self._notifier:
@@ -1117,30 +1108,18 @@ class ContinuousController:
 						unit.id, exc, exc_info=True,
 					)
 					# Log merge_failed event for exception path
-					try:
-						self.db.insert_unit_event(UnitEvent(
-							mission_id=mission.id,
-							epoch_id=epoch.id,
-							work_unit_id=unit.id,
-							event_type="merge_failed",
-							details=json.dumps({
-								"failure_output": str(exc)[:500],
-								"failure_stage": "exception",
-							}),
-						))
-					except Exception:
-						pass
-					if self._event_stream:
-						self._event_stream.emit(
-							"merge_failed",
-							mission_id=mission.id,
-							epoch_id=epoch.id,
-							unit_id=unit.id,
-							details={
-								"failure_output": str(exc)[:500],
-								"failure_stage": "exception",
-							},
-						)
+					_exc_details = {
+						"failure_output": str(exc)[:500],
+						"failure_stage": "exception",
+					}
+					self._log_unit_event(
+						mission_id=mission.id,
+						epoch_id=epoch.id,
+						work_unit_id=unit.id,
+						event_type="merge_failed",
+						details=json.dumps(_exc_details),
+						stream_details=_exc_details,
+					)
 					failure_reason = str(exc)[:300]
 					if unit.attempt < unit.max_attempts:
 						self._schedule_retry(unit, epoch, mission, failure_reason, cont)
@@ -1278,24 +1257,15 @@ class ContinuousController:
 			logger.error("Failed to persist retry state for %s: %s", unit.id, exc)
 
 		# Log retry event
-		try:
-			self.db.insert_unit_event(UnitEvent(
-				mission_id=mission.id,
-				epoch_id=epoch.id,
-				work_unit_id=unit.id,
-				event_type="retry_queued",
-				details=json.dumps({"delay": delay, "failure_reason": failure_reason[:300]}),
-			))
-		except Exception:
-			pass
-		if self._event_stream:
-			self._event_stream.emit(
-				"retry_queued",
-				mission_id=mission.id,
-				epoch_id=epoch.id,
-				unit_id=unit.id,
-				details={"delay": delay, "failure_reason": failure_reason[:300]},
-			)
+		_retry_details = {"delay": delay, "failure_reason": failure_reason[:300]}
+		self._log_unit_event(
+			mission_id=mission.id,
+			epoch_id=epoch.id,
+			work_unit_id=unit.id,
+			event_type="retry_queued",
+			details=json.dumps(_retry_details),
+			stream_details=_retry_details,
+		)
 
 		logger.info(
 			"Retrying unit %s (attempt %d/%d) after %.0fs delay",
@@ -1307,7 +1277,7 @@ class ContinuousController:
 			self._retry_unit(unit, epoch, mission, delay),
 		)
 		self._active_tasks.add(task)
-		task.add_done_callback(self._active_tasks.discard)
+		task.add_done_callback(self._task_done_callback)
 
 	async def _retry_unit(
 		self,
@@ -1327,7 +1297,7 @@ class ContinuousController:
 			self._execute_single_unit(unit, epoch, mission, self._semaphore),
 		)
 		self._active_tasks.add(task)
-		task.add_done_callback(self._active_tasks.discard)
+		task.add_done_callback(self._task_done_callback)
 
 	async def _fail_unit(
 		self,
