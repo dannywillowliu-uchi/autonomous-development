@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from typing import Any
 
 from mission_control.config import MissionConfig, ReviewConfig, claude_subprocess_env
@@ -55,6 +57,17 @@ def _parse_review_output(output: str) -> dict[str, Any] | None:
 	if idx != -1:
 		remainder = output[idx + len(REVIEW_RESULT_MARKER):]
 		data = extract_json_from_text(remainder)
+
+		# Fallback: single-line regex (matches MC_RESULT pattern in session.py)
+		if not isinstance(data, dict):
+			match = re.search(r"\{.*\}", remainder.split("\n")[0])
+			if match:
+				try:
+					raw = json.loads(match.group(0))
+					if isinstance(raw, dict):
+						data = raw
+				except json.JSONDecodeError:
+					pass
 
 	if not isinstance(data, dict):
 		data = extract_json_from_text(output)
@@ -132,6 +145,7 @@ class DiffReviewer:
 			logger.warning("Review subprocess failed for unit %s (rc=%d)", unit.id, proc.returncode)
 			return None
 
+		logger.debug("Raw review output for %s (len=%d): %.500s", unit.id, len(output), output)
 		data = _parse_review_output(output)
 		if data is None:
 			logger.warning("Could not parse REVIEW_RESULT for unit %s", unit.id)

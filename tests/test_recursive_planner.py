@@ -921,3 +921,288 @@ class TestSubprocessCwdAssertion:
 
 		with pytest.raises(AssertionError, match="Planner cwd must be absolute"):
 			await planner._run_planner_subprocess("test prompt", node)
+
+
+# -- <!-- PLAN --> block parsing tests --
+
+
+class TestPlanBlockParsing:
+	"""Tests for the <!-- PLAN --> structured block parsing in _parse_planner_output."""
+
+	def test_valid_plan_block_extraction(self) -> None:
+		"""Valid JSON inside <!-- PLAN --> block is extracted correctly."""
+		plan_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Block task", "description": "via block", "files_hint": "x.py", "priority": 1}],
+		})
+		raw = f"Let me analyze the scope.\n\n<!-- PLAN -->{plan_json}<!-- /PLAN -->"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert len(result.units) == 1
+		assert result.units[0]["title"] == "Block task"
+
+	def test_plan_block_with_subdivide(self) -> None:
+		"""<!-- PLAN --> block works with subdivide type."""
+		plan_json = json.dumps({
+			"type": "subdivide",
+			"children": [{"scope": "Backend API"}, {"scope": "Frontend UI"}],
+		})
+		raw = f"This needs subdivision.\n\n<!-- PLAN -->{plan_json}<!-- /PLAN -->"
+		result = _parse_planner_output(raw)
+		assert result.type == "subdivide"
+		assert len(result.children) == 2
+		assert result.children[0]["scope"] == "Backend API"
+
+	def test_missing_plan_block_falls_back_to_plan_result(self) -> None:
+		"""When no <!-- PLAN --> block, falls back to PLAN_RESULT marker."""
+		plan_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Legacy marker", "description": "ok", "files_hint": "", "priority": 1}],
+		})
+		raw = f"Some reasoning.\n\nPLAN_RESULT:{plan_json}"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "Legacy marker"
+
+	def test_malformed_json_inside_plan_block(self) -> None:
+		"""Malformed JSON in <!-- PLAN --> block falls through to PLAN_RESULT."""
+		plan_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Fallback task", "description": "ok", "files_hint": "", "priority": 1}],
+		})
+		raw = f'<!-- PLAN -->{{"type":"leaves","units":[{{"tit<!-- /PLAN -->\n\nPLAN_RESULT:{plan_json}'
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "Fallback task"
+
+	def test_malformed_json_inside_plan_block_no_fallback(self) -> None:
+		"""Malformed JSON in <!-- PLAN --> block with no other parseable content gives fallback leaf."""
+		raw = "<!-- PLAN -->not valid json at all<!-- /PLAN -->\n\nSome prose but no JSON."
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert len(result.units) == 1
+		assert result.units[0]["title"] == "Execute scope"
+
+	def test_multiple_plan_blocks_uses_first(self) -> None:
+		"""When multiple <!-- PLAN --> blocks exist, the first one is used."""
+		first_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "First block", "description": "correct", "files_hint": "", "priority": 1}],
+		})
+		second_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Second block", "description": "wrong", "files_hint": "", "priority": 2}],
+		})
+		raw = f"<!-- PLAN -->{first_json}<!-- /PLAN -->\n\nRevised:\n<!-- PLAN -->{second_json}<!-- /PLAN -->"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert len(result.units) == 1
+		assert result.units[0]["title"] == "First block"
+
+	def test_plan_block_with_surrounding_prose(self) -> None:
+		"""<!-- PLAN --> block surrounded by analysis prose extracts correctly."""
+		plan_json = json.dumps({
+			"type": "leaves",
+			"units": [
+				{"title": "Add auth", "description": "JWT auth", "files_hint": "auth.py", "priority": 1},
+				{"title": "Add tests", "description": "test auth", "files_hint": "tests/", "priority": 2},
+			],
+		})
+		raw = (
+			"I've analyzed the codebase and here's my assessment:\n\n"
+			"The scope involves authentication and testing.\n"
+			"The auth module needs JWT support and tests need to be added.\n\n"
+			f"<!-- PLAN -->{plan_json}<!-- /PLAN -->\n\n"
+			"This plan covers the key areas identified in the analysis."
+		)
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert len(result.units) == 2
+		assert result.units[0]["title"] == "Add auth"
+		assert result.units[1]["title"] == "Add tests"
+
+	def test_plan_block_takes_precedence_over_plan_result(self) -> None:
+		"""<!-- PLAN --> block takes priority over PLAN_RESULT marker."""
+		block_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "From block", "description": "correct", "files_hint": "", "priority": 1}],
+		})
+		marker_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "From marker", "description": "wrong", "files_hint": "", "priority": 1}],
+		})
+		raw = f"<!-- PLAN -->{block_json}<!-- /PLAN -->\n\nPLAN_RESULT:{marker_json}"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "From block"
+
+	def test_plan_block_takes_precedence_over_bare_json(self) -> None:
+		"""<!-- PLAN --> block takes priority over bare JSON in output."""
+		block_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "From block", "description": "correct", "files_hint": "", "priority": 1}],
+		})
+		bare_json = json.dumps({
+			"type": "subdivide",
+			"children": [{"scope": "Wrong"}],
+		})
+		raw = f"Analysis: {bare_json}\n\n<!-- PLAN -->{block_json}<!-- /PLAN -->"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "From block"
+
+	def test_plan_block_with_whitespace_in_markers(self) -> None:
+		"""<!-- PLAN --> markers with extra whitespace still match."""
+		plan_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Whitespace ok", "description": "ok", "files_hint": "", "priority": 1}],
+		})
+		raw = f"<!--  PLAN  -->{plan_json}<!--  /PLAN  -->"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "Whitespace ok"
+
+	def test_plan_block_with_newlines_inside(self) -> None:
+		"""JSON inside <!-- PLAN --> block can span multiple lines."""
+		plan_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Multiline", "description": "ok", "files_hint": "", "priority": 1}],
+		}, indent=2)
+		raw = f"<!-- PLAN -->\n{plan_json}\n<!-- /PLAN -->"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "Multiline"
+
+	def test_existing_plan_result_format_still_works(self) -> None:
+		"""Existing PLAN_RESULT format continues to work as fallback."""
+		plan_json = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Legacy", "description": "still works", "files_hint": "x.py", "priority": 1}],
+		})
+		raw = f"Analysis here.\n\nPLAN_RESULT:{plan_json}"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units[0]["title"] == "Legacy"
+
+	def test_plan_block_empty_units(self) -> None:
+		"""<!-- PLAN --> block with empty units (objective met)."""
+		plan_json = json.dumps({"type": "leaves", "units": []})
+		raw = f"Objective already achieved.\n\n<!-- PLAN -->{plan_json}<!-- /PLAN -->"
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units == []
+
+
+# -- Per-component model usage tests --
+
+
+class TestPerComponentModelUsage:
+	"""Tests for config.models.planner_model usage in _run_planner_subprocess."""
+
+	@pytest.mark.asyncio
+	async def test_uses_scheduler_model_when_no_models_config(self) -> None:
+		"""Without config.models, falls back to scheduler.model."""
+		planner = _planner()
+		node = PlanNode(depth=0, scope="Test scope", node_type="branch")
+
+		response = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		) as mock_exec:
+			await planner._run_planner_subprocess("test prompt", node)
+
+		call_args = mock_exec.call_args[0]
+		model_idx = list(call_args).index("--model")
+		assert call_args[model_idx + 1] == "sonnet"
+
+	@pytest.mark.asyncio
+	async def test_uses_planner_model_from_models_config(self) -> None:
+		"""When config.models.planner_model is set, it overrides scheduler.model."""
+		planner = _planner()
+		node = PlanNode(depth=0, scope="Test scope", node_type="branch")
+
+		class ModelsConfig:
+			planner_model = "haiku"
+		planner.config.models = ModelsConfig()  # type: ignore[attr-defined]
+
+		response = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		) as mock_exec:
+			await planner._run_planner_subprocess("test prompt", node)
+
+		call_args = mock_exec.call_args[0]
+		model_idx = list(call_args).index("--model")
+		assert call_args[model_idx + 1] == "haiku"
+
+	@pytest.mark.asyncio
+	async def test_falls_back_when_planner_model_is_none(self) -> None:
+		"""When config.models exists but planner_model is None, falls back to scheduler.model."""
+		planner = _planner()
+		node = PlanNode(depth=0, scope="Test scope", node_type="branch")
+
+		class ModelsConfig:
+			planner_model = None
+		planner.config.models = ModelsConfig()  # type: ignore[attr-defined]
+
+		response = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		) as mock_exec:
+			await planner._run_planner_subprocess("test prompt", node)
+
+		call_args = mock_exec.call_args[0]
+		model_idx = list(call_args).index("--model")
+		assert call_args[model_idx + 1] == "sonnet"
+
+	@pytest.mark.asyncio
+	async def test_falls_back_when_planner_model_is_empty(self) -> None:
+		"""When config.models.planner_model is empty string, falls back to scheduler.model."""
+		planner = _planner()
+		node = PlanNode(depth=0, scope="Test scope", node_type="branch")
+
+		class ModelsConfig:
+			planner_model = ""
+		planner.config.models = ModelsConfig()  # type: ignore[attr-defined]
+
+		response = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		) as mock_exec:
+			await planner._run_planner_subprocess("test prompt", node)
+
+		call_args = mock_exec.call_args[0]
+		model_idx = list(call_args).index("--model")
+		assert call_args[model_idx + 1] == "sonnet"

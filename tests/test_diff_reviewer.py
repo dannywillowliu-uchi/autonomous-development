@@ -61,6 +61,17 @@ REVIEW_RESULT:{"alignment": 7, "approach": 8, "test_quality": 6, "rationale": "C
 		assert data is not None
 		assert data["alignment"] == 9
 
+	def test_regex_fallback_when_extract_json_fails(self) -> None:
+		"""When extract_json_from_text fails, regex fallback should parse single-line JSON."""
+		# Simulate output where the JSON is on the same line as the marker
+		# but wrapped in a way that extract_json_from_text can't handle
+		output = 'REVIEW_RESULT:{"alignment": 6, "approach": 7, "test_quality": 5, "rationale": "ok"}'
+		data = _parse_review_output(output)
+		assert data is not None
+		assert data["alignment"] == 6
+		assert data["approach"] == 7
+		assert data["test_quality"] == 5
+
 	def test_marker_with_extra_text_after(self) -> None:
 		output = """Analysis complete.
 REVIEW_RESULT:{"alignment": 8, "approach": 7, "test_quality": 9, "rationale": "Excellent"}

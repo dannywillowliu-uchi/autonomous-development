@@ -394,7 +394,7 @@ class ContinuousController:
 					elif summary_text:
 						failed_summaries.append(summary_text)
 				self.db.append_strategic_context(
-					mission_id=mission.mission_id,
+					mission_id=mission.id,
 					what_attempted=mission.objective[:500],
 					what_worked="; ".join(merged_summaries[:10]) or "nothing merged",
 					what_failed="; ".join(failed_summaries[:10]) or "no failures",
@@ -704,7 +704,15 @@ class ContinuousController:
 				continue
 
 			if not units:
-				logger.info("Planner returned no units -- objective complete")
+				running_tasks = {uid: t for uid, t in self._unit_tasks.items() if not t.done()}
+				if running_tasks:
+					logger.info(
+						"Planner returned no new units, but %d units still in-flight -- waiting",
+						len(running_tasks),
+					)
+					await asyncio.gather(*running_tasks.values(), return_exceptions=True)
+					continue
+				logger.info("Planner returned no units and no in-flight work -- objective complete")
 				result.objective_met = True
 				result.stopped_reason = "planner_completed"
 				self.running = False
