@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from mission_control.backends.base import WorkerBackend, WorkerHandle
-from mission_control.config import MissionConfig
+from mission_control.config import MissionConfig, ModelsConfig
 from mission_control.db import Database
 from mission_control.models import Mission, Plan, Round, Worker, WorkUnit
 from mission_control.worker import WorkerAgent, render_mission_worker_prompt, render_worker_prompt
@@ -608,3 +608,110 @@ class TestWorkerAgent:
 		# Exception was logged
 		assert "unexpected kaboom" in caplog.text
 		assert "Unexpected error executing unit" in caplog.text
+
+
+class TestModelSelection:
+	"""Tests for worker_model override in _execute_unit command construction."""
+
+	async def test_uses_worker_model_when_configured(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""When models.worker_model is set, it overrides scheduler.model."""
+		w, _ = worker_and_unit
+		config.models = ModelsConfig(worker_model="sonnet")
+		config.scheduler.model = "opus"
+
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":["abc123"],'
+			'"summary":"Fixed it","files_changed":["foo.py"]}'
+		)
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
+		mock_backend.spawn = AsyncMock(  # type: ignore[method-assign]
+			return_value=WorkerHandle(worker_id=w.id, pid=12345, workspace_path="/tmp/mock-workspace"),
+		)
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# Verify the command passed to spawn uses worker_model
+		spawn_call = mock_backend.spawn.call_args
+		cmd = spawn_call.kwargs.get("command") or spawn_call[0][2]
+		model_idx = cmd.index("--model")
+		assert cmd[model_idx + 1] == "sonnet"
+
+	async def test_falls_back_to_scheduler_model_without_models_config(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""When models config is absent, falls back to scheduler.model."""
+		w, _ = worker_and_unit
+		config.scheduler.model = "haiku"
+		# Default MissionConfig has ModelsConfig with worker_model="opus",
+		# so remove models to test the fallback path
+		object.__setattr__(config, "models", None)
+
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":["abc123"],'
+			'"summary":"Fixed it","files_changed":["foo.py"]}'
+		)
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
+		mock_backend.spawn = AsyncMock(  # type: ignore[method-assign]
+			return_value=WorkerHandle(worker_id=w.id, pid=12345, workspace_path="/tmp/mock-workspace"),
+		)
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		spawn_call = mock_backend.spawn.call_args
+		cmd = spawn_call.kwargs.get("command") or spawn_call[0][2]
+		model_idx = cmd.index("--model")
+		assert cmd[model_idx + 1] == "haiku"
+
+	async def test_default_models_config_uses_worker_model(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""Default ModelsConfig (worker_model='opus') is used over scheduler.model."""
+		w, _ = worker_and_unit
+		# Default ModelsConfig has worker_model="opus"
+		config.models = ModelsConfig()
+		config.scheduler.model = "haiku"
+
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":["abc123"],'
+			'"summary":"Fixed it","files_changed":["foo.py"]}'
+		)
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
+		mock_backend.spawn = AsyncMock(  # type: ignore[method-assign]
+			return_value=WorkerHandle(worker_id=w.id, pid=12345, workspace_path="/tmp/mock-workspace"),
+		)
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		spawn_call = mock_backend.spawn.call_args
+		cmd = spawn_call.kwargs.get("command") or spawn_call[0][2]
+		model_idx = cmd.index("--model")
+		assert cmd[model_idx + 1] == "opus"
