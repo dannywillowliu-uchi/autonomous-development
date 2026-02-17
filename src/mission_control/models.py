@@ -514,6 +514,24 @@ class DecompositionGrade:
 
 
 @dataclass
+class ContextItem:
+	"""A typed context item produced by workers as discoveries.
+
+	Used to selectively inject relevant context into subsequent worker prompts
+	based on scope overlap with the work unit being dispatched.
+	"""
+
+	id: str = field(default_factory=_new_id)
+	item_type: str = ""  # architectural, convention, gotcha, dependency, api, pattern
+	scope: str = ""  # comma-separated file paths or module names this applies to
+	content: str = ""
+	source_unit_id: str = ""  # work unit that produced this context
+	round_id: str = ""
+	confidence: float = 1.0  # 0.0-1.0, how confident the worker was
+	created_at: str = field(default_factory=_now_iso)
+
+
+@dataclass
 class DiscoveryItem:
 	"""A single improvement discovered during codebase analysis."""
 
