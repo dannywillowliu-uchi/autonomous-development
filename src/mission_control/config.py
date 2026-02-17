@@ -240,6 +240,16 @@ class ReviewConfig:
 
 
 @dataclass
+class ModelsConfig:
+	"""Per-component model overrides."""
+
+	planner_model: str = "opus"
+	worker_model: str = "opus"
+	fixup_model: str = "opus"
+	architect_editor_mode: bool = False
+
+
+@dataclass
 class MissionConfig:
 	"""Top-level mission-control configuration."""
 
@@ -257,6 +267,7 @@ class MissionConfig:
 	notifications: NotificationConfig = field(default_factory=NotificationConfig)
 	dashboard: DashboardConfig = field(default_factory=DashboardConfig)
 	deploy: DeployConfig = field(default_factory=DeployConfig)
+	models: ModelsConfig = field(default_factory=ModelsConfig)
 
 
 def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
@@ -498,6 +509,16 @@ def _build_review(data: dict[str, Any]) -> ReviewConfig:
 	return rc
 
 
+def _build_models(data: dict[str, Any]) -> ModelsConfig:
+	mc = ModelsConfig()
+	for key in ("planner_model", "worker_model", "fixup_model"):
+		if key in data:
+			setattr(mc, key, str(data[key]))
+	if "architect_editor_mode" in data:
+		mc.architect_editor_mode = bool(data["architect_editor_mode"])
+	return mc
+
+
 def _build_deploy(data: dict[str, Any]) -> DeployConfig:
 	dc = DeployConfig()
 	if "enabled" in data:
@@ -577,6 +598,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.review = _build_review(data["review"])
 	if "deploy" in data:
 		mc.deploy = _build_deploy(data["deploy"])
+	if "models" in data:
+		mc.models = _build_models(data["models"])
 	# Allow env vars as fallback for Telegram credentials
 	tg = mc.notifications.telegram
 	if not tg.bot_token:
