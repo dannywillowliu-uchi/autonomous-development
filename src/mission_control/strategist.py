@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
 
 from mission_control.config import MissionConfig, claude_subprocess_env
 from mission_control.db import Database
@@ -94,17 +93,18 @@ class Strategist:
 			log.info("No BACKLOG.md found at %s", backlog_path)
 			return ""
 
-	def _get_git_log(self) -> str:
+	async def _get_git_log(self) -> str:
 		try:
-			result = subprocess.run(
-				["git", "log", "--oneline", "-20"],
-				capture_output=True,
-				text=True,
+			proc = await asyncio.create_subprocess_exec(
+				"git", "log", "--oneline", "-20",
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
 				cwd=str(self.config.target.resolved_path),
-				timeout=10,
 			)
-			return result.stdout.strip() if result.returncode == 0 else ""
-		except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+			stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+			output = stdout.decode() if stdout else ""
+			return output.strip() if proc.returncode == 0 else ""
+		except (asyncio.TimeoutError, FileNotFoundError, OSError):
 			log.info("Could not read git log")
 			return ""
 
@@ -386,9 +386,10 @@ class Strategist:
 		Returns:
 			Tuple of (objective, rationale, ambition_score).
 		"""
+		git_log = await self._get_git_log()
 		prompt = _build_strategy_prompt(
 			backlog_md=self._read_backlog(),
-			git_log=self._get_git_log(),
+			git_log=git_log,
 			past_missions=self._get_past_missions(),
 			strategic_context=self._get_strategic_context(),
 			pending_backlog=self._get_pending_backlog(),

@@ -149,26 +149,39 @@ class TestContextGathering:
 		s = _strategist(tmp_path)
 		assert s._read_backlog() == ""
 
-	def test_get_git_log_success(self) -> None:
+	@pytest.mark.asyncio
+	async def test_get_git_log_success(self) -> None:
 		s = _strategist()
-		with patch("mission_control.strategist.subprocess.run") as mock_run:
-			mock_run.return_value = MagicMock(returncode=0, stdout="abc123 feat: add X\ndef456 fix: bug Y")
-			result = s._get_git_log()
+		mock_proc = AsyncMock()
+		mock_proc.communicate.return_value = (b"abc123 feat: add X\ndef456 fix: bug Y", b"")
+		mock_proc.returncode = 0
+		with patch("mission_control.strategist.asyncio.create_subprocess_exec", return_value=mock_proc):
+			result = await s._get_git_log()
 		assert "abc123" in result
 		assert "def456" in result
 
-	def test_get_git_log_failure(self) -> None:
+	@pytest.mark.asyncio
+	async def test_get_git_log_failure(self) -> None:
 		s = _strategist()
-		with patch("mission_control.strategist.subprocess.run") as mock_run:
-			mock_run.return_value = MagicMock(returncode=128, stdout="")
-			result = s._get_git_log()
+		mock_proc = AsyncMock()
+		mock_proc.communicate.return_value = (b"", b"")
+		mock_proc.returncode = 128
+		with patch("mission_control.strategist.asyncio.create_subprocess_exec", return_value=mock_proc):
+			result = await s._get_git_log()
 		assert result == ""
 
-	def test_get_git_log_timeout(self) -> None:
+	@pytest.mark.asyncio
+	async def test_get_git_log_timeout(self) -> None:
 		s = _strategist()
-		with patch("mission_control.strategist.subprocess.run") as mock_run:
-			mock_run.side_effect = TimeoutError()
-			result = s._get_git_log()
+		mock_proc = AsyncMock()
+		mock_proc.communicate.side_effect = asyncio.TimeoutError()
+		mock_proc.kill = AsyncMock()
+		mock_proc.wait = AsyncMock()
+		with (
+			patch("mission_control.strategist.asyncio.create_subprocess_exec", return_value=mock_proc),
+			patch("mission_control.strategist.asyncio.wait_for", side_effect=asyncio.TimeoutError),
+		):
+			result = await s._get_git_log()
 		assert result == ""
 
 	def test_get_past_missions_empty(self) -> None:
@@ -306,19 +319,22 @@ class TestProposeObjective:
 		s.db.get_pending_backlog.return_value = [item]
 
 		strategy_output = _make_strategy_output("Next objective", "Based on context", 6)
-		mock_proc = AsyncMock()
-		mock_proc.communicate.return_value = (strategy_output.encode(), b"")
-		mock_proc.returncode = 0
 
-		with (
-			patch("mission_control.strategist.asyncio.create_subprocess_exec", return_value=mock_proc),
-			patch("mission_control.strategist.subprocess.run") as mock_git,
-		):
-			mock_git.return_value = MagicMock(returncode=0, stdout="abc123 recent commit")
+		# Git log subprocess (called first by _get_git_log)
+		git_proc = AsyncMock()
+		git_proc.communicate.return_value = (b"abc123 recent commit", b"")
+		git_proc.returncode = 0
+
+		# LLM subprocess (called by _invoke_llm)
+		llm_proc = AsyncMock()
+		llm_proc.communicate.return_value = (strategy_output.encode(), b"")
+		llm_proc.returncode = 0
+
+		with patch("mission_control.strategist.asyncio.create_subprocess_exec", side_effect=[git_proc, llm_proc]):
 			await s.propose_objective()
 
-		# Verify the prompt was sent to stdin
-		call_args = mock_proc.communicate.call_args
+		# Verify the prompt was sent to stdin of the LLM call
+		call_args = llm_proc.communicate.call_args
 		prompt_bytes = call_args[1].get("input") or call_args[0][0] if call_args[0] else call_args[1]["input"]
 		prompt = prompt_bytes.decode()
 		assert "Past mission" in prompt or "abc123" in prompt
