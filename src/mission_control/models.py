@@ -62,19 +62,6 @@ class Snapshot:
 	raw_output: str = ""
 
 
-@dataclass
-class TaskRecord:
-	"""A discovered work item."""
-
-	id: str = field(default_factory=_new_id)
-	source: str = ""  # test_failure/lint/todo/coverage/objective
-	description: str = ""
-	priority: int = 7
-	status: str = "discovered"  # discovered/assigned/completed/skipped
-	session_id: str | None = None
-	created_at: str = field(default_factory=_now_iso)
-	resolved_at: str | None = None
-
 
 @dataclass
 class Decision:

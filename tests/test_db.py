@@ -18,7 +18,6 @@ from mission_control.models import (
 	Plan,
 	Session,
 	Snapshot,
-	TaskRecord,
 	TrajectoryRating,
 	UnitEvent,
 	UnitReview,
@@ -77,33 +76,6 @@ class TestSnapshots:
 
 	def test_empty_snapshots(self, db: Database) -> None:
 		assert db.get_latest_snapshot() is None
-
-
-class TestTasks:
-	def test_insert_and_get_open(self, db: Database) -> None:
-		t1 = TaskRecord(id="t1", source="test_failure", description="Fix test_foo", priority=2)
-		t2 = TaskRecord(id="t2", source="lint", description="Fix ruff E501", priority=3)
-		db.insert_task(t1)
-		db.insert_task(t2)
-		open_tasks = db.get_open_tasks()
-		assert len(open_tasks) == 2
-		assert open_tasks[0].priority <= open_tasks[1].priority
-
-	def test_update_task_status(self, db: Database) -> None:
-		t = TaskRecord(id="t3", source="todo", description="Implement feature")
-		db.insert_task(t)
-		t.status = "completed"
-		t.resolved_at = "2025-01-01T00:00:00"
-		db.update_task(t)
-		open_tasks = db.get_open_tasks()
-		assert len(open_tasks) == 0
-
-	def test_priority_ordering(self, db: Database) -> None:
-		db.insert_task(TaskRecord(id="low", source="todo", priority=5))
-		db.insert_task(TaskRecord(id="high", source="test_failure", priority=1))
-		db.insert_task(TaskRecord(id="mid", source="lint", priority=3))
-		tasks = db.get_open_tasks()
-		assert [t.id for t in tasks] == ["high", "mid", "low"]
 
 
 class TestDecisions:

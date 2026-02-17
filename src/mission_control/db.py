@@ -32,7 +32,6 @@ from mission_control.models import (
 	Signal,
 	Snapshot,
 	StrategicContext,
-	TaskRecord,
 	TrajectoryRating,
 	UnitEvent,
 	UnitReview,
@@ -68,18 +67,6 @@ CREATE TABLE IF NOT EXISTS snapshots (
 	type_errors INTEGER NOT NULL DEFAULT 0,
 	security_findings INTEGER NOT NULL DEFAULT 0,
 	raw_output TEXT NOT NULL DEFAULT '',
-	FOREIGN KEY (session_id) REFERENCES sessions(id)
-);
-
-CREATE TABLE IF NOT EXISTS tasks (
-	id TEXT PRIMARY KEY,
-	source TEXT NOT NULL DEFAULT '',
-	description TEXT NOT NULL DEFAULT '',
-	priority INTEGER NOT NULL DEFAULT 7,
-	status TEXT NOT NULL DEFAULT 'discovered',
-	session_id TEXT,
-	created_at TEXT NOT NULL,
-	resolved_at TEXT,
 	FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
 
@@ -773,54 +760,6 @@ class Database:
 			type_errors=row["type_errors"],
 			security_findings=row["security_findings"],
 			raw_output=row["raw_output"],
-		)
-
-	# -- Tasks --
-
-	def insert_task(self, task: TaskRecord) -> None:
-		self.conn.execute(
-			"""INSERT INTO tasks
-			(id, source, description, priority, status, session_id, created_at, resolved_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-			(
-				task.id, task.source, task.description, task.priority,
-				task.status, task.session_id, task.created_at, task.resolved_at,
-			),
-		)
-		self.conn.commit()
-
-	def update_task(self, task: TaskRecord) -> None:
-		self.conn.execute(
-			"""UPDATE tasks SET
-			source=?, description=?, priority=?, status=?,
-			session_id=?, created_at=?, resolved_at=?
-			WHERE id=?""",
-			(
-				task.source, task.description, task.priority, task.status,
-				task.session_id, task.created_at, task.resolved_at, task.id,
-			),
-		)
-		self.conn.commit()
-
-	def get_open_tasks(self, limit: int = 20) -> list[TaskRecord]:
-		rows = self.conn.execute(
-			"SELECT * FROM tasks WHERE status IN ('discovered', 'assigned') "
-			"ORDER BY priority ASC, created_at ASC LIMIT ?",
-			(limit,),
-		).fetchall()
-		return [self._row_to_task(r) for r in rows]
-
-	@staticmethod
-	def _row_to_task(row: sqlite3.Row) -> TaskRecord:
-		return TaskRecord(
-			id=row["id"],
-			source=row["source"],
-			description=row["description"],
-			priority=row["priority"],
-			status=row["status"],
-			session_id=row["session_id"],
-			created_at=row["created_at"],
-			resolved_at=row["resolved_at"],
 		)
 
 	# -- Decisions --

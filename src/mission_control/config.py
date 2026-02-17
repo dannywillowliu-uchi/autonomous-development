@@ -193,7 +193,6 @@ class HeartbeatConfig:
 	interval: int = 300  # seconds between checks
 	idle_threshold: int = 3  # consecutive idle checks before stall
 	enable_recovery: bool = True
-	recovery_actions: list[str] = field(default_factory=lambda: ["dump_states", "notify", "kill_stuck"])
 
 
 @dataclass
@@ -485,8 +484,6 @@ def _build_heartbeat(data: dict[str, Any]) -> HeartbeatConfig:
 		hc.idle_threshold = int(data["idle_threshold"])
 	if "enable_recovery" in data:
 		hc.enable_recovery = bool(data["enable_recovery"])
-	if "recovery_actions" in data:
-		hc.recovery_actions = list(data["recovery_actions"])
 	return hc
 
 

@@ -13,12 +13,11 @@ from mission_control.memory import (
 	extract_scope_tokens,
 	format_context_items,
 	inject_context_items,
-	load_context,
 	load_context_for_mission_worker,
 	load_context_for_work_unit,
 	summarize_session,
 )
-from mission_control.models import ContextItem, ContextScope, Decision, Plan, Session, TaskRecord, WorkUnit
+from mission_control.models import ContextItem, ContextScope, Decision, Plan, Session, WorkUnit
 from mission_control.reviewer import ReviewVerdict
 
 
@@ -40,55 +39,6 @@ def _make_session(id: str = "s1", status: str = "completed", desc: str = "fix bu
 
 def _make_decision(decision: str = "use pytest", rationale: str = "standard") -> Decision:
 	return Decision(session_id="s1", decision=decision, rationale=rationale)
-
-
-# -- load_context --
-
-
-class TestLoadContext:
-	def test_empty_db_returns_empty(self, db, config):
-		task = TaskRecord(description="do something")
-		result = load_context(task, db, config)
-		assert result == ""
-
-	def test_includes_session_history(self, db, config):
-		db.insert_session(_make_session())
-		task = TaskRecord(description="do something")
-		result = load_context(task, db, config)
-		assert "### Recent Sessions" in result
-		assert "fix bug" in result
-
-	def test_includes_decisions(self, db, config):
-		db.insert_session(_make_session())
-		db.insert_decision(_make_decision())
-		task = TaskRecord(description="do something")
-		result = load_context(task, db, config)
-		assert "### Recent Decisions" in result
-		assert "use pytest" in result
-		assert "standard" in result
-
-	def test_includes_claude_md(self, db, config, tmp_path):
-		(tmp_path / "CLAUDE.md").write_text("# Project Docs\nImportant info here.")
-		task = TaskRecord(description="do something")
-		result = load_context(task, db, config)
-		assert "### Project Instructions" in result
-		assert "# Project Docs" in result
-
-	def test_budget_enforcement(self, db, config):
-		"""Output stays within CONTEXT_BUDGET chars even with lots of data."""
-		for i in range(20):
-			db.insert_session(_make_session(
-				id=f"sess-{i}",
-				desc=f"task number {i} with long description " * 10,
-				summary="summary " * 50,
-			))
-		for i in range(20):
-			d = _make_decision(decision=f"decision-{i} " * 20, rationale=f"rationale-{i} " * 20)
-			d.session_id = "sess-0"  # reference an existing session
-			db.insert_decision(d)
-		task = TaskRecord(description="do something")
-		result = load_context(task, db, config)
-		assert len(result) <= CONTEXT_BUDGET + 500  # some overhead for section headers and joining
 
 
 # -- load_context_for_work_unit --

@@ -2,67 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from mission_control.config import (
-	MissionConfig,
-	SchedulerConfig,
-	TargetConfig,
-	VerificationConfig,
-)
-from mission_control.models import MCResultSchema, Snapshot, TaskRecord
 from mission_control.session import (
 	build_branch_name,
 	parse_mc_result,
-	render_prompt,
-	spawn_session,
 	validate_mc_result,
 )
-
-
-def _config() -> MissionConfig:
-	return MissionConfig(
-		target=TargetConfig(
-			name="test-proj",
-			path="/tmp/test",
-			branch="main",
-			objective="Build something",
-			verification=VerificationConfig(command="pytest -q"),
-		),
-		scheduler=SchedulerConfig(model="sonnet"),
-	)
-
-
-def _snapshot() -> Snapshot:
-	return Snapshot(test_total=10, test_passed=8, test_failed=2, lint_errors=3, type_errors=1)
-
-
-def _task(desc: str = "Fix the failing tests") -> TaskRecord:
-	return TaskRecord(source="test_failure", description=desc, priority=2)
-
-
-class TestRenderPrompt:
-	def test_contains_task(self) -> None:
-		prompt = render_prompt(_task(), _snapshot(), _config(), "mc/session-abc")
-		assert "Fix the failing tests" in prompt
-
-	def test_contains_stats(self) -> None:
-		prompt = render_prompt(_task(), _snapshot(), _config(), "mc/session-abc")
-		assert "8/10 passing" in prompt
-		assert "Lint errors: 3" in prompt
-		assert "Type errors: 1" in prompt
-
-	def test_contains_verification_command(self) -> None:
-		prompt = render_prompt(_task(), _snapshot(), _config(), "mc/session-abc")
-		assert "pytest -q" in prompt
-
-	def test_contains_context(self) -> None:
-		prompt = render_prompt(_task(), _snapshot(), _config(), "mc/session-abc", context="Previous session failed")
-		assert "Previous session failed" in prompt
 
 
 class TestParseMcResult:
@@ -116,40 +64,6 @@ class TestParseMcResult:
 class TestBranchName:
 	def test_format(self) -> None:
 		assert build_branch_name("abc123") == "mc/session-abc123"
-
-
-class TestSpawnSessionTimeout:
-	@pytest.mark.asyncio
-	async def test_timeout_kills_subprocess(self) -> None:
-		"""When session times out, the subprocess should be killed."""
-		config = MissionConfig(
-			target=TargetConfig(
-				name="test-proj",
-				path="/tmp/test",
-				branch="main",
-				objective="Build something",
-				verification=VerificationConfig(command="pytest -q"),
-			),
-			scheduler=SchedulerConfig(model="sonnet", session_timeout=5),
-		)
-		task = TaskRecord(source="test", description="Do work", priority=1)
-		snapshot = Snapshot(test_total=10, test_passed=10)
-
-		mock_proc = AsyncMock()
-		mock_proc.communicate.side_effect = asyncio.TimeoutError()
-		mock_proc.kill = MagicMock()
-		mock_proc.wait = AsyncMock()
-
-		with (
-			patch("mission_control.session.asyncio.create_subprocess_exec", return_value=mock_proc),
-			patch("mission_control.session.create_branch", return_value=True),
-		):
-			session = await spawn_session(task, snapshot, config)
-
-		assert session.status == "failed"
-		assert "timed out" in session.output_summary
-		mock_proc.kill.assert_called_once()
-		mock_proc.wait.assert_awaited_once()
 
 
 class TestMCResultSchemaValidation:
