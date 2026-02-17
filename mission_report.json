@@ -1,86 +1,101 @@
 {
-  "objective": "Add traceability and dashboard features to mission control. The system currently has no persistent mission state file and the live dashboard doesn't show the mission objective or planned work. Fix both.\n\n1. MISSION_STATE.md GENERATION: At mission start, auto-generate a MISSION_STATE.md file in the project root. Contents: mission objective, discovered/planned work items with status (pending/in_progress/completed/failed), timestamps for each state transition. Update this file throughout execution as units complete or fail. Commit it with each green-branch push so the file is always in sync with code. The file should be human-readable markdown with a clear structure.\n\n2. MISSION_STATE.md UPDATES: Hook into the continuous controller's unit completion/failure handlers to update MISSION_STATE.md in real-time. Each update should append to a log section showing what changed and when. Include the git commit hash for completed units.\n\n3. DASHBOARD MISSION STATEMENT: Add a mission objective section to the live web dashboard (live_ui.html). Display the current mission objective prominently at the top of the page, above the status bar. Show it in a styled card/banner that's always visible. If no mission is running, show \"No active mission.\"\n\n4. DASHBOARD WORK ITEMS VIEW: Add a planned work items section to the dashboard that shows each work unit with its current status (planned/running/completed/failed), the worker assigned to it, and timestamps. This should update in real-time via the existing WebSocket connection. Style with color-coded status badges.\n\n5. DASHBOARD MISSION HISTORY: Add a collapsible section that shows past mission summaries -- objective, total units, pass/fail counts, duration, and a link to the mission report. Pull data from the SQLite database.\n\nEach unit: implement the feature, add tests, ensure all existing tests pass. Focus on clean integration with existing code rather than new abstractions.",
+  "objective": "Implement P2 (Architect/Editor Model Split) and P3 (Structured Schedule Output for Planner). Both improve worker quality and planner reliability.\n\n1. PER-COMPONENT MODEL CONFIG: Add per-component model fields to config.py: planner_model, worker_model, fixup_model. Each defaults to \"opus\" but can be overridden in mission-control.toml under a [models] section. Update recursive_planner.py, worker.py, and green_branch.py to read their model from config instead of using the global scheduler.model. Add tests for config parsing with and without the [models] section.\n\n2. ARCHITECT/EDITOR SPLIT IN WORKERS: Add an optional two-pass mode for workers. When enabled (architect_editor_mode = true in config), the worker runs two Claude sessions per unit: (a) Architect pass -- \"Analyze the codebase and describe exactly what changes are needed, which files to modify, and why. Do NOT write code.\" Uses the worker_model. (b) Editor pass -- \"Implement these specific changes: {architect_output}\". Uses the worker_model. The architect output is passed as context to the editor. If architect_editor_mode is false (default), workers behave as today -- single pass. Add the mode flag to config.py. Modify worker.py to support both modes. Add tests for both paths.\n\n3. STRUCTURED PLANNER OUTPUT: Change recursive_planner.py to use embedded structured blocks instead of parsing the entire LLM response. The planner prompt should instruct the LLM to reason in prose first, then emit a machine-readable block: <!-- PLAN -->{\"units\": [{\"title\": \"...\", \"scope\": \"...\", \"files_hint\": \"...\"}]}<!-- /PLAN -->. Update the parser to extract only the <!-- PLAN --> block using regex, ignoring surrounding prose. Fall back to the current parsing if no <!-- PLAN --> block is found (backwards compatibility). The MC_RESULT pattern in session.py already uses a similar approach -- follow that pattern.\n\n4. PLANNER OUTPUT TESTS: Add comprehensive tests for the new structured parser: valid plan block extraction, missing plan block fallback, malformed JSON inside block, multiple plan blocks (use first), plan block with surrounding prose. Test that existing planner output formats still work via fallback.\n\nEach unit: implement the feature, add tests, ensure all existing tests pass. Read BACKLOG.md for the full P2 and P3 specs.",
   "outcome": {
     "objective_met": true,
     "stopped_reason": "planner_completed"
   },
-  "mission_id": "6aee27a46a01",
+  "mission_id": "75d7f2a341a7",
   "units_dispatched": 6,
   "units_merged": 4,
   "units_failed": 0,
-  "wall_time_seconds": 1290.1295450420585,
-  "total_cost_usd": 15.44634165,
+  "wall_time_seconds": 599.3920646250481,
+  "total_cost_usd": 12.4049403,
   "files_changed": [
+    "src/mission_control/config.py",
     "src/mission_control/continuous_controller.py",
-    "src/mission_control/dashboard/live.py",
-    "src/mission_control/dashboard/live_ui.html",
     "src/mission_control/green_branch.py",
-    "tests/test_green_branch_state.py",
-    "tests/test_live_dashboard.py",
-    "tests/test_mission_state.py"
+    "src/mission_control/worker.py",
+    "tests/test_config.py",
+    "tests/test_green_branch.py",
+    "tests/test_worker.py"
   ],
   "verification_passed": false,
   "verification_output": "ERROR: file or directory not found: &&\n\n\nno tests ran in 0.00s\n",
   "backlog_item_ids": [],
+  "unit_reviews": [],
+  "trajectory_ratings": [],
+  "decomposition_grades": [],
   "timeline": [
     {
-      "timestamp": "2026-02-16T05:39:50.525753+00:00",
+      "timestamp": "2026-02-17T05:03:28.200388+00:00",
       "event_type": "dispatched",
-      "work_unit_id": "1bafec981875",
+      "work_unit_id": "0a59694fbefb",
       "details": ""
     },
     {
-      "timestamp": "2026-02-16T05:39:50.526139+00:00",
+      "timestamp": "2026-02-17T05:03:28.200907+00:00",
       "event_type": "dispatched",
-      "work_unit_id": "eef84aa2e9ad",
+      "work_unit_id": "9b4289bacb5c",
       "details": ""
     },
     {
-      "timestamp": "2026-02-16T05:45:39.645335+00:00",
+      "timestamp": "2026-02-17T05:05:29.016867+00:00",
       "event_type": "dispatched",
-      "work_unit_id": "1d108e01249a",
+      "work_unit_id": "30bb0756eda6",
       "details": ""
     },
     {
-      "timestamp": "2026-02-16T05:45:40.396898+00:00",
+      "timestamp": "2026-02-17T05:05:29.191809+00:00",
       "event_type": "merged",
-      "work_unit_id": "eef84aa2e9ad",
+      "work_unit_id": "0a59694fbefb",
       "details": ""
     },
     {
-      "timestamp": "2026-02-16T05:49:46.167617+00:00",
+      "timestamp": "2026-02-17T05:07:44.993269+00:00",
       "event_type": "dispatched",
-      "work_unit_id": "6c3206ecb1be",
+      "work_unit_id": "9b34a3e104ce",
       "details": ""
     },
     {
-      "timestamp": "2026-02-16T05:49:47.094312+00:00",
+      "timestamp": "2026-02-17T05:07:45.078960+00:00",
       "event_type": "merged",
-      "work_unit_id": "1bafec981875",
+      "work_unit_id": "30bb0756eda6",
       "details": ""
     },
     {
-      "timestamp": "2026-02-16T05:51:33.936070+00:00",
+      "timestamp": "2026-02-17T05:09:56.654189+00:00",
+      "event_type": "merge_failed",
+      "work_unit_id": "9b4289bacb5c",
+      "details": "{\"failure_output\": \"Merge conflict: Auto-merging src/mission_control/config.py\\nCONFLICT (content): Merge conflict in src/mission_control/config.py\\nAutomatic merge failed; fix conflicts and then commit the result.\\n\", \"failure_stage\": \"merge_conflict\"}"
+    },
+    {
+      "timestamp": "2026-02-17T05:09:56.654475+00:00",
+      "event_type": "retry_queued",
+      "work_unit_id": "9b4289bacb5c",
+      "details": "{\"delay\": 30, \"failure_reason\": \"Merge conflict: Auto-merging src/mission_control/config.py\\nCONFLICT (content): Merge conflict in src/mission_control/config.py\\nAutomatic merge failed; fix conflicts and then commit the result.\\n\"}"
+    },
+    {
+      "timestamp": "2026-02-17T05:09:56.680423+00:00",
       "event_type": "dispatched",
-      "work_unit_id": "9b8836a00079",
+      "work_unit_id": "4305d75426d8",
       "details": ""
     },
     {
-      "timestamp": "2026-02-16T05:51:34.652728+00:00",
-      "event_type": "merged",
-      "work_unit_id": "1d108e01249a",
-      "details": ""
-    },
-    {
-      "timestamp": "2026-02-16T05:56:10.933863+00:00",
+      "timestamp": "2026-02-17T05:11:27.085676+00:00",
       "event_type": "dispatched",
-      "work_unit_id": "d453a139dc91",
+      "work_unit_id": "3f3411129afd",
       "details": ""
     },
     {
-      "timestamp": "2026-02-16T05:56:11.703995+00:00",
+      "timestamp": "2026-02-17T05:11:27.240919+00:00",
       "event_type": "merged",
-      "work_unit_id": "6c3206ecb1be",
+      "work_unit_id": "4305d75426d8",
+      "details": ""
+    },
+    {
+      "timestamp": "2026-02-17T05:11:36.277468+00:00",
+      "event_type": "merged",
+      "work_unit_id": "9b34a3e104ce",
       "details": ""
     }
   ]

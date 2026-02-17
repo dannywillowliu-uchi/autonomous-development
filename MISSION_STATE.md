@@ -1,52 +1,32 @@
 # Mission State
-Objective: Codebase quality improvements based on architectural analysis. Each unit must include tests and pass all existing tests.
+Objective: Implement P2 (Architect/Editor Model Split) and P3 (Structured Schedule Output for Planner). Both improve worker quality and planner reliability.
 
-FIX 1 - DOCUMENT OBJECTIVE SIGNALS EXCEPTION:
-BACKLOG.md states "objective signals only" as a design principle, but diff_reviewer.py intentionally reintroduces LLM evaluation (alignment/approach/tests scoring). Update CLAUDE.md and BACKLOG.md to document this as a deliberate exception: "LLM diff reviews provide richer quality signals for the planner feedback loop; they are fire-and-forget and do NOT gate merges (unlike the old evaluator which blocked progress)." Mark the P1 evaluator refactor as DONE with this caveat.
+1. PER-COMPONENT MODEL CONFIG: Add per-component model fields to config.py: planner_model, worker_model, fixup_model. Each defaults to "opus" but can be overridden in mission-control.toml under a [models] section. Update recursive_planner.py, worker.py, and green_branch.py to read their model from config instead of using the global scheduler.model. Add tests for config parsing with and without the [models] section.
 
-FIX 2 - EXTRACT FROM CONTINUOUS CONTROLLER:
-continuous_controller.py is 2,183 LOC with 17 imports. Extract two responsibilities into dedicated modules:
-(a) New src/mission_control/planner_context.py: Move _build_planner_context() and _update_mission_state() (~200 lines of prompt/state formatting). The new module should export build_planner_context(db, mission_id) and update_mission_state(db, mission, config). Controller calls these functions instead.
-(b) New src/mission_control/backlog_manager.py: Move _load_backlog_objective(), _update_backlog_from_completion(), _update_backlog_on_completion(), _bridge_discovery_to_backlog() (~150 lines). Export a BacklogManager class initialized with db+config. Controller delegates to it.
-Both modules: add unit tests. Controller should shrink by ~350 lines. Do NOT break existing tests.
+2. ARCHITECT/EDITOR SPLIT IN WORKERS: Add an optional two-pass mode for workers. When enabled (architect_editor_mode = true in config), the worker runs two Claude sessions per unit: (a) Architect pass -- "Analyze the codebase and describe exactly what changes are needed, which files to modify, and why. Do NOT write code." Uses the worker_model. (b) Editor pass -- "Implement these specific changes: {architect_output}". Uses the worker_model. The architect output is passed as context to the editor. If architect_editor_mode is false (default), workers behave as today -- single pass. Add the mode flag to config.py. Modify worker.py to support both modes. Add tests for both paths.
 
-FIX 3 - FIX SYNC SUBPROCESS IN STRATEGIST:
-strategist.py line 99 uses synchronous subprocess.run() for git log, which blocks the async event loop. Replace with asyncio.create_subprocess_exec() to match the pattern used everywhere else (e.g. _invoke_llm in the same file). Make _get_git_log() async. Update all callers (propose_objective, _build_strategy_prompt). Update tests.
+3. STRUCTURED PLANNER OUTPUT: Change recursive_planner.py to use embedded structured blocks instead of parsing the entire LLM response. The planner prompt should instruct the LLM to reason in prose first, then emit a machine-readable block: <!-- PLAN -->{"units": [{"title": "...", "scope": "...", "files_hint": "..."}]}<!-- /PLAN -->. Update the parser to extract only the <!-- PLAN --> block using regex, ignoring surrounding prose. Fall back to the current parsing if no <!-- PLAN --> block is found (backwards compatibility). The MC_RESULT pattern in session.py already uses a similar approach -- follow that pattern.
 
-FIX 4 - ADD CONSTANTS MODULE:
-Create src/mission_control/constants.py to centralize hardcoded scoring weights and limits scattered across the codebase:
-- EVALUATOR_WEIGHTS from evaluator.py (0.4, 0.2, 0.2, 0.2)
-- GRADING_WEIGHTS from grading.py (0.30, 0.25, 0.25, 0.20)
-- DEFAULT_LIMITS: DB query limits (10, 20, 50), retry limits, timeout defaults
-Import and use these constants from the original modules. Add a test that validates weights sum to 1.0.
+4. PLANNER OUTPUT TESTS: Add comprehensive tests for the new structured parser: valid plan block extraction, missing plan block fallback, malformed JSON inside block, multiple plan blocks (use first), plan block with surrounding prose. Test that existing planner output formats still work via fallback.
 
-FIX 5 - DEFENSIVE ASSERTION FOR RECURSIVE PLANNER CWD:
-CLAUDE.md documents that recursive_planner.py MUST set cwd=target.resolved_path or the planner sees scheduler files. Add:
-(a) An assertion in plan_round() that validates cwd equals config.target.resolved_path before spawning
-(b) A clear comment explaining the gotcha
-(c) A test that fails if cwd is wrong (mock subprocess, verify cwd argument)
-
-Each unit: implement the fix, add tests, ensure ALL existing tests pass.
+Each unit: implement the feature, add tests, ensure all existing tests pass. Read BACKLOG.md for the full P2 and P3 specs.
 
 ## Completed
-- [x] fc1c005f (2026-02-17T02:11:59.328526+00:00) -- Documented diff_reviewer.py as deliberate LLM eval exception in CLAUDE.md Architecture section and m (files: CLAUDE.md, BACKLOG.md)
-- [x] 9b8f44ba (2026-02-17T02:14:40.579053+00:00) -- Replaced synchronous subprocess.run() in strategist._get_git_log() with async asyncio.create_subproc (files: src/mission_control/strategist.py, tests/test_strategist.py)
-- [x] 83e4d24d (2026-02-17T02:18:47.097733+00:00) -- Created src/mission_control/constants.py with EVALUATOR_WEIGHTS, GRADING_WEIGHTS tuples and DEFAULT_ (files: src/mission_control/constants.py, src/mission_control/evaluator.py, src/mission_control/grading.py, tests/test_constants.py)
-- [x] 49846bc7 (2026-02-17T02:20:17.742130+00:00) -- Extracted planner_context.py (build_planner_context + update_mission_state) and backlog_manager.py ( (files: src/mission_control/continuous_controller.py, src/mission_control/planner_context.py, src/mission_control/backlog_manager.py, tests/test_planner_context.py, tests/test_backlog_manager.py)
+- [x] 0a59694f (2026-02-17T05:05:28.903691+00:00) -- Added ModelsConfig dataclass with planner_model, worker_model, fixup_model, architect_editor_mode fi (files: src/mission_control/config.py, tests/test_config.py)
+- [x] 30bb0756 (2026-02-17T05:07:44.818037+00:00) -- Wired fixup_model into green_branch.py: added _get_fixup_model() with config.models.fixup_model -> s (files: src/mission_control/green_branch.py, tests/test_green_branch.py)
+- [x] 9b4289ba (2026-02-17T05:09:56.467201+00:00) -- Implemented architect/editor two-pass mode in worker.py. Added ModelsConfig to config.py with per-co (files: src/mission_control/config.py, src/mission_control/worker.py, tests/test_worker.py)
+- [x] 4305d754 (2026-02-17T05:11:26.957398+00:00) -- Fixed test_fixup_falls_back_to_scheduler_model which was broken by the earlier ModelsConfig addition (files: tests/test_green_branch.py)
+- [x] 9b34a3e1 (2026-02-17T05:11:35.991706+00:00) -- Wired worker_model from ModelsConfig into worker.py and continuous_controller.py with getattr fallba (files: src/mission_control/worker.py, src/mission_control/continuous_controller.py, tests/test_worker.py)
 
 ## Files Modified
-BACKLOG.md, CLAUDE.md, src/mission_control/backlog_manager.py, src/mission_control/constants.py, src/mission_control/continuous_controller.py, src/mission_control/evaluator.py, src/mission_control/grading.py, src/mission_control/planner_context.py, src/mission_control/strategist.py, tests/test_backlog_manager.py, tests/test_constants.py, tests/test_planner_context.py, tests/test_strategist.py
-
-## Quality Reviews
-- 83e4d24d (Add constants module for scoring weights): alignment=2 approach=1 tests=1 avg=1.3
-  "This diff implements nothing from the assigned work unit (constants module + tes"
+src/mission_control/config.py, src/mission_control/continuous_controller.py, src/mission_control/green_branch.py, src/mission_control/worker.py, tests/test_config.py, tests/test_green_branch.py, tests/test_worker.py
 
 ## Remaining
 The planner should focus on what hasn't been done yet.
 Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 
 ## Changelog
-- 2026-02-17T02:11:59.328526+00:00 | fc1c005f merged (commit: e3f9731) -- Documented diff_reviewer.py as deliberate LLM eval exception in CLAUDE.md Archit
-- 2026-02-17T02:14:40.579053+00:00 | 9b8f44ba merged (commit: 1d732cb) -- Replaced synchronous subprocess.run() in strategist._get_git_log() with async as
-- 2026-02-17T02:18:47.097733+00:00 | 83e4d24d merged (commit: 0afc7b4) -- Created src/mission_control/constants.py with EVALUATOR_WEIGHTS, GRADING_WEIGHTS
-- 2026-02-17T02:20:17.742130+00:00 | 49846bc7 merged (commit: a822395) -- Extracted planner_context.py (build_planner_context + update_mission_state) and 
+- 2026-02-17T05:05:28.903691+00:00 | 0a59694f merged (commit: 485deb7) -- Added ModelsConfig dataclass with planner_model, worker_model, fixup_model, arch
+- 2026-02-17T05:07:44.818037+00:00 | 30bb0756 merged (commit: 883345d) -- Wired fixup_model into green_branch.py: added _get_fixup_model() with config.mod
+- 2026-02-17T05:11:26.957398+00:00 | 4305d754 merged (commit: 942d4ff) -- Fixed test_fixup_falls_back_to_scheduler_model which was broken by the earlier M
+- 2026-02-17T05:11:35.991706+00:00 | 9b34a3e1 merged (commit: 8b7023f) -- Wired worker_model from ModelsConfig into worker.py and continuous_controller.py

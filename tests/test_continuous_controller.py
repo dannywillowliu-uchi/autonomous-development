@@ -1427,3 +1427,81 @@ class TestNextObjectivePopulation:
 		assert result.objective_met is True
 		assert result.next_objective == ""
 
+
+class TestInFlightUnitsPreventPrematureCompletion:
+	@pytest.mark.asyncio
+	async def test_waits_for_inflight_before_declaring_complete(self, config: MissionConfig, db: Database) -> None:
+		"""Planner returns empty but units are still running -- should wait, not declare complete."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 10
+		config.discovery.enabled = False
+		ctrl = ContinuousController(config, db)
+
+		inflight_completed = asyncio.Event()
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			# Simulate slow execution
+			await asyncio.sleep(0.1)
+			inflight_completed.set()
+			unit.status = "completed"
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(
+					unit=unit, handoff=None,
+					workspace="/tmp/ws", epoch=epoch,
+				),
+			)
+			semaphore.release()
+
+		call_count = 0
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "",
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			plan = Plan(id=f"p{call_count}", objective="test")
+			epoch = Epoch(id=f"ep{call_count}", mission_id=mission.id, number=call_count)
+			if call_count == 1:
+				units = [
+					WorkUnit(id="wu-1", plan_id=plan.id, title="Task 1"),
+				]
+				return plan, units, epoch
+			# Second call: planner returns empty while unit is still running
+			# Third call (after gather): still empty, now truly complete
+			return plan, [], epoch
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock()
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
+
+		with (
+			patch.object(ctrl, "_init_components", mock_init),
+			patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+			patch("mission_control.continuous_controller.EventStream"),
+		):
+			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
+
+		# Planner was called at least twice (first returns units, second returns empty)
+		assert call_count >= 2
+		# The in-flight unit should have completed before mission ended
+		assert inflight_completed.is_set()
+		assert result.objective_met is True
+		assert result.stopped_reason == "planner_completed"
+		assert result.total_units_dispatched >= 1
+

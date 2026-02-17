@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -31,18 +33,39 @@ def _is_parse_fallback(result: PlannerResult) -> bool:
 	)
 
 
+_PLAN_BLOCK_RE = re.compile(r"<!--\s*PLAN\s*-->(.*?)<!--\s*/PLAN\s*-->", re.DOTALL)
+
+
 def _parse_planner_output(output: str) -> PlannerResult:
-	"""Extract JSON from PLAN_RESULT marker in planner output, with fallbacks."""
+	"""Extract JSON from structured plan blocks or PLAN_RESULT marker, with fallbacks.
+
+	Parse priority:
+	1. <!-- PLAN -->...<!-- /PLAN --> block (new structured format)
+	2. PLAN_RESULT: marker (legacy preferred format)
+	3. Bare JSON extraction (backward compatibility)
+	4. Single-leaf fallback
+	"""
 	data = None
 
-	# 1. Try PLAN_RESULT: marker (preferred -- matches session.py MC_RESULT pattern)
-	marker = "PLAN_RESULT:"
-	idx = output.rfind(marker)
-	if idx != -1:
-		remainder = output[idx + len(marker):]
-		data = extract_json_from_text(remainder)
+	# 1. Try <!-- PLAN --> block (use first match if multiple)
+	plan_match = _PLAN_BLOCK_RE.search(output)
+	if plan_match:
+		block_content = plan_match.group(1).strip()
+		try:
+			data = json.loads(block_content)
+		except (json.JSONDecodeError, ValueError):
+			log.warning("Malformed JSON inside <!-- PLAN --> block, falling through to PLAN_RESULT")
+			data = None
 
-	# 2. Fallback: try parsing the whole output (backward compatibility)
+	# 2. Try PLAN_RESULT: marker (matches session.py MC_RESULT pattern)
+	if not isinstance(data, dict):
+		marker = "PLAN_RESULT:"
+		idx = output.rfind(marker)
+		if idx != -1:
+			remainder = output[idx + len(marker):]
+			data = extract_json_from_text(remainder)
+
+	# 3. Fallback: try parsing the whole output (backward compatibility)
 	if not isinstance(data, dict):
 		data = extract_json_from_text(output)
 
@@ -173,25 +196,27 @@ class RecursivePlanner:
 		node.status = "expanded"
 
 	def _build_retry_prompt(self, node: PlanNode, objective: str) -> str:
-		"""Build a simplified prompt that strongly emphasizes the PLAN_RESULT JSON format."""
+		"""Build a simplified prompt that strongly emphasizes the <!-- PLAN --> block format."""
 		max_children = self.config.planner.max_children_per_node
-		return f"""You are a planner. Your ONLY job is to output a valid PLAN_RESULT JSON line.
+		return f"""You are a planner. Your ONLY job is to output valid JSON inside a <!-- PLAN --> block.
 
 Objective: {objective}
 Scope: {node.scope}
 
-You MUST output EXACTLY one line starting with PLAN_RESULT: followed by valid JSON.
+You MUST output EXACTLY one <!-- PLAN --> block containing valid JSON.
 
 Option A - subdivide into sub-scopes (max {max_children}):
-PLAN_RESULT:{{"type":"subdivide","children":[{{"scope":"sub-scope description"}}]}}
+<!-- PLAN -->{{"type":"subdivide","children":[{{"scope":"sub-scope description"}}]}}<!-- /PLAN -->
 
 Option B - leaf tasks:
-PLAN_RESULT:{{"type":"leaves","units":[{{"title":"task","description":"do X","files_hint":"f.py","priority":1}}]}}
+<!-- PLAN -->{{"type":"leaves","units":[
+  {{"title":"task","description":"do X","files_hint":"f.py","priority":1}}
+]}}<!-- /PLAN -->
 
 Option C - nothing to do:
-PLAN_RESULT:{{"type":"leaves","units":[]}}
+<!-- PLAN -->{{"type":"leaves","units":[]}}<!-- /PLAN -->
 
-Output ONLY the PLAN_RESULT line. No explanation. No reasoning. Just the JSON."""
+Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the block."""
 
 	async def _invoke_planner_llm(
 		self,
@@ -230,18 +255,20 @@ Output ONLY the PLAN_RESULT line. No explanation. No reasoning. Just the JSON.""
 - Read MISSION_STATE.md in the project root to see what's already been completed.
 - If Past Round Performance lists already-modified files, do NOT target those files again.
 - If the objective has been fully achieved based on MISSION_STATE.md and past discoveries, return EMPTY units:
-  PLAN_RESULT:{{"type":"leaves","units":[]}}
+  <!-- PLAN -->{{"type":"leaves","units":[]}}<!-- /PLAN -->
 
 ## Output Format
-You may explain your reasoning, but you MUST end your response with a PLAN_RESULT line.
+Reason in prose first, then emit your plan inside a <!-- PLAN --> block.
 
 For subdivision:
-PLAN_RESULT:{{"type": "subdivide", "children": [{{"scope": "description of sub-scope"}}, ...]}}
+<!-- PLAN -->{{"type": "subdivide", "children": [{{"scope": "description of sub-scope"}}, ...]}}<!-- /PLAN -->
 
 For leaf tasks:
-PLAN_RESULT:{{"type":"leaves","units":[{{"title":"...","description":"...","files_hint":"...","priority":1,"depends_on_indices":[]}}]}}
+<!-- PLAN -->{{"type":"leaves","units":[
+  {{"title":"...","description":"...","files_hint":"...","priority":1,"depends_on_indices":[]}}
+]}}<!-- /PLAN -->
 
-IMPORTANT: The PLAN_RESULT line must be the LAST line of your output. Put all reasoning BEFORE it."""
+IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must contain valid JSON only."""
 
 		result = await self._run_planner_subprocess(prompt, node)
 
@@ -259,7 +286,8 @@ IMPORTANT: The PLAN_RESULT line must be the LAST line of your output. Put all re
 	async def _run_planner_subprocess(self, prompt: str, node: PlanNode) -> PlannerResult:
 		"""Run the planner LLM subprocess and parse its output."""
 		budget = self.config.planner.budget_per_call_usd
-		model = self.config.scheduler.model
+		models = getattr(self.config, "models", None)
+		model = getattr(models, "planner_model", None) or self.config.scheduler.model
 		timeout = self.config.target.verification.timeout
 
 		# CRITICAL: cwd must be the target project path, not the scheduler's own directory.

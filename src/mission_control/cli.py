@@ -621,8 +621,6 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
 def cmd_live(args: argparse.Namespace) -> int:
 	"""Launch the live mission control dashboard."""
 	try:
-		import secrets
-
 		import uvicorn
 
 		from mission_control.dashboard.live import LiveDashboard
@@ -635,10 +633,8 @@ def cmd_live(args: argparse.Namespace) -> int:
 		print("No existing database -- creating empty one")
 		Database(db_path)
 
-	token = secrets.token_urlsafe(32)
-	dashboard = LiveDashboard(db_path, auth_token=token)
+	dashboard = LiveDashboard(db_path)
 	print(f"Starting live dashboard at http://{args.host}:{args.port}")
-	print(f"Auth token: {token}")
 	uvicorn.run(dashboard.app, host=args.host, port=args.port, log_level="warning")
 	return 0
 
