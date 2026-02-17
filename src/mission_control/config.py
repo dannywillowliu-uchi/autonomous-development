@@ -130,6 +130,8 @@ class ContinuousConfig:
 	failure_backoff_seconds: int = 60
 	min_ambition_score: int = 4  # replan if ambition below this
 	max_replan_attempts: int = 2  # max replans before proceeding anyway
+	verify_objective_completion: bool = False  # LLM check before declaring mission done
+	max_objective_checks: int = 2  # max verification attempts before accepting
 
 
 @dataclass
@@ -404,10 +406,12 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 	for key in (
 		"retry_base_delay_seconds", "retry_max_delay_seconds", "chain_max_depth",
 		"max_consecutive_failures", "failure_backoff_seconds",
-		"min_ambition_score", "max_replan_attempts",
+		"min_ambition_score", "max_replan_attempts", "max_objective_checks",
 	):
 		if key in data:
 			setattr(cc, key, int(data[key]))
+	if "verify_objective_completion" in data:
+		cc.verify_objective_completion = bool(data["verify_objective_completion"])
 	return cc
 
 

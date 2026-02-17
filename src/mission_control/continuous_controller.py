@@ -10,10 +10,11 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mission_control.backends import LocalBackend, SSHBackend, WorkerBackend
 from mission_control.backlog_manager import BacklogManager
-from mission_control.config import ContinuousConfig, MissionConfig
+from mission_control.config import ContinuousConfig, MissionConfig, claude_subprocess_env
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
 from mission_control.diff_reviewer import DiffReviewer
@@ -22,6 +23,7 @@ from mission_control.event_stream import EventStream
 from mission_control.feedback import get_worker_context
 from mission_control.green_branch import GreenBranchManager
 from mission_control.heartbeat import Heartbeat
+from mission_control.json_utils import extract_json_from_text
 from mission_control.models import (
 	BacklogItem,
 	Epoch,
@@ -132,6 +134,7 @@ class ContinuousController:
 		self._db_degraded: bool = False
 		self.ambition_score: float = 0.0
 		self.proposed_by_strategist: bool = False
+		self._objective_check_count: int = 0
 		self._strategist: Strategist | None = None
 		self._diff_reviewer: DiffReviewer = DiffReviewer(config)
 		self._backlog_manager: BacklogManager = BacklogManager(db, config)
@@ -828,6 +831,24 @@ class ContinuousController:
 					)
 					await asyncio.gather(*running_tasks.values(), return_exceptions=True)
 					continue
+
+				# Optional: verify the objective is actually met before declaring done
+				cont = self.config.continuous
+				if cont.verify_objective_completion:
+					check = await self._verify_objective(
+						mission, feedback_context,
+					)
+					if check is not None and not check["met"]:
+						feedback_context += (
+							f"\n\nOBJECTIVE NOT MET: {check['reason']}. "
+							"Continue working toward the objective."
+						)
+						logger.warning(
+							"Objective verification failed: %s -- re-entering planning loop",
+							check["reason"],
+						)
+						continue
+
 				logger.info("Planner returned no units and no in-flight work -- objective complete")
 				result.objective_met = True
 				result.stopped_reason = "planner_completed"
@@ -1369,6 +1390,106 @@ class ContinuousController:
 
 		# Clean up resolved round
 		del round_tracker[epoch.id]
+
+	async def _verify_objective(
+		self,
+		mission: Mission,
+		feedback_context: str,
+	) -> dict[str, Any] | None:
+		"""LLM check: is the objective actually met? Returns {"met": bool, "reason": str} or None."""
+		max_checks = self.config.continuous.max_objective_checks
+		if self._objective_check_count >= max_checks:
+			logger.info(
+				"Objective check limit reached (%d/%d), accepting completion",
+				self._objective_check_count, max_checks,
+			)
+			return None
+
+		self._objective_check_count += 1
+		logger.info(
+			"Verifying objective completion (check %d/%d)",
+			self._objective_check_count, max_checks,
+		)
+
+		# Gather unit summaries
+		units = await self.db.locked_call("get_work_units_for_mission", mission.id)
+		summaries = []
+		for u in units:
+			if u.status == "completed" and u.output_summary:
+				summaries.append(f"- {u.title}: {u.output_summary[:200]}")
+		summary_text = "\n".join(summaries[-20:]) or "No completed units."
+
+		# Read MISSION_STATE.md if available
+		state_path = self.config.target.resolved_path / "MISSION_STATE.md"
+		mission_state = ""
+		if state_path.exists():
+			try:
+				mission_state = state_path.read_text()[:4000]
+			except OSError:
+				pass
+
+		prompt = f"""You are verifying whether a mission objective has been fully achieved.
+
+## Objective
+{mission.objective}
+
+## Completed Work Summaries
+{summary_text}
+
+## Mission State
+{mission_state or 'No MISSION_STATE.md found.'}
+
+## Feedback Context
+{feedback_context[:2000]}
+
+## Instructions
+Determine if the objective has been fully met based on the evidence above.
+Consider: are there remaining gaps, unfinished features, or untested scenarios?
+
+End your response with:
+OBJECTIVE_CHECK:{{"met": true, "reason": "brief explanation"}}
+or
+OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
+
+		model = getattr(self.config.models, "planner_model", None) or self.config.scheduler.model
+		try:
+			proc = await asyncio.create_subprocess_exec(
+				"claude", "-p",
+				"--output-format", "text",
+				"--max-budget-usd", "0.50",
+				"--model", model,
+				stdin=asyncio.subprocess.PIPE,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				env=claude_subprocess_env(),
+				cwd=str(self.config.target.resolved_path),
+			)
+			stdout, _ = await asyncio.wait_for(
+				proc.communicate(input=prompt.encode()),
+				timeout=120,
+			)
+			output = stdout.decode() if stdout else ""
+		except (asyncio.TimeoutError, Exception) as exc:
+			logger.warning("Objective verification failed: %s", exc)
+			return None
+
+		# Parse OBJECTIVE_CHECK marker
+		marker = "OBJECTIVE_CHECK:"
+		idx = output.rfind(marker)
+		if idx == -1:
+			logger.warning("No OBJECTIVE_CHECK marker found in output")
+			return None
+
+		remainder = output[idx + len(marker):]
+		data = extract_json_from_text(remainder)
+		if not isinstance(data, dict):
+			logger.warning("Failed to parse OBJECTIVE_CHECK JSON")
+			return None
+
+		met = bool(data.get("met", True))
+		reason = str(data.get("reason", ""))[:500]
+		logger.info("Objective check result: met=%s reason=%s", met, reason)
+		return {"met": met, "reason": reason}
 
 	async def _blocking_review(
 		self,
