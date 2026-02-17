@@ -866,18 +866,18 @@ class TestArchitectEditorMode:
 		assert result.commit_hash == "def456"
 		assert result.output_summary == "Implemented changes"
 
-	async def test_architect_failure_marks_unit_failed(
+	async def test_architect_failure_falls_back_to_single_pass(
 		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
 		mock_backend: MockBackend,
 	) -> None:
-		"""When the architect pass fails, the unit is marked failed without running editor."""
+		"""When the architect pass fails, falls back to single-pass and completes."""
 		w, _ = worker_and_unit
 		config.models = ModelsConfig(architect_editor_mode=True)
 
-		wu = db.get_work_unit("wu1")
-		assert wu is not None
-		wu.max_attempts = 1
-		db.update_work_unit(wu)
+		fallback_output = (
+			'MC_RESULT:{"status":"completed","commits":["fallback1"],'
+			'"summary":"Completed via fallback","files_changed":["src/foo.py"]}'
+		)
 
 		spawn_count = 0
 
@@ -886,11 +886,22 @@ class TestArchitectEditorMode:
 		) -> WorkerHandle:
 			nonlocal spawn_count
 			spawn_count += 1
-			return WorkerHandle(worker_id=worker_id, pid=12345, workspace_path=workspace_path)
+			return WorkerHandle(worker_id=worker_id, pid=10000 + spawn_count, workspace_path=workspace_path)
+
+		async def mock_check_status(handle: WorkerHandle) -> str:
+			# Architect pass (first spawn) fails, fallback pass (second spawn) completes
+			if handle.pid == 10001:
+				return "failed"
+			return "completed"
+
+		async def mock_get_output(handle: WorkerHandle) -> str:
+			if handle.pid == 10001:
+				return "Error: analysis failed"
+			return fallback_output
 
 		mock_backend.spawn = mock_spawn  # type: ignore[method-assign]
-		mock_backend.check_status = AsyncMock(return_value="failed")  # type: ignore[method-assign]
-		mock_backend.get_output = AsyncMock(return_value="Error: analysis failed")  # type: ignore[method-assign]
+		mock_backend.check_status = mock_check_status  # type: ignore[method-assign]
+		mock_backend.get_output = mock_get_output  # type: ignore[method-assign]
 
 		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
 
@@ -902,13 +913,14 @@ class TestArchitectEditorMode:
 			assert unit is not None
 			await agent._execute_unit(unit)  # noqa: SLF001
 
-		# Only architect pass was spawned (editor never runs)
-		assert spawn_count == 1
+		# Two spawns: architect (failed) + fallback single-pass
+		assert spawn_count == 2
 
 		result = db.get_work_unit("wu1")
 		assert result is not None
-		assert result.status == "failed"
-		assert "Architect pass failed" in result.output_summary
+		assert result.status == "completed"
+		assert result.commit_hash == "fallback1"
+		assert result.output_summary == "Completed via fallback"
 
 	async def test_architect_output_passed_to_editor_prompt(
 		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
@@ -963,3 +975,188 @@ class TestArchitectEditorMode:
 		editor_cmd_prompt = spawn_calls[1][-1]
 		assert architect_output in editor_cmd_prompt
 		assert "Architect Analysis" in editor_cmd_prompt
+
+	async def test_research_units_skip_architect_mode(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""Research units always use single-pass even when architect_editor_mode is True."""
+		w, _ = worker_and_unit
+		config.models = ModelsConfig(architect_editor_mode=True)
+
+		# Set unit type to research
+		wu = db.get_work_unit("wu1")
+		assert wu is not None
+		wu.unit_type = "research"
+		db.update_work_unit(wu)
+
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":[],'
+			'"summary":"Research findings","discoveries":["found X"],"files_changed":[]}'
+		)
+
+		spawn_calls: list[list[str]] = []
+
+		async def mock_spawn(
+			worker_id: str, workspace_path: str, command: list[str], timeout: int,
+		) -> WorkerHandle:
+			spawn_calls.append(command)
+			return WorkerHandle(worker_id=worker_id, pid=12345, workspace_path=workspace_path)
+
+		mock_backend.spawn = mock_spawn  # type: ignore[method-assign]
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# Only one spawn (single-pass) even though architect_editor_mode=True
+		assert len(spawn_calls) == 1
+		prompt_text = spawn_calls[0][-1]
+		# Should NOT contain architect instructions
+		assert "Do NOT write code" not in prompt_text
+		# Should use the worker prompt template (not architect)
+		assert "MC_RESULT" in prompt_text
+
+	async def test_experiment_units_skip_architect_mode(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""Experiment units always use single-pass even when architect_editor_mode is True."""
+		w, _ = worker_and_unit
+		config.models = ModelsConfig(architect_editor_mode=True)
+
+		wu = db.get_work_unit("wu1")
+		assert wu is not None
+		wu.unit_type = "experiment"
+		db.update_work_unit(wu)
+
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":[],'
+			'"summary":"Experiment done","discoveries":["found X"],"files_changed":[]}'
+		)
+		mock_backend.spawn = AsyncMock(  # type: ignore[method-assign]
+			return_value=WorkerHandle(worker_id=w.id, pid=12345, workspace_path="/tmp/mock-workspace"),
+		)
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# Only one spawn call (single-pass)
+		assert mock_backend.spawn.call_count == 1
+
+	async def test_architect_timeout_falls_back_to_single_pass(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""When architect pass times out, falls back to single-pass."""
+		from mission_control.worker import _SpawnError
+
+		w, _ = worker_and_unit
+		config.models = ModelsConfig(architect_editor_mode=True)
+
+		fallback_output = (
+			'MC_RESULT:{"status":"completed","commits":["timeout_fb"],'
+			'"summary":"Done after timeout fallback","files_changed":["a.py"]}'
+		)
+
+		spawn_count = 0
+
+		async def mock_spawn(
+			worker_id: str, workspace_path: str, command: list[str], timeout: int,
+		) -> WorkerHandle:
+			nonlocal spawn_count
+			spawn_count += 1
+			if spawn_count == 1:
+				raise _SpawnError("Timed out after 300s")
+			return WorkerHandle(worker_id=worker_id, pid=20000, workspace_path=workspace_path)
+
+		mock_backend.spawn = mock_spawn  # type: ignore[method-assign]
+		mock_backend.get_output = AsyncMock(return_value=fallback_output)  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# Architect timed out, then fallback succeeded
+		assert spawn_count == 2
+		result = db.get_work_unit("wu1")
+		assert result is not None
+		assert result.status == "completed"
+		assert result.commit_hash == "timeout_fb"
+
+	async def test_mc_result_parsed_from_editor_output(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""MC_RESULT is correctly parsed from the editor (second) pass output."""
+		w, _ = worker_and_unit
+		config.models = ModelsConfig(architect_editor_mode=True)
+
+		architect_output = (
+			'File analysis complete.\n'
+			'MC_RESULT:{"status":"completed","commits":[],'
+			'"summary":"analysis done","discoveries":["pattern found"],"files_changed":[]}'
+		)
+		editor_output = (
+			'Implemented all changes.\n'
+			'MC_RESULT:{"status":"completed","commits":["ed1","ed2"],'
+			'"summary":"Added auth and tests","discoveries":["edge case in login"],'
+			'"concerns":["needs load testing"],"files_changed":["src/auth.py","tests/test_auth.py"]}'
+		)
+
+		spawn_count = 0
+
+		async def mock_spawn(
+			worker_id: str, workspace_path: str, command: list[str], timeout: int,
+		) -> WorkerHandle:
+			nonlocal spawn_count
+			spawn_count += 1
+			return WorkerHandle(worker_id=worker_id, pid=30000 + spawn_count, workspace_path=workspace_path)
+
+		async def mock_get_output(handle: WorkerHandle) -> str:
+			if handle.pid == 30001:
+				return architect_output
+			return editor_output
+
+		mock_backend.spawn = mock_spawn  # type: ignore[method-assign]
+		mock_backend.get_output = mock_get_output  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		result = db.get_work_unit("wu1")
+		assert result is not None
+		assert result.status == "completed"
+		# commit_hash should be from editor output (first commit)
+		assert result.commit_hash == "ed1"
+		assert result.output_summary == "Added auth and tests"
+		# Handoff should exist with editor's data
+		assert result.handoff_id is not None

@@ -556,57 +556,75 @@ class WorkerAgent:
 			effective_timeout = unit.timeout or self.config.scheduler.session_timeout
 			models_cfg = getattr(self.config, "models", None)
 			architect_editor = getattr(models_cfg, "architect_editor_mode", False)
+			# Research/experiment units always use single-pass
+			use_two_pass = architect_editor and unit.unit_type not in ("research", "experiment")
 
-			if architect_editor:
+			if use_two_pass:
 				# Two-pass: architect (analysis) then editor (implementation)
 				architect_prompt = render_architect_prompt(
 					unit=unit, config=self.config, workspace_path=workspace_path,
 				)
+				architect_succeeded = False
+				architect_output = ""
 				try:
 					architect_output, architect_exit = await self._spawn_and_wait(
 						architect_prompt, workspace_path, effective_timeout,
 					)
-				except _SpawnError as exc:
-					unit.output_summary = str(exc)
-					await self._mark_unit_failed(unit)
-					await self._reset_workspace(workspace_path, branch_name)
-					return
+					architect_succeeded = architect_exit == 0
+				except _SpawnError:
+					logger.warning("Architect pass timed out for unit %s, falling back to single-pass", unit.id)
 				except Exception as exc:
-					logger.error("Backend error for unit %s architect pass: %s", unit.id, exc)
-					unit.output_summary = f"Backend error: {exc}"
-					await self._mark_unit_failed(unit)
-					await self._reset_workspace(workspace_path, branch_name)
-					return
+					logger.warning("Architect pass failed for unit %s: %s, falling back to single-pass", unit.id, exc)
 
-				if architect_exit != 0:
-					logger.warning("Architect pass failed for unit %s", unit.id)
-					unit.output_summary = f"Architect pass failed: {architect_output[-500:]}"
-					await self._mark_unit_failed(unit)
-					await self._reset_workspace(workspace_path, branch_name)
-					return
+				if not architect_succeeded:
+					logger.info("Falling back to single-pass for unit %s", unit.id)
 
-				logger.info("Architect pass completed for unit %s, starting editor pass", unit.id)
-
-				editor_prompt = render_editor_prompt(
-					unit=unit, config=self.config, workspace_path=workspace_path,
-					architect_output=architect_output,
-				)
-				try:
-					output, exit_code = await self._spawn_and_wait(
-						editor_prompt, workspace_path, effective_timeout,
+				if architect_succeeded:
+					logger.info("Architect pass completed for unit %s, starting editor pass", unit.id)
+					editor_prompt = render_editor_prompt(
+						unit=unit, config=self.config, workspace_path=workspace_path,
+						architect_output=architect_output,
 					)
-				except _SpawnError as exc:
-					unit.output_summary = str(exc)
-					await self._mark_unit_failed(unit)
-					await self._reset_workspace(workspace_path, branch_name)
-					return
-				except Exception as exc:
-					logger.error("Backend error for unit %s editor pass: %s", unit.id, exc)
-					unit.output_summary = f"Backend error: {exc}"
-					await self._mark_unit_failed(unit)
-					await self._reset_workspace(workspace_path, branch_name)
-					return
-				unit.exit_code = exit_code
+					try:
+						output, exit_code = await self._spawn_and_wait(
+							editor_prompt, workspace_path, effective_timeout,
+						)
+					except _SpawnError as exc:
+						unit.output_summary = str(exc)
+						await self._mark_unit_failed(unit)
+						await self._reset_workspace(workspace_path, branch_name)
+						return
+					except Exception as exc:
+						logger.error("Backend error for unit %s editor pass: %s", unit.id, exc)
+						unit.output_summary = f"Backend error: {exc}"
+						await self._mark_unit_failed(unit)
+						await self._reset_workspace(workspace_path, branch_name)
+						return
+					unit.exit_code = exit_code
+				else:
+					# Fallback: single-pass after architect failure
+					prompt = render_mission_worker_prompt(
+						unit=unit,
+						config=self.config,
+						workspace_path=workspace_path,
+						branch_name=branch_name,
+					)
+					try:
+						output, exit_code = await self._spawn_and_wait(
+							prompt, workspace_path, effective_timeout,
+						)
+					except _SpawnError as exc:
+						unit.output_summary = str(exc)
+						await self._mark_unit_failed(unit)
+						await self._reset_workspace(workspace_path, branch_name)
+						return
+					except Exception as exc:
+						logger.error("Backend error for unit %s fallback pass: %s", unit.id, exc)
+						unit.output_summary = f"Backend error: {exc}"
+						await self._mark_unit_failed(unit)
+						await self._reset_workspace(workspace_path, branch_name)
+						return
+					unit.exit_code = exit_code
 			else:
 				# Single-pass (default): build prompt and spawn
 				prompt = render_worker_prompt(
