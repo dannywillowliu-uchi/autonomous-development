@@ -349,13 +349,27 @@ class GreenBranchManager:
 
 		return candidate
 
+	def _get_fixup_model(self) -> str:
+		"""Resolve the model for fixup sessions.
+
+		Uses config.models.fixup_model if available, falls back to scheduler.model.
+		"""
+		models = getattr(self.config, "models", None)
+		if models is not None:
+			fixup_model = getattr(models, "fixup_model", "")
+			if fixup_model:
+				return fixup_model
+		return self.config.scheduler.model
+
 	async def _run_fixup_session(self, prompt: str) -> tuple[bool, str]:
 		"""Spawn a Claude Code subprocess for fixup.
 
 		Returns (success, output) tuple.
 		"""
+		model = self._get_fixup_model()
 		cmd = [
 			"claude", "--print", "--output-format", "text",
+			"--model", model,
 			"--max-turns", "5",
 			"-p", prompt,
 		]

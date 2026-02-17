@@ -682,6 +682,52 @@ class TestGreenBranchRealGit:
 		assert ws_green == src_green
 
 
+class TestFixupSessionModel:
+	"""Tests for _run_fixup_session passing the correct --model flag."""
+
+	async def test_fixup_uses_fixup_model_from_config(self) -> None:
+		"""When config.models.fixup_model is set, it is passed as --model."""
+		mgr = _manager()
+		# Simulate a ModelsConfig-like object on config
+		mgr.config.models = type("ModelsConfig", (), {"fixup_model": "haiku"})()  # type: ignore[attr-defined]
+		mgr._run_command = AsyncMock(return_value=(True, "fixed"))  # type: ignore[method-assign]
+
+		await mgr._run_fixup_session("fix the tests")
+
+		cmd = mgr._run_command.call_args[0][0]
+		assert "--model" in cmd
+		model_idx = cmd.index("--model")
+		assert cmd[model_idx + 1] == "haiku"
+
+	async def test_fixup_falls_back_to_scheduler_model(self) -> None:
+		"""When config.models.fixup_model is default, uses scheduler.model as fallback."""
+		mgr = _manager()
+		mgr.config.scheduler.model = "sonnet"
+		# Clear the fixup_model so _get_fixup_model falls back to scheduler.model
+		mgr.config.models.fixup_model = ""  # type: ignore[attr-defined]
+		mgr._run_command = AsyncMock(return_value=(True, "fixed"))  # type: ignore[method-assign]
+
+		await mgr._run_fixup_session("fix the tests")
+
+		cmd = mgr._run_command.call_args[0][0]
+		assert "--model" in cmd
+		model_idx = cmd.index("--model")
+		assert cmd[model_idx + 1] == "sonnet"
+
+	async def test_fixup_falls_back_when_fixup_model_empty(self) -> None:
+		"""When config.models exists but fixup_model is empty, falls back to scheduler.model."""
+		mgr = _manager()
+		mgr.config.scheduler.model = "opus"
+		mgr.config.models = type("ModelsConfig", (), {"fixup_model": ""})()  # type: ignore[attr-defined]
+		mgr._run_command = AsyncMock(return_value=(True, "fixed"))  # type: ignore[method-assign]
+
+		await mgr._run_fixup_session("fix the tests")
+
+		cmd = mgr._run_command.call_args[0][0]
+		model_idx = cmd.index("--model")
+		assert cmd[model_idx + 1] == "opus"
+
+
 def _state_config(target_path: str = "/tmp/test") -> MissionConfig:
 	mc = MissionConfig()
 	mc.target = TargetConfig(

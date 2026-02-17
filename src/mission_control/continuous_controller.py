@@ -1441,11 +1441,13 @@ class ContinuousController:
 			)
 
 			budget = self.config.scheduler.budget.max_per_session_usd
+			models_cfg = getattr(self.config, "models", None)
+			model = getattr(models_cfg, "worker_model", None) or self.config.scheduler.model
 			cmd = [
 				"claude", "-p",
 				"--output-format", "stream-json",
 				"--permission-mode", "bypassPermissions",
-				"--model", self.config.scheduler.model,
+				"--model", model,
 				"--max-budget-usd", str(budget),
 				prompt,
 			]
