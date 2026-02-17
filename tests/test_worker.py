@@ -13,6 +13,7 @@ from mission_control.db import Database
 from mission_control.models import Mission, Plan, Round, Worker, WorkUnit
 from mission_control.worker import (
 	WorkerAgent,
+	_sanitize_braces,
 	render_architect_prompt,
 	render_editor_prompt,
 	render_mission_worker_prompt,
@@ -971,9 +972,9 @@ class TestArchitectEditorMode:
 		# First call is architect (should contain "Do NOT write code")
 		architect_cmd_prompt = spawn_calls[0][-1]
 		assert "Do NOT write code" in architect_cmd_prompt
-		# Second call is editor (should contain the architect's output)
+		# Second call is editor (should contain the architect's output, with braces sanitized)
 		editor_cmd_prompt = spawn_calls[1][-1]
-		assert architect_output in editor_cmd_prompt
+		assert "SPECIFIC_ANALYSIS" in editor_cmd_prompt
 		assert "Architect Analysis" in editor_cmd_prompt
 
 	async def test_research_units_skip_architect_mode(
@@ -1160,3 +1161,116 @@ class TestArchitectEditorMode:
 		assert result.output_summary == "Added auth and tests"
 		# Handoff should exist with editor's data
 		assert result.handoff_id is not None
+
+
+class TestSanitizeBraces:
+	def test_no_braces_unchanged(self) -> None:
+		assert _sanitize_braces("hello world") == "hello world"
+
+	def test_single_braces_escaped(self) -> None:
+		assert _sanitize_braces("use {foo} here") == "use {{foo}} here"
+
+	def test_already_doubled_braces_still_escaped(self) -> None:
+		assert _sanitize_braces("{{foo}}") == "{{{{foo}}}}"
+
+	def test_empty_string(self) -> None:
+		assert _sanitize_braces("") == ""
+
+	def test_mixed_content(self) -> None:
+		assert _sanitize_braces("a {b} c } d { e") == "a {{b}} c }} d {{ e"
+
+
+class TestBraceSanitizationInPrompts:
+	"""Verify that braces in user-provided fields don't crash .format()."""
+
+	def test_render_worker_prompt_with_braces_no_crash(self, config: MissionConfig) -> None:
+		"""Braces in user-provided fields must not raise KeyError/ValueError."""
+		unit = WorkUnit(
+			title="Fix {broken} thing",
+			description="Handle dict {key: value}",
+			files_hint="src/{utils}.py",
+			verification_hint="run {test}",
+		)
+		prompt = render_worker_prompt(unit, config, "/tmp/clone", "mc/unit-abc", context="ctx {data}")
+		assert "Fix" in prompt
+		assert "broken" in prompt
+		assert "Handle dict" in prompt
+		assert "src/" in prompt
+		assert "run" in prompt
+		assert "ctx" in prompt
+
+	def test_render_mission_worker_prompt_with_braces_no_crash(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Add {feature}", description="Implement {thing}")
+		prompt = render_mission_worker_prompt(
+			unit, config, "/tmp/ws", "mc/unit-x",
+			context="context {data}",
+			experience_context="past {exp}",
+			mission_state="state {info}",
+			overlap_warnings="warn {overlap}",
+		)
+		assert "Add" in prompt
+		assert "feature" in prompt
+		assert "Implement" in prompt
+		assert "context" in prompt
+		assert "past" in prompt
+		assert "state" in prompt
+		assert "warn" in prompt
+
+	def test_render_architect_prompt_with_braces_no_crash(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Analyze {module}", description="Check {pattern}")
+		prompt = render_architect_prompt(
+			unit, config, "/tmp/ws",
+			context="ctx {x}",
+			experience_context="exp {y}",
+			mission_state="ms {z}",
+			overlap_warnings="ow {w}",
+		)
+		assert "Analyze" in prompt
+		assert "module" in prompt
+		assert "Check" in prompt
+		assert "ctx" in prompt
+
+	def test_render_editor_prompt_with_braces_no_crash(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Edit {file}", description="Change {func}")
+		prompt = render_editor_prompt(
+			unit, config, "/tmp/ws",
+			architect_output="modify {foo} in bar()",
+			context="ctx {a}",
+			experience_context="exp {b}",
+			mission_state="ms {c}",
+			overlap_warnings="ow {d}",
+		)
+		assert "Edit" in prompt
+		assert "file" in prompt
+		assert "Change" in prompt
+		assert "modify" in prompt
+		assert "foo" in prompt
+		assert "ctx" in prompt
+
+	def test_research_prompt_with_braces_no_crash(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Research {api}", description="Explore {endpoints}", unit_type="research")
+		prompt = render_mission_worker_prompt(
+			unit, config, "/tmp/ws", "mc/unit-x",
+			mission_state="state with {braces}",
+		)
+		assert "Research" in prompt
+		assert "api" in prompt
+		assert "state with" in prompt
+		assert "braces" in prompt
+
+	def test_experiment_prompt_with_braces_no_crash(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Try {approach}", description="Compare {options}", unit_type="experiment")
+		prompt = render_mission_worker_prompt(
+			unit, config, "/tmp/ws", "mc/unit-x",
+			overlap_warnings="file {lock}",
+		)
+		assert "Try" in prompt
+		assert "approach" in prompt
+		assert "file" in prompt
+		assert "lock" in prompt
+
+	def test_verification_command_with_braces_no_crash(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="X", verification_command="make test ARGS={verbose}")
+		prompt = render_worker_prompt(unit, config, "/tmp/clone", "mc/unit-x")
+		assert "make test ARGS" in prompt
+		assert "verbose" in prompt

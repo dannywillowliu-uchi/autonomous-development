@@ -16,6 +16,11 @@ from mission_control.session import parse_mc_result, validate_mc_result
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_braces(s: str) -> str:
+	"""Escape literal braces so str.format() won't interpret them."""
+	return s.replace("{", "{{").replace("}", "}}")
+
+
 class _SpawnError(Exception):
 	"""Raised by _spawn_and_wait on timeout."""
 
@@ -76,17 +81,17 @@ def render_worker_prompt(
 	return WORKER_PROMPT_TEMPLATE.format(
 		target_name=config.target.name,
 		workspace_path=workspace_path,
-		title=unit.title,
-		description=unit.description,
-		files_hint=unit.files_hint or "Not specified",
+		title=_sanitize_braces(unit.title),
+		description=_sanitize_braces(unit.description),
+		files_hint=_sanitize_braces(unit.files_hint or "Not specified"),
 		test_passed=test_passed,
 		test_total=test_total,
 		lint_errors=lint_errors,
 		type_errors=type_errors,
 		branch_name=branch_name,
-		verification_hint=unit.verification_hint or "Run full verification suite",
-		context_block=context or "No additional context.",
-		verification_command=verify_cmd,
+		verification_hint=_sanitize_braces(unit.verification_hint or "Run full verification suite"),
+		context_block=_sanitize_braces(context or "No additional context."),
+		verification_command=_sanitize_braces(verify_cmd),
 	)
 
 
@@ -285,13 +290,13 @@ def _build_context_blocks(
 	"""Build optional context block strings."""
 	exp_block = ""
 	if experience_context:
-		exp_block = f"\n## Relevant Past Experiences\n{experience_context}\n"
+		exp_block = f"\n## Relevant Past Experiences\n{_sanitize_braces(experience_context)}\n"
 	ms_block = ""
 	if mission_state:
-		ms_block = f"\n## Mission State\n{mission_state}\n"
+		ms_block = f"\n## Mission State\n{_sanitize_braces(mission_state)}\n"
 	ow_block = ""
 	if overlap_warnings:
-		ow_block = f"\n## File Locking Warnings\n{overlap_warnings}\n"
+		ow_block = f"\n## File Locking Warnings\n{_sanitize_braces(overlap_warnings)}\n"
 	return exp_block, ms_block, ow_block
 
 
@@ -317,11 +322,11 @@ def render_mission_worker_prompt(
 	return template.format(
 		target_name=config.target.name,
 		workspace_path=workspace_path,
-		title=unit.title,
-		description=unit.description,
-		files_hint=unit.files_hint or "Not specified",
-		verification_command=verify_cmd,
-		context_block=context or "No additional context.",
+		title=_sanitize_braces(unit.title),
+		description=_sanitize_braces(unit.description),
+		files_hint=_sanitize_braces(unit.files_hint or "Not specified"),
+		verification_command=_sanitize_braces(verify_cmd),
+		context_block=_sanitize_braces(context or "No additional context."),
 		experience_block=exp_block,
 		mission_state_block=ms_block,
 		overlap_warnings_block=ow_block,
@@ -343,11 +348,11 @@ def render_architect_prompt(
 	return ARCHITECT_PROMPT_TEMPLATE.format(
 		target_name=config.target.name,
 		workspace_path=workspace_path,
-		title=unit.title,
-		description=unit.description,
-		files_hint=unit.files_hint or "Not specified",
-		verification_command=verify_cmd,
-		context_block=context or "No additional context.",
+		title=_sanitize_braces(unit.title),
+		description=_sanitize_braces(unit.description),
+		files_hint=_sanitize_braces(unit.files_hint or "Not specified"),
+		verification_command=_sanitize_braces(verify_cmd),
+		context_block=_sanitize_braces(context or "No additional context."),
 		experience_block=exp_block,
 		mission_state_block=ms_block,
 		overlap_warnings_block=ow_block,
@@ -370,12 +375,12 @@ def render_editor_prompt(
 	return EDITOR_PROMPT_TEMPLATE.format(
 		target_name=config.target.name,
 		workspace_path=workspace_path,
-		title=unit.title,
-		description=unit.description,
-		architect_output=architect_output,
-		files_hint=unit.files_hint or "Not specified",
-		verification_command=verify_cmd,
-		context_block=context or "No additional context.",
+		title=_sanitize_braces(unit.title),
+		description=_sanitize_braces(unit.description),
+		architect_output=_sanitize_braces(architect_output),
+		files_hint=_sanitize_braces(unit.files_hint or "Not specified"),
+		verification_command=_sanitize_braces(verify_cmd),
+		context_block=_sanitize_braces(context or "No additional context."),
 		experience_block=exp_block,
 		mission_state_block=ms_block,
 		overlap_warnings_block=ow_block,
