@@ -481,12 +481,15 @@ CREATE TABLE IF NOT EXISTS context_items (
 	content TEXT NOT NULL DEFAULT '',
 	source_unit_id TEXT NOT NULL DEFAULT '',
 	round_id TEXT NOT NULL DEFAULT '',
+	mission_id TEXT NOT NULL DEFAULT '',
 	confidence REAL NOT NULL DEFAULT 1.0,
+	scope_level TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_context_items_round ON context_items(round_id);
 CREATE INDEX IF NOT EXISTS idx_context_items_type ON context_items(item_type);
+CREATE INDEX IF NOT EXISTS idx_context_items_mission ON context_items(mission_id);
 """
 
 
@@ -521,6 +524,26 @@ class Database:
 		self._migrate_strategic_context()
 		self._migrate_mission_strategy_columns()
 		self._migrate_experiment_mode_column()
+		self._migrate_context_items_mission_columns()
+
+	def _migrate_context_items_mission_columns(self) -> None:
+		"""Add mission_id and scope_level columns to context_items (idempotent)."""
+		migrations = [
+			("context_items", "mission_id", "TEXT DEFAULT ''"),
+			("context_items", "scope_level", "TEXT DEFAULT ''"),
+		]
+		for table, column, col_type in migrations:
+			self._validate_identifier(table)
+			self._validate_identifier(column)
+			try:
+				self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")  # noqa: S608
+				logger.debug("Migration: added column %s.%s", table, column)
+			except sqlite3.OperationalError as exc:
+				if "duplicate column name" in str(exc):
+					pass
+				else:
+					logger.warning("Migration failed for %s.%s: %s", table, column, exc)
+					raise
 
 	def _migrate_epoch_columns(self) -> None:
 		"""Add epoch_id columns to existing tables (idempotent)."""
@@ -2503,12 +2526,13 @@ class Database:
 	def insert_context_item(self, item: ContextItem) -> None:
 		self.conn.execute(
 			"""INSERT INTO context_items
-			(id, item_type, scope, content, source_unit_id, round_id, confidence, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+			(id, item_type, scope, content, source_unit_id, round_id, mission_id,
+			 confidence, scope_level, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				item.id, item.item_type, item.scope, item.content,
-				item.source_unit_id, item.round_id, item.confidence,
-				item.created_at,
+				item.source_unit_id, item.round_id, item.mission_id,
+				item.confidence, item.scope_level, item.created_at,
 			),
 		)
 		self.conn.commit()
@@ -2524,6 +2548,25 @@ class Database:
 			"SELECT * FROM context_items WHERE round_id=? ORDER BY created_at",
 			(round_id,),
 		).fetchall()
+		return [self._row_to_context_item(r) for r in rows]
+
+	def get_context_items_for_mission(
+		self,
+		mission_id: str,
+		scope_level: str = "",
+		min_confidence: float = 0.0,
+	) -> list[ContextItem]:
+		"""Get context items for a mission, optionally filtered by scope_level and confidence."""
+		query = "SELECT * FROM context_items WHERE mission_id=?"
+		params: list[str | float] = [mission_id]
+		if scope_level:
+			query += " AND scope_level=?"
+			params.append(scope_level)
+		if min_confidence > 0.0:
+			query += " AND confidence >= ?"
+			params.append(min_confidence)
+		query += " ORDER BY confidence DESC, created_at DESC"
+		rows = self.conn.execute(query, params).fetchall()
 		return [self._row_to_context_item(r) for r in rows]
 
 	def get_context_items_by_scope_overlap(
@@ -2555,6 +2598,7 @@ class Database:
 
 	@staticmethod
 	def _row_to_context_item(row: sqlite3.Row) -> ContextItem:
+		keys = row.keys()
 		return ContextItem(
 			id=row["id"],
 			item_type=row["item_type"],
@@ -2562,6 +2606,8 @@ class Database:
 			content=row["content"],
 			source_unit_id=row["source_unit_id"],
 			round_id=row["round_id"],
+			mission_id=row["mission_id"] if "mission_id" in keys else "",
 			confidence=row["confidence"],
+			scope_level=row["scope_level"] if "scope_level" in keys else "",
 			created_at=row["created_at"],
 		)

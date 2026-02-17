@@ -513,6 +513,14 @@ class DecompositionGrade:
 	unit_count: int = 0
 
 
+class ContextScope:
+	"""Constants for context item scoping levels."""
+
+	MISSION = "mission"
+	ROUND = "round"
+	UNIT = "unit"
+
+
 @dataclass
 class ContextItem:
 	"""A typed context item produced by workers as discoveries.
@@ -527,7 +535,9 @@ class ContextItem:
 	content: str = ""
 	source_unit_id: str = ""  # work unit that produced this context
 	round_id: str = ""
+	mission_id: str = ""  # mission this context belongs to
 	confidence: float = 1.0  # 0.0-1.0, how confident the worker was
+	scope_level: str = ""  # mission/round/unit -- filtering granularity
 	created_at: str = field(default_factory=_now_iso)
 
 
