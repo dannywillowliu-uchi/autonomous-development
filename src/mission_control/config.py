@@ -52,6 +52,9 @@ class BudgetConfig:
 	max_per_run_usd: float = 50.0
 	evaluator_budget_usd: float = 0.50
 	fixup_budget_usd: float = 2.0
+	ema_alpha: float = 0.3
+	outlier_multiplier: float = 3.0
+	conservatism_base: float = 0.5
 
 
 @dataclass
@@ -315,7 +318,10 @@ def _build_git(data: dict[str, Any]) -> GitConfig:
 
 def _build_budget(data: dict[str, Any]) -> BudgetConfig:
 	bc = BudgetConfig()
-	for key in ("max_per_session_usd", "max_per_run_usd", "evaluator_budget_usd", "fixup_budget_usd"):
+	for key in (
+		"max_per_session_usd", "max_per_run_usd", "evaluator_budget_usd", "fixup_budget_usd",
+		"ema_alpha", "outlier_multiplier", "conservatism_base",
+	):
 		if key in data:
 			setattr(bc, key, float(data[key]))
 	return bc
