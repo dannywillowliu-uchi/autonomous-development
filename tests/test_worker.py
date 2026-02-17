@@ -11,7 +11,13 @@ from mission_control.backends.base import WorkerBackend, WorkerHandle
 from mission_control.config import MissionConfig, ModelsConfig
 from mission_control.db import Database
 from mission_control.models import Mission, Plan, Round, Worker, WorkUnit
-from mission_control.worker import WorkerAgent, render_mission_worker_prompt, render_worker_prompt
+from mission_control.worker import (
+	WorkerAgent,
+	render_architect_prompt,
+	render_editor_prompt,
+	render_mission_worker_prompt,
+	render_worker_prompt,
+)
 
 
 class MockBackend(WorkerBackend):
@@ -715,3 +721,245 @@ class TestModelSelection:
 		cmd = spawn_call.kwargs.get("command") or spawn_call[0][2]
 		model_idx = cmd.index("--model")
 		assert cmd[model_idx + 1] == "opus"
+
+
+class TestArchitectEditorPrompts:
+	"""Tests for architect and editor prompt rendering."""
+
+	def test_architect_prompt_contains_analysis_instructions(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Add auth", description="Add authentication module", files_hint="src/auth.py")
+		prompt = render_architect_prompt(unit, config, "/tmp/ws")
+		assert "architect" in prompt.lower()
+		assert "Do NOT write code" in prompt
+		assert "Do NOT modify any files" in prompt
+		assert "Add auth" in prompt
+		assert "src/auth.py" in prompt
+
+	def test_editor_prompt_contains_architect_output(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Add auth", description="Add authentication module", files_hint="src/auth.py")
+		architect_analysis = "Modify src/auth.py to add JWT token validation in the login() function."
+		prompt = render_editor_prompt(unit, config, "/tmp/ws", architect_output=architect_analysis)
+		assert "Architect Analysis" in prompt
+		assert architect_analysis in prompt
+		assert "Add auth" in prompt
+		assert "src/auth.py" in prompt
+		assert "Commit when done" in prompt
+
+	def test_architect_prompt_includes_context_blocks(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Fix bug", description="Fix the thing")
+		prompt = render_architect_prompt(
+			unit, config, "/tmp/ws",
+			experience_context="Past: auth was tricky",
+			mission_state="## Done\n- login",
+			overlap_warnings="- src/auth.py locked",
+		)
+		assert "## Relevant Past Experiences" in prompt
+		assert "## Mission State" in prompt
+		assert "## File Locking Warnings" in prompt
+
+	def test_editor_prompt_includes_context_blocks(self, config: MissionConfig) -> None:
+		unit = WorkUnit(title="Fix bug", description="Fix the thing")
+		prompt = render_editor_prompt(
+			unit, config, "/tmp/ws", architect_output="Change X in Y",
+			experience_context="Past: auth was tricky",
+			mission_state="## Done\n- login",
+			overlap_warnings="- src/auth.py locked",
+		)
+		assert "## Relevant Past Experiences" in prompt
+		assert "## Mission State" in prompt
+		assert "## File Locking Warnings" in prompt
+
+
+class TestArchitectEditorMode:
+	"""Tests for the two-pass architect/editor execution mode."""
+
+	async def test_single_pass_when_mode_disabled(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""When architect_editor_mode is False, only one session is spawned."""
+		w, _ = worker_and_unit
+		config.models = ModelsConfig(architect_editor_mode=False)
+
+		mc_output = (
+			'MC_RESULT:{"status":"completed","commits":["abc123"],'
+			'"summary":"Fixed it","files_changed":["foo.py"]}'
+		)
+		mock_backend.get_output = AsyncMock(return_value=mc_output)  # type: ignore[method-assign]
+		mock_backend.spawn = AsyncMock(  # type: ignore[method-assign]
+			return_value=WorkerHandle(worker_id=w.id, pid=12345, workspace_path="/tmp/mock-workspace"),
+		)
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# Only one spawn call (single pass)
+		assert mock_backend.spawn.call_count == 1
+
+		result = db.get_work_unit("wu1")
+		assert result is not None
+		assert result.status == "completed"
+
+	async def test_two_pass_when_mode_enabled(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""When architect_editor_mode is True, two sessions are spawned sequentially."""
+		w, _ = worker_and_unit
+		config.models = ModelsConfig(architect_editor_mode=True)
+
+		architect_output = (
+			'Analysis: modify src/foo.py\n'
+			'MC_RESULT:{"status":"completed","commits":[],'
+			'"summary":"architectural analysis","discoveries":["found pattern"],"files_changed":[]}'
+		)
+		editor_output = (
+			'MC_RESULT:{"status":"completed","commits":["def456"],'
+			'"summary":"Implemented changes","files_changed":["src/foo.py"]}'
+		)
+
+		spawn_count = 0
+
+		async def mock_spawn(
+			worker_id: str, workspace_path: str, command: list[str], timeout: int,
+		) -> WorkerHandle:
+			nonlocal spawn_count
+			spawn_count += 1
+			return WorkerHandle(worker_id=worker_id, pid=12345 + spawn_count, workspace_path=workspace_path)
+
+		get_output_count = 0
+
+		async def mock_get_output(handle: WorkerHandle) -> str:
+			nonlocal get_output_count
+			get_output_count += 1
+			# First session (architect) returns analysis, second (editor) returns implementation
+			if handle.pid == 12346:
+				return architect_output
+			return editor_output
+
+		mock_backend.spawn = mock_spawn  # type: ignore[method-assign]
+		mock_backend.get_output = mock_get_output  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# Two spawns: architect + editor
+		assert spawn_count == 2
+
+		result = db.get_work_unit("wu1")
+		assert result is not None
+		assert result.status == "completed"
+		assert result.commit_hash == "def456"
+		assert result.output_summary == "Implemented changes"
+
+	async def test_architect_failure_marks_unit_failed(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""When the architect pass fails, the unit is marked failed without running editor."""
+		w, _ = worker_and_unit
+		config.models = ModelsConfig(architect_editor_mode=True)
+
+		wu = db.get_work_unit("wu1")
+		assert wu is not None
+		wu.max_attempts = 1
+		db.update_work_unit(wu)
+
+		spawn_count = 0
+
+		async def mock_spawn(
+			worker_id: str, workspace_path: str, command: list[str], timeout: int,
+		) -> WorkerHandle:
+			nonlocal spawn_count
+			spawn_count += 1
+			return WorkerHandle(worker_id=worker_id, pid=12345, workspace_path=workspace_path)
+
+		mock_backend.spawn = mock_spawn  # type: ignore[method-assign]
+		mock_backend.check_status = AsyncMock(return_value="failed")  # type: ignore[method-assign]
+		mock_backend.get_output = AsyncMock(return_value="Error: analysis failed")  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		# Only architect pass was spawned (editor never runs)
+		assert spawn_count == 1
+
+		result = db.get_work_unit("wu1")
+		assert result is not None
+		assert result.status == "failed"
+		assert "Architect pass failed" in result.output_summary
+
+	async def test_architect_output_passed_to_editor_prompt(
+		self, db: Database, config: MissionConfig, worker_and_unit: tuple[Worker, WorkUnit],
+		mock_backend: MockBackend,
+	) -> None:
+		"""The architect output is included in the editor session's prompt."""
+		w, _ = worker_and_unit
+		config.models = ModelsConfig(architect_editor_mode=True)
+
+		architect_analysis = "SPECIFIC_ANALYSIS: Change function foo() in src/bar.py to accept an extra param."
+		architect_output = (
+			f'{architect_analysis}\n'
+			'MC_RESULT:{"status":"completed","commits":[],'
+			'"summary":"analysis","discoveries":[],"files_changed":[]}'
+		)
+		editor_output = (
+			'MC_RESULT:{"status":"completed","commits":["abc"],'
+			'"summary":"done","files_changed":["src/bar.py"]}'
+		)
+
+		spawn_calls: list[list[str]] = []
+
+		async def mock_spawn(
+			worker_id: str, workspace_path: str, command: list[str], timeout: int,
+		) -> WorkerHandle:
+			spawn_calls.append(command)
+			return WorkerHandle(worker_id=worker_id, pid=10000 + len(spawn_calls), workspace_path=workspace_path)
+
+		async def mock_get_output(handle: WorkerHandle) -> str:
+			if handle.pid == 10001:
+				return architect_output
+			return editor_output
+
+		mock_backend.spawn = mock_spawn  # type: ignore[method-assign]
+		mock_backend.get_output = mock_get_output  # type: ignore[method-assign]
+
+		agent = WorkerAgent(w, db, config, mock_backend, heartbeat_interval=9999)
+
+		async def ok_run_git(*args: str, cwd: str) -> bool:
+			return True
+
+		with patch.object(agent, "_run_git", side_effect=ok_run_git):
+			unit = db.claim_work_unit(w.id)
+			assert unit is not None
+			await agent._execute_unit(unit)  # noqa: SLF001
+
+		assert len(spawn_calls) == 2
+		# First call is architect (should contain "Do NOT write code")
+		architect_cmd_prompt = spawn_calls[0][-1]
+		assert "Do NOT write code" in architect_cmd_prompt
+		# Second call is editor (should contain the architect's output)
+		editor_cmd_prompt = spawn_calls[1][-1]
+		assert architect_output in editor_cmd_prompt
+		assert "Architect Analysis" in editor_cmd_prompt

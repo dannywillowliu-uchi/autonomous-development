@@ -15,6 +15,10 @@ from mission_control.session import parse_mc_result, validate_mc_result
 
 logger = logging.getLogger(__name__)
 
+
+class _SpawnError(Exception):
+	"""Raised by _spawn_and_wait on timeout."""
+
 WORKER_PROMPT_TEMPLATE = """\
 You are a parallel worker agent for {target_name} at {workspace_path}.
 
@@ -205,6 +209,91 @@ MC_RESULT:{{"status":"completed|failed|blocked","commits":["hash"],\
 "concerns":["potential issues"],"files_changed":["list"]}}
 """
 
+ARCHITECT_PROMPT_TEMPLATE = """\
+You are an architect analyzing {target_name} at {workspace_path}.
+
+## Task
+{title}
+
+{description}
+
+## Scope
+Files likely involved: {files_hint}
+
+## Verification
+Run (read-only check): {verification_command}
+
+## Context
+{context_block}
+{experience_block}{mission_state_block}{overlap_warnings_block}
+## Instructions
+Analyze the codebase and describe exactly what changes are needed, which files to modify, and why.
+Do NOT write code. Do NOT modify any files. Do NOT commit anything.
+
+For each change, specify:
+1. The file path
+2. What section/function to modify
+3. What the change should accomplish
+4. Any edge cases or interactions to consider
+
+## Output
+When done, write your analysis as the LAST line of output:
+MC_RESULT:{{"status":"completed","commits":[],"summary":"architectural analysis",\
+"discoveries":["key findings"],"concerns":["potential issues"],"files_changed":[]}}
+"""
+
+EDITOR_PROMPT_TEMPLATE = """\
+You are working on {target_name} at {workspace_path}.
+
+## Task
+{title}
+
+{description}
+
+## Architect Analysis
+The following analysis describes exactly what changes to make:
+
+{architect_output}
+
+## Constraints
+- ONLY modify files in scope: {files_hint}
+- Follow the architect's analysis above precisely
+- No TODOs, no partial implementations
+- No modifications to unrelated files
+- No refactoring beyond the task scope
+- Commit when done or explain why blocked
+
+## Verification
+Run: {verification_command}
+
+## Context
+{context_block}
+{experience_block}{mission_state_block}{overlap_warnings_block}
+## Output
+When done, write a summary as the LAST line of output:
+MC_RESULT:{{"status":"completed|failed|blocked","commits":["hash"],\
+"summary":"what you did","discoveries":["anything unexpected found"],\
+"concerns":["potential issues"],"files_changed":["list"]}}
+"""
+
+
+def _build_context_blocks(
+	experience_context: str = "",
+	mission_state: str = "",
+	overlap_warnings: str = "",
+) -> tuple[str, str, str]:
+	"""Build optional context block strings."""
+	exp_block = ""
+	if experience_context:
+		exp_block = f"\n## Relevant Past Experiences\n{experience_context}\n"
+	ms_block = ""
+	if mission_state:
+		ms_block = f"\n## Mission State\n{mission_state}\n"
+	ow_block = ""
+	if overlap_warnings:
+		ow_block = f"\n## File Locking Warnings\n{overlap_warnings}\n"
+	return exp_block, ms_block, ow_block
+
 
 def render_mission_worker_prompt(
 	unit: WorkUnit,
@@ -218,15 +307,7 @@ def render_mission_worker_prompt(
 ) -> str:
 	"""Render constraint-based prompt for mission mode workers."""
 	verify_cmd = unit.verification_command or config.target.verification.command
-	exp_block = ""
-	if experience_context:
-		exp_block = f"\n## Relevant Past Experiences\n{experience_context}\n"
-	ms_block = ""
-	if mission_state:
-		ms_block = f"\n## Mission State\n{mission_state}\n"
-	ow_block = ""
-	if overlap_warnings:
-		ow_block = f"\n## File Locking Warnings\n{overlap_warnings}\n"
+	exp_block, ms_block, ow_block = _build_context_blocks(experience_context, mission_state, overlap_warnings)
 	if unit.unit_type == "research":
 		template = RESEARCH_WORKER_PROMPT_TEMPLATE
 	elif unit.unit_type == "experiment":
@@ -238,6 +319,60 @@ def render_mission_worker_prompt(
 		workspace_path=workspace_path,
 		title=unit.title,
 		description=unit.description,
+		files_hint=unit.files_hint or "Not specified",
+		verification_command=verify_cmd,
+		context_block=context or "No additional context.",
+		experience_block=exp_block,
+		mission_state_block=ms_block,
+		overlap_warnings_block=ow_block,
+	)
+
+
+def render_architect_prompt(
+	unit: WorkUnit,
+	config: MissionConfig,
+	workspace_path: str,
+	context: str = "",
+	experience_context: str = "",
+	mission_state: str = "",
+	overlap_warnings: str = "",
+) -> str:
+	"""Render the architect (analysis-only) prompt for two-pass mode."""
+	verify_cmd = unit.verification_command or config.target.verification.command
+	exp_block, ms_block, ow_block = _build_context_blocks(experience_context, mission_state, overlap_warnings)
+	return ARCHITECT_PROMPT_TEMPLATE.format(
+		target_name=config.target.name,
+		workspace_path=workspace_path,
+		title=unit.title,
+		description=unit.description,
+		files_hint=unit.files_hint or "Not specified",
+		verification_command=verify_cmd,
+		context_block=context or "No additional context.",
+		experience_block=exp_block,
+		mission_state_block=ms_block,
+		overlap_warnings_block=ow_block,
+	)
+
+
+def render_editor_prompt(
+	unit: WorkUnit,
+	config: MissionConfig,
+	workspace_path: str,
+	architect_output: str,
+	context: str = "",
+	experience_context: str = "",
+	mission_state: str = "",
+	overlap_warnings: str = "",
+) -> str:
+	"""Render the editor (implementation) prompt for two-pass mode."""
+	verify_cmd = unit.verification_command or config.target.verification.command
+	exp_block, ms_block, ow_block = _build_context_blocks(experience_context, mission_state, overlap_warnings)
+	return EDITOR_PROMPT_TEMPLATE.format(
+		target_name=config.target.name,
+		workspace_path=workspace_path,
+		title=unit.title,
+		description=unit.description,
+		architect_output=architect_output,
 		files_hint=unit.files_hint or "Not specified",
 		verification_command=verify_cmd,
 		context_block=context or "No additional context.",
@@ -341,6 +476,50 @@ class WorkerAgent:
 				if not await self._run_git("branch", "-D", mr.branch_name, cwd=workspace_path):
 					logger.debug("Branch %s already cleaned up in %s", mr.branch_name, workspace_path)
 
+	async def _spawn_and_wait(
+		self, prompt: str, workspace_path: str, effective_timeout: int,
+	) -> tuple[str, int]:
+		"""Spawn a Claude session and wait for completion.
+
+		Returns (output, exit_code) where exit_code is 0 for success, 1 for failure.
+		Raises _SpawnError on timeout or backend error.
+		"""
+		budget = self.config.scheduler.budget.max_per_session_usd
+		models_cfg = getattr(self.config, "models", None)
+		model = getattr(models_cfg, "worker_model", None) or self.config.scheduler.model
+		cmd = [
+			"claude",
+			"-p",
+			"--output-format", "stream-json",
+			"--permission-mode", "bypassPermissions",
+			"--model", model,
+			"--max-budget-usd", str(budget),
+			prompt,
+		]
+
+		handle = await self.backend.spawn(
+			worker_id=self.worker.id,
+			workspace_path=workspace_path,
+			command=cmd,
+			timeout=effective_timeout,
+		)
+		self._current_handle = handle
+
+		deadline = time.monotonic() + effective_timeout
+		while True:
+			status = await self.backend.check_status(handle)
+			if status != "running":
+				break
+			if time.monotonic() > deadline:
+				await self.backend.kill(handle)
+				raise _SpawnError(f"Timed out after {effective_timeout}s")
+			await self.backend.get_output(handle)
+			await asyncio.sleep(self.config.scheduler.polling_interval)
+
+		output = await self.backend.get_output(handle)
+		exit_code = 0 if status == "completed" else 1
+		return output, exit_code
+
 	async def _execute_unit(self, unit: WorkUnit) -> None:
 		"""Execute a single work unit via backend: provision, spawn, collect."""
 		branch_name = f"mc/unit-{unit.id}"
@@ -374,61 +553,84 @@ class WorkerAgent:
 					await self._mark_unit_failed(unit)
 					return
 
-			# Build prompt and command
-			prompt = render_worker_prompt(
-				unit=unit,
-				config=self.config,
-				workspace_path=workspace_path,
-				branch_name=branch_name,
-			)
-			budget = self.config.scheduler.budget.max_per_session_usd
-			models_cfg = getattr(self.config, "models", None)
-			model = getattr(models_cfg, "worker_model", None) or self.config.scheduler.model
-			cmd = [
-				"claude",
-				"-p",
-				"--output-format", "stream-json",
-				"--permission-mode", "bypassPermissions",
-				"--model", model,
-				"--max-budget-usd", str(budget),
-				prompt,
-			]
-
-			# Spawn via backend -- use per-unit timeout if set
 			effective_timeout = unit.timeout or self.config.scheduler.session_timeout
-			handle = await self.backend.spawn(
-				worker_id=self.worker.id,
-				workspace_path=workspace_path,
-				command=cmd,
-				timeout=effective_timeout,
-			)
-			self._current_handle = handle
+			models_cfg = getattr(self.config, "models", None)
+			architect_editor = getattr(models_cfg, "architect_editor_mode", False)
 
-			# Wait for completion (drain stdout to prevent pipe buffer deadlock)
-			try:
-				deadline = time.monotonic() + effective_timeout
-				while True:
-					status = await self.backend.check_status(handle)
-					if status != "running":
-						break
-					if time.monotonic() > deadline:
-						await self.backend.kill(handle)
-						unit.output_summary = f"Timed out after {effective_timeout}s"
-						await self._mark_unit_failed(unit)
-						await self._reset_workspace(workspace_path, branch_name)
-						return
-					await self.backend.get_output(handle)
-					await asyncio.sleep(self.config.scheduler.polling_interval)
+			if architect_editor:
+				# Two-pass: architect (analysis) then editor (implementation)
+				architect_prompt = render_architect_prompt(
+					unit=unit, config=self.config, workspace_path=workspace_path,
+				)
+				try:
+					architect_output, architect_exit = await self._spawn_and_wait(
+						architect_prompt, workspace_path, effective_timeout,
+					)
+				except _SpawnError as exc:
+					unit.output_summary = str(exc)
+					await self._mark_unit_failed(unit)
+					await self._reset_workspace(workspace_path, branch_name)
+					return
+				except Exception as exc:
+					logger.error("Backend error for unit %s architect pass: %s", unit.id, exc)
+					unit.output_summary = f"Backend error: {exc}"
+					await self._mark_unit_failed(unit)
+					await self._reset_workspace(workspace_path, branch_name)
+					return
 
-				output = await self.backend.get_output(handle)
-				unit.exit_code = 0 if status == "completed" else 1
+				if architect_exit != 0:
+					logger.warning("Architect pass failed for unit %s", unit.id)
+					unit.output_summary = f"Architect pass failed: {architect_output[-500:]}"
+					await self._mark_unit_failed(unit)
+					await self._reset_workspace(workspace_path, branch_name)
+					return
 
-			except Exception as exc:
-				logger.error("Backend error for unit %s: %s", unit.id, exc)
-				unit.output_summary = f"Backend error: {exc}"
-				await self._mark_unit_failed(unit)
-				await self._reset_workspace(workspace_path, branch_name)
-				return
+				logger.info("Architect pass completed for unit %s, starting editor pass", unit.id)
+
+				editor_prompt = render_editor_prompt(
+					unit=unit, config=self.config, workspace_path=workspace_path,
+					architect_output=architect_output,
+				)
+				try:
+					output, exit_code = await self._spawn_and_wait(
+						editor_prompt, workspace_path, effective_timeout,
+					)
+				except _SpawnError as exc:
+					unit.output_summary = str(exc)
+					await self._mark_unit_failed(unit)
+					await self._reset_workspace(workspace_path, branch_name)
+					return
+				except Exception as exc:
+					logger.error("Backend error for unit %s editor pass: %s", unit.id, exc)
+					unit.output_summary = f"Backend error: {exc}"
+					await self._mark_unit_failed(unit)
+					await self._reset_workspace(workspace_path, branch_name)
+					return
+				unit.exit_code = exit_code
+			else:
+				# Single-pass (default): build prompt and spawn
+				prompt = render_worker_prompt(
+					unit=unit,
+					config=self.config,
+					workspace_path=workspace_path,
+					branch_name=branch_name,
+				)
+				try:
+					output, exit_code = await self._spawn_and_wait(
+						prompt, workspace_path, effective_timeout,
+					)
+				except _SpawnError as exc:
+					unit.output_summary = str(exc)
+					await self._mark_unit_failed(unit)
+					await self._reset_workspace(workspace_path, branch_name)
+					return
+				except Exception as exc:
+					logger.error("Backend error for unit %s: %s", unit.id, exc)
+					unit.output_summary = f"Backend error: {exc}"
+					await self._mark_unit_failed(unit)
+					await self._reset_workspace(workspace_path, branch_name)
+					return
+				unit.exit_code = exit_code
 
 			# Parse result and build handoff
 			mc_result = parse_mc_result(output)
