@@ -21,12 +21,17 @@ Priority backlog items to address:
 ## Completed
 - [x] 7e07ed6b (2026-02-17T08:04:18.915936+00:00) -- Implemented architect/editor two-pass mode in worker.py. When config.models.architect_editor_mode is (files: src/mission_control/worker.py, tests/test_worker.py)
 - [x] c737e58f (2026-02-17T08:05:28.066882+00:00) -- Added _task_done_callback for fire-and-forget exception logging (3 sites + dispatch loop) and extrac (files: src/mission_control/continuous_controller.py, tests/test_continuous_controller.py)
-- [x] d80c9e94 (2026-02-17T08:09:03.907183+00:00) -- Added _on_secondary_task_done callback that logs exceptions from fire-and-forget tasks (diff review, (files: src/mission_control/continuous_controller.py, tests/test_continuous_controller.py)
+- [x] d80c9e94 (2026-02-17T08:11:27.327748+00:00) -- Added _on_secondary_task_done callback that logs exceptions from fire-and-forget tasks (diff review, (files: src/mission_control/continuous_controller.py, tests/test_continuous_controller.py)
 - [x] 0470f118 (2026-02-17T08:09:41.839687+00:00) -- Added architect/editor two-pass mode to worker.py. When config.models.architect_editor_mode=True, wo (files: src/mission_control/worker.py, tests/test_worker.py)
 - [x] b6bcee75 (2026-02-17T08:10:59.710471+00:00) -- The _log_unit_event helper already existed from prior unit c737e58f. Fixed the except handler to use (files: src/mission_control/continuous_controller.py)
+- [x] d80c9e94 (2026-02-17T08:11:27.327748+00:00) -- Fire-and-forget exception logging already implemented by prior unit c737e58f (commit 35b0395). _task (files: src/mission_control/continuous_controller.py, tests/test_continuous_controller.py)
 
 ## Files Modified
 src/mission_control/continuous_controller.py, src/mission_control/worker.py, tests/test_continuous_controller.py, tests/test_worker.py
+
+## Quality Reviews
+- b6bcee75 (Extract _log_unit_event helper in contin): alignment=3 approach=2 tests=1 avg=2.0
+  "This diff only updates MISSION_STATE.md tracking entries — no actual implementat"
 
 ## Remaining
 The planner should focus on what hasn't been done yet.
@@ -36,3 +41,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 - 2026-02-17T08:04:18.915936+00:00 | 7e07ed6b merged (commit: 8d45d3c) -- Implemented architect/editor two-pass mode in worker.py. When config.models.arch
 - 2026-02-17T08:05:28.066882+00:00 | c737e58f merged (commit: 35b0395) -- Added _task_done_callback for fire-and-forget exception logging (3 sites + dispa
 - 2026-02-17T08:10:59.710471+00:00 | b6bcee75 merged (commit: 5fec880) -- The _log_unit_event helper already existed from prior unit c737e58f. Fixed the e
+- 2026-02-17T08:11:27.327748+00:00 | d80c9e94 merged (commit: 35b0395) -- Fire-and-forget exception logging already implemented by prior unit c737e58f (co
