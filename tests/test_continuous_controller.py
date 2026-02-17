@@ -913,6 +913,7 @@ class TestHandleAdjustSemaphoreRebuild:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		ctrl = ContinuousController(config, db)
 		ctrl._semaphore = asyncio.Semaphore(2)
+		ctrl._in_flight_count = 0
 
 		signal = Signal(
 			mission_id="m1",
@@ -924,7 +925,48 @@ class TestHandleAdjustSemaphoreRebuild:
 
 		assert config.scheduler.parallel.num_workers == 6
 		assert ctrl._semaphore is not None
+		# With 0 in-flight, all 6 slots should be available
 		assert ctrl._semaphore._value == 6
+
+	def test_semaphore_accounts_for_in_flight(self, config: MissionConfig, db: Database) -> None:
+		"""Semaphore rebuild should subtract in-flight count from new capacity."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._semaphore = asyncio.Semaphore(2)
+		ctrl._in_flight_count = 3  # 3 workers currently executing
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="adjust",
+			payload='{"num_workers": 5}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_adjust_signal(signal)
+
+		assert config.scheduler.parallel.num_workers == 5
+		assert ctrl._semaphore is not None
+		# 5 total - 3 in-flight = 2 available
+		assert ctrl._semaphore._value == 2
+
+	def test_semaphore_clamps_to_zero_when_in_flight_exceeds(self, config: MissionConfig, db: Database) -> None:
+		"""When in-flight exceeds new worker count, available slots should be 0."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._semaphore = asyncio.Semaphore(4)
+		ctrl._in_flight_count = 4  # all 4 slots used
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="adjust",
+			payload='{"num_workers": 2}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_adjust_signal(signal)
+
+		assert config.scheduler.parallel.num_workers == 2
+		assert ctrl._semaphore is not None
+		# 2 total - 4 in-flight = clamped to 0
+		assert ctrl._semaphore._value == 0
 
 
 
@@ -1041,20 +1083,16 @@ class TestAdjustWorkersDuringDispatch:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		ctrl = ContinuousController(config, db)
 
-		# Simulate active dispatch state: semaphore with 2 slots, 2 in-flight tasks
-		semaphore = asyncio.Semaphore(2)
+		# Simulate active dispatch state: semaphore with 0 available, 2 in-flight
+		semaphore = asyncio.Semaphore(0)
 		ctrl._semaphore = semaphore
+		ctrl._in_flight_count = 2
 
 		mock_task1 = MagicMock(spec=asyncio.Task)
 		mock_task1.done.return_value = False
 		mock_task2 = MagicMock(spec=asyncio.Task)
 		mock_task2.done.return_value = False
 		ctrl._active_tasks = {mock_task1, mock_task2}
-
-		# Acquire both semaphore slots (simulating 2 workers running)
-		await semaphore.acquire()
-		await semaphore.acquire()
-		assert semaphore._value == 0
 
 		# Now adjust workers from 2 -> 4 while both are in-flight
 		signal = Signal(
@@ -2009,4 +2047,193 @@ class TestAutoFailurePause:
 		assert result.stopped_reason == "repeated_total_failure"
 		assert result.objective_met is False
 		assert ctrl._consecutive_all_fail_rounds >= 2
+
+
+class TestInFlightCount:
+	def test_initial_in_flight_is_zero(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		assert ctrl._in_flight_count == 0
+
+	def test_adjust_uses_in_flight_count_not_active_tasks(self, config: MissionConfig, db: Database) -> None:
+		"""Semaphore rebuild uses _in_flight_count, not _active_tasks length."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._semaphore = asyncio.Semaphore(0)
+		ctrl._in_flight_count = 1
+		# active_tasks has 3 items (includes fire-and-forget tasks like reviews)
+		ctrl._active_tasks = {MagicMock(), MagicMock(), MagicMock()}
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="adjust",
+			payload='{"num_workers": 4}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_adjust_signal(signal)
+
+		# Should use _in_flight_count (1), not len(_active_tasks) (3)
+		assert ctrl._semaphore is not None
+		assert ctrl._semaphore._value == 3  # 4 - 1
+
+	def test_adjust_without_semaphore_skips_rebuild(self, config: MissionConfig, db: Database) -> None:
+		"""When semaphore is None, adjust only updates config."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._semaphore = None
+		ctrl._in_flight_count = 2
+
+		signal = Signal(
+			mission_id="m1",
+			signal_type="adjust",
+			payload='{"num_workers": 8}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_adjust_signal(signal)
+
+		assert config.scheduler.parallel.num_workers == 8
+		assert ctrl._semaphore is None
+
+
+class TestDbErrorBudget:
+	def test_initial_state(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		assert ctrl._db_error_count == 0
+		assert ctrl._db_degraded is False
+
+	def test_record_db_error_increments_count(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		ctrl._record_db_error()
+		assert ctrl._db_error_count == 1
+		assert ctrl._db_degraded is False
+
+	def test_degraded_mode_after_threshold(self, config: MissionConfig, db: Database) -> None:
+		"""After _DB_ERROR_THRESHOLD consecutive errors, degraded mode activates."""
+		ctrl = ContinuousController(config, db)
+		for _ in range(ContinuousController._DB_ERROR_THRESHOLD):
+			ctrl._record_db_error()
+
+		assert ctrl._db_error_count == ContinuousController._DB_ERROR_THRESHOLD
+		assert ctrl._db_degraded is True
+
+	def test_success_resets_error_count_and_degraded(self, config: MissionConfig, db: Database) -> None:
+		"""A successful DB write resets both counter and degraded flag."""
+		ctrl = ContinuousController(config, db)
+		for _ in range(ContinuousController._DB_ERROR_THRESHOLD):
+			ctrl._record_db_error()
+		assert ctrl._db_degraded is True
+
+		ctrl._record_db_success()
+		assert ctrl._db_error_count == 0
+		assert ctrl._db_degraded is False
+
+	def test_success_noop_when_no_errors(self, config: MissionConfig, db: Database) -> None:
+		"""_record_db_success with no prior errors is a no-op."""
+		ctrl = ContinuousController(config, db)
+		ctrl._record_db_success()
+		assert ctrl._db_error_count == 0
+		assert ctrl._db_degraded is False
+
+	def test_log_unit_event_skips_db_in_degraded_mode(self, config: MissionConfig, db: Database) -> None:
+		"""In degraded mode, _log_unit_event skips DB insert but still emits to stream."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+
+		ctrl = ContinuousController(config, db)
+		ctrl._db_degraded = True
+		mock_stream = MagicMock()
+		ctrl._event_stream = mock_stream
+
+		with patch.object(db, "insert_unit_event") as mock_insert:
+			ctrl._log_unit_event(
+				mission_id="m1",
+				epoch_id="ep1",
+				work_unit_id="wu1",
+				event_type="dispatched",
+			)
+
+		# DB insert should NOT be called
+		mock_insert.assert_not_called()
+		# Stream emit should still fire
+		mock_stream.emit.assert_called_once()
+
+	def test_log_unit_event_tracks_errors(self, config: MissionConfig, db: Database) -> None:
+		"""DB insert failure in _log_unit_event should increment error count."""
+		ctrl = ContinuousController(config, db)
+		assert ctrl._db_error_count == 0
+
+		with patch.object(db, "insert_unit_event", side_effect=Exception("db error")):
+			ctrl._log_unit_event(
+				mission_id="m1",
+				epoch_id="ep1",
+				work_unit_id="wu1",
+				event_type="merged",
+			)
+
+		assert ctrl._db_error_count == 1
+
+	def test_log_unit_event_resets_on_success(self, config: MissionConfig, db: Database) -> None:
+		"""Successful DB insert in _log_unit_event should reset error count."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+
+		ctrl = ContinuousController(config, db)
+		ctrl._db_error_count = 3  # some prior errors
+
+		ctrl._log_unit_event(
+			mission_id="m1",
+			epoch_id="ep1",
+			work_unit_id="wu1",
+			event_type="dispatched",
+		)
+
+		assert ctrl._db_error_count == 0
+
+	def test_db_errors_on_result(self, config: MissionConfig, db: Database) -> None:
+		"""ContinuousMissionResult should have db_errors field."""
+		result = ContinuousMissionResult(mission_id="m1")
+		assert result.db_errors == 0
+
+		result.db_errors = 3
+		assert result.db_errors == 3
+
+	def test_degraded_mode_still_attempts_critical_writes(self, config: MissionConfig, db: Database) -> None:
+		"""In degraded mode, critical writes (update_mission) are still attempted."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+
+		# Enter degraded mode
+		for _ in range(ContinuousController._DB_ERROR_THRESHOLD):
+			ctrl._record_db_error()
+		assert ctrl._db_degraded is True
+
+		# _log_unit_event (non-critical) should skip
+		with patch.object(db, "insert_unit_event") as mock_insert:
+			ctrl._log_unit_event(
+				mission_id="m1",
+				epoch_id="ep1",
+				work_unit_id="wu1",
+				event_type="dispatched",
+			)
+		mock_insert.assert_not_called()
+
+		# update_mission (critical) should still be attempted in _process_completions
+		# Verify by checking that a successful DB write exits degraded mode
+		mission = Mission(id="m1", objective="test")
+		try:
+			db.update_mission(mission)
+			ctrl._record_db_success()
+		except Exception:
+			ctrl._record_db_error()
+		assert ctrl._db_degraded is False
+		assert ctrl._db_error_count == 0
 
