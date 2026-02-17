@@ -666,7 +666,7 @@ class TestHistoryEndpoint:
 		expected_keys = {
 			"id", "objective", "status", "started_at", "finished_at",
 			"duration", "units_merged", "units_failed", "total_cost_usd",
-			"stopped_reason",
+			"stopped_reason", "trajectory_rating",
 		}
 		for entry in data:
 			assert set(entry.keys()) == expected_keys
