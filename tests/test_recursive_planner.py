@@ -19,7 +19,7 @@ from mission_control.recursive_planner import (
 
 
 def _config(max_depth: int = 3, max_children: int = 5) -> MissionConfig:
-	return MissionConfig(
+	config = MissionConfig(
 		planner=PlannerConfig(
 			max_depth=max_depth,
 			max_children_per_node=max_children,
@@ -27,6 +27,8 @@ def _config(max_depth: int = 3, max_children: int = 5) -> MissionConfig:
 		),
 		scheduler=SchedulerConfig(model="sonnet"),
 	)
+	config.target.path = "/tmp/test-target-project"
+	return config
 
 
 def _planner(max_depth: int = 3, max_children: int = 5) -> RecursivePlanner:
@@ -871,3 +873,51 @@ class TestDependsOnIndicesResolution:
 
 		# Only indices 0 and 1 are valid (99 out of range, -1 negative)
 		assert wu_c.depends_on == f"{wu_a.id},{wu_b.id}"
+
+
+# -- Subprocess cwd assertion tests --
+
+
+class TestSubprocessCwdAssertion:
+	"""Verify that _run_planner_subprocess always uses config.target.resolved_path as cwd.
+
+	See CLAUDE.md Gotchas: without this, the planner LLM sees the scheduler's own
+	file tree and generates units targeting scheduler files instead of the target project.
+	"""
+
+	@pytest.mark.asyncio
+	async def test_subprocess_cwd_matches_target_resolved_path(self) -> None:
+		"""The cwd passed to create_subprocess_exec must equal config.target.resolved_path."""
+		planner = _planner()
+		node = PlanNode(depth=0, scope="Test scope", node_type="branch")
+
+		response = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		) as mock_exec:
+			await planner._run_planner_subprocess("test prompt", node)
+
+		call_kwargs = mock_exec.call_args[1]
+		expected_cwd = str(planner.config.target.resolved_path)
+		assert call_kwargs["cwd"] == expected_cwd
+
+	@pytest.mark.asyncio
+	async def test_subprocess_cwd_rejects_relative_path(self) -> None:
+		"""If config.target.resolved_path is somehow relative, the assertion fires."""
+		planner = _planner()
+		node = PlanNode(depth=0, scope="Test scope", node_type="branch")
+
+		# Override the target config's path to produce a relative resolved_path
+		planner.config.target.path = "relative/path"
+		assert not planner.config.target.resolved_path.is_absolute()
+
+		with pytest.raises(AssertionError, match="Planner cwd must be absolute"):
+			await planner._run_planner_subprocess("test prompt", node)
