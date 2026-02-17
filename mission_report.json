@@ -1,101 +1,76 @@
 {
-  "objective": "Implement P2 (Architect/Editor Model Split) and P3 (Structured Schedule Output for Planner). Both improve worker quality and planner reliability.\n\n1. PER-COMPONENT MODEL CONFIG: Add per-component model fields to config.py: planner_model, worker_model, fixup_model. Each defaults to \"opus\" but can be overridden in mission-control.toml under a [models] section. Update recursive_planner.py, worker.py, and green_branch.py to read their model from config instead of using the global scheduler.model. Add tests for config parsing with and without the [models] section.\n\n2. ARCHITECT/EDITOR SPLIT IN WORKERS: Add an optional two-pass mode for workers. When enabled (architect_editor_mode = true in config), the worker runs two Claude sessions per unit: (a) Architect pass -- \"Analyze the codebase and describe exactly what changes are needed, which files to modify, and why. Do NOT write code.\" Uses the worker_model. (b) Editor pass -- \"Implement these specific changes: {architect_output}\". Uses the worker_model. The architect output is passed as context to the editor. If architect_editor_mode is false (default), workers behave as today -- single pass. Add the mode flag to config.py. Modify worker.py to support both modes. Add tests for both paths.\n\n3. STRUCTURED PLANNER OUTPUT: Change recursive_planner.py to use embedded structured blocks instead of parsing the entire LLM response. The planner prompt should instruct the LLM to reason in prose first, then emit a machine-readable block: <!-- PLAN -->{\"units\": [{\"title\": \"...\", \"scope\": \"...\", \"files_hint\": \"...\"}]}<!-- /PLAN -->. Update the parser to extract only the <!-- PLAN --> block using regex, ignoring surrounding prose. Fall back to the current parsing if no <!-- PLAN --> block is found (backwards compatibility). The MC_RESULT pattern in session.py already uses a similar approach -- follow that pattern.\n\n4. PLANNER OUTPUT TESTS: Add comprehensive tests for the new structured parser: valid plan block extraction, missing plan block fallback, malformed JSON inside block, multiple plan blocks (use first), plan block with surrounding prose. Test that existing planner output formats still work via fallback.\n\nEach unit: implement the feature, add tests, ensure all existing tests pass. Read BACKLOG.md for the full P2 and P3 specs.",
+  "objective": "Implement P2 (Architect/Editor Model Split) and P3 (Structured Schedule Output for Planner). Both improve worker quality and planner reliability.\n\n1. PER-COMPONENT MODEL CONFIG: Add per-component model fields to config.py: planner_model, worker_model, fixup_model. Each defaults to \"opus\" but can be overridden in mission-control.toml under a [models] section. Update recursive_planner.py, worker.py, and green_branch.py to read their model from config instead of using the global scheduler.model. Add tests for config parsing with and without the [models] section.\n\n2. ARCHITECT/EDITOR SPLIT IN WORKERS: Add an optional two-pass mode for workers. When enabled (architect_editor_mode = true in config), the worker runs two Claude sessions per unit: (a) Architect pass -- \"Analyze the codebase and describe exactly what changes are needed, which files to modify, and why. Do NOT write code.\" Uses the worker_model. (b) Editor pass -- \"Implement these specific changes: {architect_output}\". Uses the worker_model. The architect output is passed as context to the editor. If architect_editor_mode is false (default), workers behave as today -- single pass. Add the mode flag to config.py. Modify worker.py to support both modes. Add tests for both paths.\n\n3. STRUCTURED PLANNER OUTPUT: Change recursive_planner.py to use embedded structured blocks instead of parsing the entire LLM response. The planner prompt should instruct the LLM to reason in prose first, then emit a machine-readable block: <!-- PLAN -->{\"units\": [{\"title\": \"...\", \"scope\": \"...\", \"files_hint\": \"...\"}]}<!-- /PLAN -->. Update the parser to extract only the <!-- PLAN --> block using regex, ignoring surrounding prose. Fall back to the current parsing if no <!-- PLAN --> block is found (backwards compatibility). The MC_RESULT pattern in session.py already uses a similar approach -- follow that pattern.\n\n4. PLANNER OUTPUT TESTS: Add comprehensive tests for the new structured parser: valid plan block extraction, missing plan block fallback, malformed JSON inside block, multiple plan blocks (use first), plan block with surrounding prose. Test that existing planner output formats still work via fallback.\n\nEach unit: implement the feature, add tests, ensure all existing tests pass. Read BACKLOG.md for the full P2 and P3 specs.\n\nPriority backlog items to address:\n1. [feature] Implement EMA budget tracking with adaptive cooldown (backlog_item_id=p4-ema-budget, priority=8.0): Add per-cycle cost tracking with Exponential Moving Average. Log cost per completed unit. Compute EMA with alpha=0.3. Outlier dampening: spikes >3x EMA clamped to 2x (after 3+ data points). Conservatism factor: k = 1.0 + 0.5/sqrt(n). Wire into _should_stop() in continuous_controller.py: stop the mission if mission.total_cost_usd >= config.budget.max_per_run_usd. Add adaptive cooldown between rounds based on remaining budget. Add tests for EMA computation, outlier dampening, and budget enforcement.\n\n--- Context from unit 42a38fe3 ---\ntest_experiment.py constructs ContinuousController via __new__ bypassing __init__, needed lazy _get_cost_tracker() accessor\nuv.lock was modified by uv sync in worker clone, had to exclude from commit\n3 pre-existing ruff F401 errors in test_continuous_foundation.py, test_session.py, test_token_parser.py (outside scope)\nMerge failed: Merge conflict: Auto-merging src/mission_control/continuous_controller.py\nAuto-merging tests/test_continuous_controller.py\nCONFLICT (content): Merge conflict in tests/test_continuous_con\n2. [feature] Implement typed context store replacing flat text memory (backlog_item_id=p6-typed-context, priority=7.0): Replace flat-text context in memory.py with typed ContextItem dataclass (type, scope, content, source_unit_id, round_id, confidence). Store in SQLite context_items table. Workers produce context items as discoveries. Coordinator selectively injects relevant items into subsequent worker prompts based on scope overlap with the work unit. Add tests for context CRUD, scope-based filtering, and selective injection.\n3. [security] Add exception logging to fire-and-forget asyncio tasks via done_callback (backlog_item_id=9f5600ae14e6, priority=5.8): In continuous_controller.py, fire-and-forget tasks created at lines 1024 (_review_merged_unit), 1298 (_retry_unit), and 1318 (_retry_unit re-dispatch) use only `task.add_done_callback(self._active_tasks.discard)` which silently swallows any unhandled exception from the coroutine. If _retry_unit raises (e.g., RuntimeError from missing semaphore at line 1316), the exception is lost -- asyncio prints 'Task exception was never retrieved' to stderr but doesn't log it. Add a shared done_callback that checks `task.exception()` and logs it, similar to the pattern already used for dispatch tasks at line 258 but missing for these secondary tasks.\n4. [security] Add exception logging to fire-and-forget asyncio tasks via done_callback (backlog_item_id=e3f30bb498bf, priority=5.8): In continuous_controller.py, fire-and-forget tasks created at lines 1024 (_review_merged_unit), 1298 (_retry_unit), and 1318 (_retry_unit re-dispatch) use only `task.add_done_callback(self._active_tasks.discard)` which silently swallows any unhandled exception from the coroutine. If _retry_unit raises (e.g., RuntimeError from missing semaphore at line 1316), the exception is lost -- asyncio prints 'Task exception was never retrieved' to stderr but doesn't log it. Add a shared done_callback that checks `task.exception()` and logs it, similar to the pattern already used for dispatch tasks at line 258 but missing for these secondary tasks.\n5. [security] Fix semaphore private attribute manipulation in _handle_adjust_signal (backlog_item_id=6593270e1cce, priority=5.6): In continuous_controller.py:1694, _handle_adjust_signal directly mutates asyncio.Semaphore._value (a private CPython implementation detail) to account for in-flight tasks when dynamically resizing the worker pool. This bypasses the Semaphore's internal synchronization and is fragile across Python versions. Replace with a proper pattern: create a new BoundedSemaphore, track in-flight count via an atomic counter (self._in_flight_count incremented on dispatch, decremented in _on_task_done), and only allow new dispatches when in_flight < new_count. This avoids relying on undocumented internals.",
   "outcome": {
-    "objective_met": true,
-    "stopped_reason": "planner_completed"
+    "objective_met": false,
+    "stopped_reason": "signal_stopped"
   },
-  "mission_id": "75d7f2a341a7",
-  "units_dispatched": 6,
-  "units_merged": 4,
+  "mission_id": "763cf4b88de0",
+  "units_dispatched": 4,
+  "units_merged": 1,
   "units_failed": 0,
-  "wall_time_seconds": 599.3920646250481,
-  "total_cost_usd": 12.4049403,
+  "wall_time_seconds": 1232.8340008750092,
+  "total_cost_usd": 11.79437535,
   "files_changed": [
-    "src/mission_control/config.py",
     "src/mission_control/continuous_controller.py",
-    "src/mission_control/green_branch.py",
-    "src/mission_control/worker.py",
-    "tests/test_config.py",
-    "tests/test_green_branch.py",
-    "tests/test_worker.py"
+    "src/mission_control/db.py",
+    "src/mission_control/memory.py",
+    "src/mission_control/models.py",
+    "tests/test_continuous_controller.py",
+    "tests/test_memory.py"
   ],
   "verification_passed": false,
   "verification_output": "ERROR: file or directory not found: &&\n\n\nno tests ran in 0.00s\n",
-  "backlog_item_ids": [],
+  "backlog_item_ids": [
+    "p4-ema-budget",
+    "p6-typed-context",
+    "9f5600ae14e6",
+    "e3f30bb498bf",
+    "6593270e1cce"
+  ],
   "unit_reviews": [],
   "trajectory_ratings": [],
   "decomposition_grades": [],
   "timeline": [
     {
-      "timestamp": "2026-02-17T05:03:28.200388+00:00",
+      "timestamp": "2026-02-17T10:27:22.986513+00:00",
       "event_type": "dispatched",
-      "work_unit_id": "0a59694fbefb",
+      "work_unit_id": "76c761063134",
       "details": ""
     },
     {
-      "timestamp": "2026-02-17T05:03:28.200907+00:00",
+      "timestamp": "2026-02-17T10:27:22.987200+00:00",
       "event_type": "dispatched",
-      "work_unit_id": "9b4289bacb5c",
+      "work_unit_id": "a7b53361faa2",
       "details": ""
     },
     {
-      "timestamp": "2026-02-17T05:05:29.016867+00:00",
-      "event_type": "dispatched",
-      "work_unit_id": "30bb0756eda6",
-      "details": ""
-    },
-    {
-      "timestamp": "2026-02-17T05:05:29.191809+00:00",
-      "event_type": "merged",
-      "work_unit_id": "0a59694fbefb",
-      "details": ""
-    },
-    {
-      "timestamp": "2026-02-17T05:07:44.993269+00:00",
-      "event_type": "dispatched",
-      "work_unit_id": "9b34a3e104ce",
-      "details": ""
-    },
-    {
-      "timestamp": "2026-02-17T05:07:45.078960+00:00",
-      "event_type": "merged",
-      "work_unit_id": "30bb0756eda6",
-      "details": ""
-    },
-    {
-      "timestamp": "2026-02-17T05:09:56.654189+00:00",
-      "event_type": "merge_failed",
-      "work_unit_id": "9b4289bacb5c",
-      "details": "{\"failure_output\": \"Merge conflict: Auto-merging src/mission_control/config.py\\nCONFLICT (content): Merge conflict in src/mission_control/config.py\\nAutomatic merge failed; fix conflicts and then commit the result.\\n\", \"failure_stage\": \"merge_conflict\"}"
-    },
-    {
-      "timestamp": "2026-02-17T05:09:56.654475+00:00",
+      "timestamp": "2026-02-17T15:41:41.820199+00:00",
       "event_type": "retry_queued",
-      "work_unit_id": "9b4289bacb5c",
-      "details": "{\"delay\": 30, \"failure_reason\": \"Merge conflict: Auto-merging src/mission_control/config.py\\nCONFLICT (content): Merge conflict in src/mission_control/config.py\\nAutomatic merge failed; fix conflicts and then commit the result.\\n\"}"
+      "work_unit_id": "a7b53361faa2",
+      "details": "{\"delay\": 60, \"failure_reason\": \"ume\\\",\\\"mcp__latex-resume__optimize_resume\\\",\\\"mcp__latex-resume__screen_resume_as_hr\\\",\\\"mcp__latex-resume__improve_bullets\\\"],\\\"mcp_servers\\\":[{\\\"name\\\":\\\"canvas\\\",\\\"status\\\":\\\"failed\\\"},{\\\"name\\\":\\\"plugin:context7:context7\\\",\\\"status\\\":\\\"connected\\\"},{\\\"name\\\":\\\"obsidian\\\",\\\"status\\\":\\\"connected\\\"},{\\\"name\\\":\\\"gmail\\\",\\\"status\\\":\\\"fail\"}"
     },
     {
-      "timestamp": "2026-02-17T05:09:56.680423+00:00",
+      "timestamp": "2026-02-17T15:41:41.929241+00:00",
+      "event_type": "retry_queued",
+      "work_unit_id": "76c761063134",
+      "details": "{\"delay\": 60, \"failure_reason\": \"\\\"mcp__latex-resume__optimize_resume\\\",\\\"mcp__latex-resume__screen_resume_as_hr\\\",\\\"mcp__latex-resume__improve_bullets\\\"],\\\"mcp_servers\\\":[{\\\"name\\\":\\\"canvas\\\",\\\"status\\\":\\\"failed\\\"},{\\\"name\\\":\\\"obsidian\\\",\\\"status\\\":\\\"connected\\\"},{\\\"name\\\":\\\"plugin:context7:context7\\\",\\\"status\\\":\\\"connected\\\"},{\\\"name\\\":\\\"calendar\\\",\\\"status\\\":\\\"failed\"}"
+    },
+    {
+      "timestamp": "2026-02-17T15:41:42.063080+00:00",
       "event_type": "dispatched",
-      "work_unit_id": "4305d75426d8",
+      "work_unit_id": "86a00caf432d",
       "details": ""
     },
     {
-      "timestamp": "2026-02-17T05:11:27.085676+00:00",
+      "timestamp": "2026-02-17T16:17:45.254789+00:00",
+      "event_type": "merged",
+      "work_unit_id": "a7b53361faa2",
+      "details": ""
+    },
+    {
+      "timestamp": "2026-02-17T16:17:46.780875+00:00",
       "event_type": "dispatched",
-      "work_unit_id": "3f3411129afd",
-      "details": ""
-    },
-    {
-      "timestamp": "2026-02-17T05:11:27.240919+00:00",
-      "event_type": "merged",
-      "work_unit_id": "4305d75426d8",
-      "details": ""
-    },
-    {
-      "timestamp": "2026-02-17T05:11:36.277468+00:00",
-      "event_type": "merged",
-      "work_unit_id": "9b34a3e104ce",
+      "work_unit_id": "34a8b59c92be",
       "details": ""
     }
   ]
