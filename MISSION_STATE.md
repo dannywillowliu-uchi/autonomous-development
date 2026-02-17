@@ -11,6 +11,15 @@ Objective: Implement P2 (Architect/Editor Model Split) and P3 (Structured Schedu
 
 Each unit: implement the feature, add tests, ensure all existing tests pass. Read BACKLOG.md for the full P2 and P3 specs.
 
+## Completed
+- [x] 0a59694f (2026-02-17T05:05:28.903691+00:00) -- Added ModelsConfig dataclass with planner_model, worker_model, fixup_model, architect_editor_mode fi (files: src/mission_control/config.py, tests/test_config.py)
+
+## Files Modified
+src/mission_control/config.py, tests/test_config.py
+
 ## Remaining
 The planner should focus on what hasn't been done yet.
 Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
+
+## Changelog
+- 2026-02-17T05:05:28.903691+00:00 | 0a59694f merged (commit: 485deb7) -- Added ModelsConfig dataclass with planner_model, worker_model, fixup_model, arch
