@@ -77,6 +77,63 @@ class TestBuildPlannerContext:
 		assert "Found pattern X" in result
 		assert "Watch out for Y" in result
 
+	def test_completed_work_section_lists_finished_units(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		db.insert_mission(Mission(id="m1", objective="test"))
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		# Completed unit with files_hint
+		wu1 = WorkUnit(
+			id="wu_done1", plan_id="p1", title="Add auth module",
+			status="completed", epoch_id="ep1", files_hint="auth.py, models.py",
+		)
+		db.insert_work_unit(wu1)
+		# Pending unit -- should NOT appear in completed section
+		wu2 = WorkUnit(
+			id="wu_pending", plan_id="p1", title="Add caching",
+			status="pending", epoch_id="ep1",
+		)
+		db.insert_work_unit(wu2)
+		# Need a handoff to get past the empty-handoffs early return
+		handoff = Handoff(
+			id="h1", work_unit_id="wu_done1", round_id="", epoch_id="ep1",
+			status="completed", summary="Auth done",
+		)
+		db.insert_handoff(handoff)
+
+		result = build_planner_context(db, "m1")
+		assert "## Completed Work (DO NOT re-plan these)" in result
+		assert "Add auth module" in result
+		assert "auth.py, models.py" in result
+		assert "Add caching" not in result
+		assert "Do NOT create units that duplicate completed work above" in result
+
+	def test_completed_work_section_empty_when_no_completed(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		db.insert_mission(Mission(id="m1", objective="test"))
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		wu = WorkUnit(
+			id="wu_pend", plan_id="p1", title="Pending task",
+			status="pending", epoch_id="ep1",
+		)
+		db.insert_work_unit(wu)
+		# Need a handoff so result isn't empty
+		handoff = Handoff(
+			id="h1", work_unit_id="wu_pend", round_id="", epoch_id="ep1",
+			status="failed", summary="Failed",
+		)
+		db.insert_handoff(handoff)
+
+		result = build_planner_context(db, "m1")
+		assert "## Completed Work" not in result
+
 	def test_nonexistent_mission_returns_empty(self, db: Database) -> None:
 		result = build_planner_context(db, "nonexistent")
 		assert result == ""

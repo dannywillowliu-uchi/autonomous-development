@@ -63,6 +63,21 @@ def build_planner_context(db: Database, mission_id: str) -> str:
 		f"(of last {len(handoffs)} units)",
 	)
 
+	# Add explicit completed-unit list so the planner doesn't re-plan finished work
+	try:
+		all_units = db.get_work_units_for_mission(mission_id)
+		completed_units = [u for u in all_units if u.status == "completed"]
+		if completed_units:
+			lines.append("\n## Completed Work (DO NOT re-plan these)")
+			for u in completed_units:
+				files_part = f" (files: {u.files_hint})" if u.files_hint else ""
+				lines.append(f"- {u.id[:8]}: \"{u.title}\"{files_part}")
+			lines.append(
+				"\nIMPORTANT: Do NOT create units that duplicate completed work above."
+			)
+	except Exception:
+		pass
+
 	# Append quality review aggregates
 	try:
 		reviews = db.get_unit_reviews_for_mission(mission_id)

@@ -436,23 +436,38 @@ class GreenBranchManager:
 			logger.error("Failed to fetch mc/green: %s", output)
 			return False
 
-		await self._run_git_in(source_repo, "checkout", push_branch)
+		# Stash any dirty state (e.g. MISSION_STATE.md) before checkout
+		stashed = False
+		ok_stash, stash_out = await self._run_git_in(
+			source_repo, "stash", "--include-untracked",
+		)
+		if ok_stash and "No local changes" not in stash_out:
+			stashed = True
 
-		# Pull remote first to avoid non-fast-forward
-		await self._run_git_in(source_repo, "pull", "--rebase", "origin", push_branch)
+		try:
+			ok, output = await self._run_git_in(source_repo, "checkout", push_branch)
+			if not ok:
+				logger.error("Failed to checkout %s: %s", push_branch, output)
+				return False
 
-		ok, output = await self._run_git_in(source_repo, "merge", "--ff-only", green_ref)
-		if not ok:
-			logger.error("Failed to ff-merge mc/green into %s: %s", push_branch, output)
-			return False
+			# Pull remote first to avoid non-fast-forward
+			await self._run_git_in(source_repo, "pull", "--rebase", "origin", push_branch)
 
-		ok, output = await self._run_git_in(source_repo, "push", "origin", push_branch)
-		if not ok:
-			logger.error("Failed to push %s: %s", push_branch, output)
-			return False
+			ok, output = await self._run_git_in(source_repo, "merge", "--ff-only", green_ref)
+			if not ok:
+				logger.error("Failed to ff-merge mc/green into %s: %s", push_branch, output)
+				return False
 
-		logger.info("Pushed mc/green to origin/%s", push_branch)
-		return True
+			ok, output = await self._run_git_in(source_repo, "push", "origin", push_branch)
+			if not ok:
+				logger.error("Failed to push %s: %s", push_branch, output)
+				return False
+
+			logger.info("Pushed mc/green to origin/%s", push_branch)
+			return True
+		finally:
+			if stashed:
+				await self._run_git_in(source_repo, "stash", "pop")
 
 	async def run_deploy(self) -> tuple[bool, str]:
 		"""Run the configured deploy command and optional health check.

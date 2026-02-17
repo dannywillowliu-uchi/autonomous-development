@@ -632,8 +632,8 @@ def cmd_live(args: argparse.Namespace) -> int:
 
 	db_path = str(_get_db_path(args.config))
 	if not Path(db_path).exists():
-		print("No database found. Run 'mc mission' first.")
-		return 1
+		print("No existing database -- creating empty one")
+		Database(db_path)
 
 	token = secrets.token_urlsafe(32)
 	dashboard = LiveDashboard(db_path, auth_token=token)

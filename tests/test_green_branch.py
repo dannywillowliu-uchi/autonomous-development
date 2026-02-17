@@ -92,6 +92,87 @@ class TestMergeUnit:
 		mgr.push_green_to_main.assert_awaited_once()
 
 
+class TestPushGreenToMain:
+	"""Tests for push_green_to_main() stash/checkout/push flow."""
+
+	async def test_stashes_dirty_tree_before_checkout(self) -> None:
+		"""Dirty working tree is stashed before checkout and restored after."""
+		mgr = _manager()
+		mgr.config.green_branch.auto_push = True
+		mgr.config.green_branch.push_branch = "main"
+
+		calls: list[tuple[str, tuple[str, ...]]] = []
+
+		async def mock_run_git_in(cwd: str, *args: str) -> tuple[bool, str]:
+			calls.append((cwd, args))
+			if args[0] == "stash" and args[1] == "--include-untracked":
+				return (True, "Saved working directory")
+			return (True, "")
+
+		mgr._run_git_in = mock_run_git_in  # type: ignore[assignment]
+
+		result = await mgr.push_green_to_main()
+
+		assert result is True
+		git_cmds = [c[1] for c in calls]
+		# Stash should come before checkout
+		stash_idx = next(i for i, c in enumerate(git_cmds) if c[0] == "stash" and c[1] == "--include-untracked")
+		checkout_idx = next(i for i, c in enumerate(git_cmds) if c[0] == "checkout")
+		assert stash_idx < checkout_idx
+		# Stash pop should come after push
+		pop_idx = next(i for i, c in enumerate(git_cmds) if c[0] == "stash" and c[1] == "pop")
+		push_idx = next(i for i, c in enumerate(git_cmds) if c[0] == "push")
+		assert pop_idx > push_idx
+
+	async def test_checkout_failure_returns_false_and_restores_stash(self) -> None:
+		"""If checkout fails, return False and still pop stash."""
+		mgr = _manager()
+		mgr.config.green_branch.auto_push = True
+		mgr.config.green_branch.push_branch = "main"
+
+		popped = []
+
+		async def mock_run_git_in(cwd: str, *args: str) -> tuple[bool, str]:
+			if args[0] == "stash" and args[1] == "--include-untracked":
+				return (True, "Saved working directory")
+			if args[0] == "stash" and args[1] == "pop":
+				popped.append(True)
+				return (True, "")
+			if args[0] == "checkout":
+				return (False, "error: Your local changes would be overwritten")
+			return (True, "")
+
+		mgr._run_git_in = mock_run_git_in  # type: ignore[assignment]
+
+		result = await mgr.push_green_to_main()
+
+		assert result is False
+		assert popped == [True]  # stash pop was called despite failure
+
+	async def test_no_stash_when_tree_clean(self) -> None:
+		"""When working tree is clean, stash pop is not called."""
+		mgr = _manager()
+		mgr.config.green_branch.auto_push = True
+		mgr.config.green_branch.push_branch = "main"
+
+		calls: list[tuple[str, tuple[str, ...]]] = []
+
+		async def mock_run_git_in(cwd: str, *args: str) -> tuple[bool, str]:
+			calls.append((cwd, args))
+			if args[0] == "stash" and args[1] == "--include-untracked":
+				return (True, "No local changes to save")
+			return (True, "")
+
+		mgr._run_git_in = mock_run_git_in  # type: ignore[assignment]
+
+		result = await mgr.push_green_to_main()
+
+		assert result is True
+		git_cmds = [c[1] for c in calls]
+		# No stash pop should be called
+		assert not any(c[0] == "stash" and c[1] == "pop" for c in git_cmds)
+
+
 class TestGetGreenHash:
 	async def test_returns_hash(self) -> None:
 		"""Returns stripped commit hash from git rev-parse."""

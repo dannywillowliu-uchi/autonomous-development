@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from mission_control.cli import build_parser, cmd_discover, cmd_init, cmd_mission, cmd_summary, main
+from mission_control.cli import build_parser, cmd_discover, cmd_init, cmd_live, cmd_mission, cmd_summary, main
 from mission_control.db import Database
 from mission_control.models import Epoch, Mission, Plan, WorkUnit
 
@@ -309,3 +309,29 @@ class TestMissionChainLoop:
 			result = cmd_mission(args)
 
 		assert result == 1  # last mission failed
+
+
+class TestCmdLive:
+	def test_creates_db_when_missing(self, tmp_path: Path) -> None:
+		"""cmd_live creates DB if it doesn't exist instead of returning error."""
+		config_file = tmp_path / "mission-control.toml"
+		config_file.write_text('[target]\nname = "test"\npath = "/tmp/test"\n')
+		db_path = tmp_path / "mission-control.db"
+		assert not db_path.exists()
+
+		parser = build_parser()
+		args = parser.parse_args(["live", "--config", str(config_file)])
+
+		# Patch LiveDashboard and uvicorn at the module level so the lazy
+		# import inside cmd_live picks them up.
+		mock_dash_cls = MagicMock()
+		mock_uvicorn = MagicMock()
+
+		with patch.dict("sys.modules", {
+			"mission_control.dashboard.live": MagicMock(LiveDashboard=mock_dash_cls),
+			"uvicorn": mock_uvicorn,
+		}):
+			result = cmd_live(args)
+
+		assert result == 0
+		assert db_path.exists()
