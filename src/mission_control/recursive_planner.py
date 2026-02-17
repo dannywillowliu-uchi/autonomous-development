@@ -262,6 +262,13 @@ IMPORTANT: The PLAN_RESULT line must be the LAST line of your output. Put all re
 		model = self.config.scheduler.model
 		timeout = self.config.target.verification.timeout
 
+		# CRITICAL: cwd must be the target project path, not the scheduler's own directory.
+		# Without this, the planner LLM sees the scheduler's file tree and generates
+		# work units targeting scheduler files instead of the target project.
+		# See CLAUDE.md Gotchas section.
+		cwd = self.config.target.resolved_path
+		assert cwd.is_absolute(), f"Planner cwd must be absolute, got: {cwd}"
+
 		log.info("Invoking planner LLM at depth %d for scope: %s", node.depth, node.scope[:80])
 
 		try:
@@ -274,7 +281,7 @@ IMPORTANT: The PLAN_RESULT line must be the LAST line of your output. Put all re
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.PIPE,
 				env=claude_subprocess_env(),
-				cwd=str(self.config.target.resolved_path),
+				cwd=str(cwd),
 			)
 			stdout, stderr = await asyncio.wait_for(
 				proc.communicate(input=prompt.encode()),
