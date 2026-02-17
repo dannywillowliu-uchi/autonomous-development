@@ -1,27 +1,22 @@
 # Mission State
-Objective: Implement P2 (Architect/Editor Model Split) and P3 (Structured Schedule Output for Planner). Both improve worker quality and planner reliability.
+Objective: Work through the priority backlog -- P4 (EMA budget tracking), P6 (typed context store), and quality fixes.
 
-1. PER-COMPONENT MODEL CONFIG: Add per-component model fields to config.py: planner_model, worker_model, fixup_model. Each defaults to "opus" but can be overridden in mission-control.toml under a [models] section. Update recursive_planner.py, worker.py, and green_branch.py to read their model from config instead of using the global scheduler.model. Add tests for config parsing with and without the [models] section.
+## Priority Items
+1. P4 - EMA BUDGET TRACKING (priority=8.0): Implement exponential moving average cost tracking per work unit. Add EMA module with alpha=0.3, outlier dampening (>3x EMA clamped to 2x), conservatism factor (k=1.0+0.5/sqrt(n)). Wire into _should_stop() in continuous_controller.py. Add adaptive cooldown. Add tests.
 
-2. ARCHITECT/EDITOR SPLIT IN WORKERS: Add an optional two-pass mode for workers. When enabled (architect_editor_mode = true in config), the worker runs two Claude sessions per unit: (a) Architect pass -- "Analyze the codebase and describe exactly what changes are needed, which files to modify, and why. Do NOT write code." Uses the worker_model. (b) Editor pass -- "Implement these specific changes: {architect_output}". Uses the worker_model. The architect output is passed as context to the editor. If architect_editor_mode is false (default), workers behave as today -- single pass. Add the mode flag to config.py. Modify worker.py to support both modes. Add tests for both paths.
+2. P6 - TYPED CONTEXT STORE (priority=7.0): Replace flat text memory.py with structured ContextItem dataclass backed by SQLite. Add scope-based filtering (mission, round, unit). Support selective injection into worker prompts. Add tests.
 
-3. STRUCTURED PLANNER OUTPUT: Change recursive_planner.py to use embedded structured blocks instead of parsing the entire LLM response. The planner prompt should instruct the LLM to reason in prose first, then emit a machine-readable block: <!-- PLAN -->{"units": [{"title": "...", "scope": "...", "files_hint": "..."}]}<!-- /PLAN -->. Update the parser to extract only the <!-- PLAN --> block using regex, ignoring surrounding prose. Fall back to the current parsing if no <!-- PLAN --> block is found (backwards compatibility). The MC_RESULT pattern in session.py already uses a similar approach -- follow that pattern.
+3. QUALITY FIXES: Replace silent 'except Exception: pass' with logged catches in continuous_controller.py. Add cost accumulation resilience. Sanitize brace characters in worker prompt .format() inputs. Fix semaphore private attribute manipulation.
 
-4. PLANNER OUTPUT TESTS: Add comprehensive tests for the new structured parser: valid plan block extraction, missing plan block fallback, malformed JSON inside block, multiple plan blocks (use first), plan block with surrounding prose. Test that existing planner output formats still work via fallback.
+## Completed (prior missions)
+- [x] P0 - Priority Backlog Queue (all 5 sub-items)
+- [x] P1 - N-of-M fixup retry
+- [x] P2 - Architect/Editor two-pass mode
+- [x] P3 - Structured planner output (<!-- PLAN --> blocks)
+- [x] P5 - Auto-pause and recovery on total dispatch failure
 
-Each unit: implement the feature, add tests, ensure all existing tests pass. Read BACKLOG.md for the full P2 and P3 specs.
-
-Priority backlog items to address:
-1. [feature] Implement EMA budget tracking with adaptive cooldown (backlog_item_id=p4-ema-budget, priority=8.0): Add per-cycle cost tracking with Exponential Moving Average. Log cost per completed unit. Compute EMA with alpha=0.3. Outlier dampening: spikes >3x EMA clamped to 2x (after 3+ data points). Conservatism factor: k = 1.0 + 0.5/sqrt(n). Wire into _should_stop() in continuous_controller.py: stop the mission if mission.total_cost_usd >= config.budget.max_per_run_usd. Add adaptive cooldown between rounds based on remaining budget. Add tests for EMA computation, outlier dampening, and budget enforcement.
-2. [feature] Implement auto-pause and recovery on total failure (backlog_item_id=p5-auto-pause, priority=7.5): In continuous_controller.py, add auto-pause when all units in a dispatch round fail. Track consecutive all-fail rounds. After 1 all-fail round, pause for configurable interval (default 60s) then retry. After 3 consecutive all-fail rounds, stop the mission with reason repeated_total_failure. Add max_consecutive_failures config field (default 3) and failure_backoff_seconds (default 60). Add tests for pause/retry/stop logic.
-3. [security] Fix mission.mission_id AttributeError hidden by broad except at line 397 (backlog_item_id=a7fa92ca8e48, priority=7.2): In continuous_controller.py:397, `mission.mission_id` is used but the Mission dataclass (models.py:214) only has `id`. This raises AttributeError every time the strategic context append runs in the finally block after mission completion. The error is caught by the broad except at line 403, so strategic context is NEVER successfully written. Fix: change `mission.mission_id` to `mission.id`. Additionally, add a unit test that calls append_strategic_context after a mission completes to prevent regression.
-4. [security] Fix mission.mission_id AttributeError hidden by broad except at line 397 (backlog_item_id=027ceccd65a1, priority=7.2): In continuous_controller.py:397, `mission.mission_id` is used but the Mission dataclass (models.py:214) only has `id`. This raises AttributeError every time the strategic context append runs in the finally block after mission completion. The error is caught by the broad except at line 403, so strategic context is NEVER successfully written. Fix: change `mission.mission_id` to `mission.id`. Additionally, add a unit test that calls append_strategic_context after a mission completes to prevent regression.
-5. [quality] Extract unit event logging into a helper to eliminate 8 duplicate try/except blocks (backlog_item_id=ca488f0ac67a, priority=6.3): In continuous_controller.py, there are 8 identical blocks that follow this pattern: `try: self.db.insert_unit_event(UnitEvent(...)) except Exception: pass`. These appear at lines 782-789, 1001-1011, 1038-1050, 1082-1091, 1112-1124, 1273-1282, 1342-1345, and the event_stream emit that follows each. Extract into a `_log_unit_event(self, mission_id, epoch_id, unit_id, event_type, *, details=None, input_tokens=0, output_tokens=0, cost_usd=0.0)` method that handles both the DB insert and event stream emit in one call with proper exception logging (`logger.debug` with exc binding). This removes ~80 lines of duplicated boilerplate.
+## Files Modified (do NOT re-target these unless fixing a failure)
+None yet this mission.
 
 ## Remaining
-The planner should focus on what hasn't been done yet.
-Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
-
-## Changelog
-- 2026-02-17T09:44:11.253684+00:00 | 2f83aec4 merged (commit: no-commit) -- uuid":"bbbd6f8d-9ed8-4bdf-b231-54774f9880f9"}
-{"type":"result","subtype":"succes
+The planner should focus on P4, P6, and quality fixes from the backlog.

@@ -2,24 +2,22 @@
 name = "autonomous-dev-scheduler"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = """Implement P2 (Architect/Editor Model Split) and P3 (Structured Schedule Output for Planner). Both improve worker quality and planner reliability.
+objective = """Work through the priority backlog. Top items:
 
-1. PER-COMPONENT MODEL CONFIG: Add per-component model fields to config.py: planner_model, worker_model, fixup_model. Each defaults to "opus" but can be overridden in mission-control.toml under a [models] section. Update recursive_planner.py, worker.py, and green_branch.py to read their model from config instead of using the global scheduler.model. Add tests for config parsing with and without the [models] section.
+1. P4 - EMA BUDGET TRACKING: Implement exponential moving average cost tracking per work unit. Add EMA module with alpha=0.3, outlier dampening (>3x EMA clamped to 2x), conservatism factor (k=1.0+0.5/sqrt(n)). Wire into _should_stop() in continuous_controller.py. Add adaptive cooldown that increases when costs exceed budget. Add comprehensive tests.
 
-2. ARCHITECT/EDITOR SPLIT IN WORKERS: Add an optional two-pass mode for workers. When enabled (architect_editor_mode = true in config), the worker runs two Claude sessions per unit: (a) Architect pass -- "Analyze the codebase and describe exactly what changes are needed, which files to modify, and why. Do NOT write code." Uses the worker_model. (b) Editor pass -- "Implement these specific changes: {architect_output}". Uses the worker_model. The architect output is passed as context to the editor. If architect_editor_mode is false (default), workers behave as today -- single pass. Add the mode flag to config.py. Modify worker.py to support both modes. Add tests for both paths.
+2. P6 - TYPED CONTEXT STORE: Replace flat text memory.py with structured ContextItem dataclass backed by SQLite. Add scope-based filtering (mission, round, unit). Support selective injection into worker prompts based on relevance. Add tests.
 
-3. STRUCTURED PLANNER OUTPUT: Change recursive_planner.py to use embedded structured blocks instead of parsing the entire LLM response. The planner prompt should instruct the LLM to reason in prose first, then emit a machine-readable block: <!-- PLAN -->{"units": [{"title": "...", "scope": "...", "files_hint": "..."}]}<!-- /PLAN -->. Update the parser to extract only the <!-- PLAN --> block using regex, ignoring surrounding prose. Fall back to the current parsing if no <!-- PLAN --> block is found (backwards compatibility). The MC_RESULT pattern in session.py already uses a similar approach -- follow that pattern.
+3. QUALITY FIXES from backlog: Replace silent 'except Exception: pass' patterns with logged catches. Add cost accumulation resilience. Sanitize brace characters in worker prompt .format() inputs. Fix semaphore private attribute manipulation.
 
-4. PLANNER OUTPUT TESTS: Add comprehensive tests for the new structured parser: valid plan block extraction, missing plan block fallback, malformed JSON inside block, multiple plan blocks (use first), plan block with surrounding prose. Test that existing planner output formats still work via fallback.
-
-Each unit: implement the feature, add tests, ensure all existing tests pass. Read BACKLOG.md for the full P2 and P3 specs."""
+Each unit: implement the feature, add tests, ensure all existing tests pass. Read BACKLOG.md for full specs."""
 
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
 timeout = 300
 
 [scheduler]
-session_timeout = 2700
+session_timeout = 900
 cooldown = 5
 max_sessions_per_run = 50
 model = "opus"
@@ -55,7 +53,7 @@ max_children_per_node = 5
 budget_per_call_usd = 2.0
 
 [continuous]
-max_wall_time_seconds = 14400
+max_wall_time_seconds = 3600
 backlog_min_size = 1
 timeout_multiplier = 1.5
 
