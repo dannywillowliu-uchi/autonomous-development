@@ -32,9 +32,14 @@ Each unit: implement the fix, add tests, ensure ALL existing tests pass.
 - [x] fc1c005f (2026-02-17T02:11:59.328526+00:00) -- Documented diff_reviewer.py as deliberate LLM eval exception in CLAUDE.md Architecture section and m (files: CLAUDE.md, BACKLOG.md)
 - [x] 9b8f44ba (2026-02-17T02:14:40.579053+00:00) -- Replaced synchronous subprocess.run() in strategist._get_git_log() with async asyncio.create_subproc (files: src/mission_control/strategist.py, tests/test_strategist.py)
 - [x] 83e4d24d (2026-02-17T02:18:47.097733+00:00) -- Created src/mission_control/constants.py with EVALUATOR_WEIGHTS, GRADING_WEIGHTS tuples and DEFAULT_ (files: src/mission_control/constants.py, src/mission_control/evaluator.py, src/mission_control/grading.py, tests/test_constants.py)
+- [x] 49846bc7 (2026-02-17T02:20:17.742130+00:00) -- Extracted planner_context.py (build_planner_context + update_mission_state) and backlog_manager.py ( (files: src/mission_control/continuous_controller.py, src/mission_control/planner_context.py, src/mission_control/backlog_manager.py, tests/test_planner_context.py, tests/test_backlog_manager.py)
 
 ## Files Modified
-BACKLOG.md, CLAUDE.md, src/mission_control/constants.py, src/mission_control/evaluator.py, src/mission_control/grading.py, src/mission_control/strategist.py, tests/test_constants.py, tests/test_strategist.py
+BACKLOG.md, CLAUDE.md, src/mission_control/backlog_manager.py, src/mission_control/constants.py, src/mission_control/continuous_controller.py, src/mission_control/evaluator.py, src/mission_control/grading.py, src/mission_control/planner_context.py, src/mission_control/strategist.py, tests/test_backlog_manager.py, tests/test_constants.py, tests/test_planner_context.py, tests/test_strategist.py
+
+## Quality Reviews
+- 83e4d24d (Add constants module for scoring weights): alignment=2 approach=1 tests=1 avg=1.3
+  "This diff implements nothing from the assigned work unit (constants module + tes"
 
 ## Remaining
 The planner should focus on what hasn't been done yet.
@@ -44,3 +49,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 - 2026-02-17T02:11:59.328526+00:00 | fc1c005f merged (commit: e3f9731) -- Documented diff_reviewer.py as deliberate LLM eval exception in CLAUDE.md Archit
 - 2026-02-17T02:14:40.579053+00:00 | 9b8f44ba merged (commit: 1d732cb) -- Replaced synchronous subprocess.run() in strategist._get_git_log() with async as
 - 2026-02-17T02:18:47.097733+00:00 | 83e4d24d merged (commit: 0afc7b4) -- Created src/mission_control/constants.py with EVALUATOR_WEIGHTS, GRADING_WEIGHTS
+- 2026-02-17T02:20:17.742130+00:00 | 49846bc7 merged (commit: a822395) -- Extracted planner_context.py (build_planner_context + update_mission_state) and 
