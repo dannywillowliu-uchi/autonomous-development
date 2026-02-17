@@ -700,11 +700,11 @@ class TestFixupSessionModel:
 		assert cmd[model_idx + 1] == "haiku"
 
 	async def test_fixup_falls_back_to_scheduler_model(self) -> None:
-		"""When config.models is absent, falls back to scheduler.model."""
+		"""When config.models.fixup_model is default, uses scheduler.model as fallback."""
 		mgr = _manager()
 		mgr.config.scheduler.model = "sonnet"
-		# Ensure no models attribute
-		assert not hasattr(mgr.config, "models") or getattr(mgr.config, "models", None) is None
+		# Clear the fixup_model so _get_fixup_model falls back to scheduler.model
+		mgr.config.models.fixup_model = ""  # type: ignore[attr-defined]
 		mgr._run_command = AsyncMock(return_value=(True, "fixed"))  # type: ignore[method-assign]
 
 		await mgr._run_fixup_session("fix the tests")
