@@ -25,9 +25,10 @@ Priority backlog items to address:
 - [x] 0470f118 (2026-02-17T08:09:41.839687+00:00) -- Added architect/editor two-pass mode to worker.py. When config.models.architect_editor_mode=True, wo (files: src/mission_control/worker.py, tests/test_worker.py)
 - [x] b6bcee75 (2026-02-17T08:10:59.710471+00:00) -- The _log_unit_event helper already existed from prior unit c737e58f. Fixed the except handler to use (files: src/mission_control/continuous_controller.py)
 - [x] d80c9e94 (2026-02-17T08:11:27.327748+00:00) -- Fire-and-forget exception logging already implemented by prior unit c737e58f (commit 35b0395). _task (files: src/mission_control/continuous_controller.py, tests/test_continuous_controller.py)
+- [x] c65fd5bc (2026-02-17T08:13:23.020594+00:00) -- Fixed test_uses_scheduler_model_when_no_models_config by setting planner.config.models.planner_model (files: tests/test_recursive_planner.py)
 
 ## Files Modified
-src/mission_control/continuous_controller.py, src/mission_control/worker.py, tests/test_continuous_controller.py, tests/test_worker.py
+src/mission_control/continuous_controller.py, src/mission_control/worker.py, tests/test_continuous_controller.py, tests/test_recursive_planner.py, tests/test_worker.py
 
 ## Quality Reviews
 - b6bcee75 (Extract _log_unit_event helper in contin): alignment=3 approach=2 tests=1 avg=2.0
@@ -42,3 +43,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 - 2026-02-17T08:05:28.066882+00:00 | c737e58f merged (commit: 35b0395) -- Added _task_done_callback for fire-and-forget exception logging (3 sites + dispa
 - 2026-02-17T08:10:59.710471+00:00 | b6bcee75 merged (commit: 5fec880) -- The _log_unit_event helper already existed from prior unit c737e58f. Fixed the e
 - 2026-02-17T08:11:27.327748+00:00 | d80c9e94 merged (commit: 35b0395) -- Fire-and-forget exception logging already implemented by prior unit c737e58f (co
+- 2026-02-17T08:13:23.020594+00:00 | c65fd5bc merged (commit: 49e65d1) -- Fixed test_uses_scheduler_model_when_no_models_config by setting planner.config.
