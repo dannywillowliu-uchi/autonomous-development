@@ -51,11 +51,24 @@ def _parse_planner_output(output: str) -> PlannerResult:
 	plan_match = _PLAN_BLOCK_RE.search(output)
 	if plan_match:
 		block_content = plan_match.group(1).strip()
+		# Strip markdown code fences that LLMs often add
+		block_content = re.sub(r"^```(?:json)?\s*\n?", "", block_content)
+		block_content = re.sub(r"\n?```\s*$", "", block_content)
+		block_content = block_content.strip()
 		try:
 			data = json.loads(block_content)
 		except (json.JSONDecodeError, ValueError):
-			log.warning("Malformed JSON inside <!-- PLAN --> block, falling through to PLAN_RESULT")
-			data = None
+			# Try stripping trailing commas (common LLM quirk)
+			cleaned = re.sub(r",\s*([}\]])", r"\1", block_content)
+			try:
+				data = json.loads(cleaned)
+			except (json.JSONDecodeError, ValueError):
+				log.warning(
+					"Malformed JSON inside <!-- PLAN --> block, falling through to PLAN_RESULT. "
+					"Content (first 300 chars): %s",
+					block_content[:300],
+				)
+				data = None
 
 	# 2. Try PLAN_RESULT: marker (matches session.py MC_RESULT pattern)
 	if not isinstance(data, dict):

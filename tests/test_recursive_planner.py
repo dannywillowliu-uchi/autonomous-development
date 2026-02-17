@@ -1092,6 +1092,46 @@ class TestPlanBlockParsing:
 		assert result.type == "leaves"
 		assert result.units == []
 
+	def test_plan_block_with_code_fences(self) -> None:
+		"""<!-- PLAN --> block with markdown code fences around JSON."""
+		raw = (
+			"Analysis complete.\n\n"
+			"<!-- PLAN -->\n"
+			"```json\n"
+			'{"type":"leaves","units":[{"title":"Task A","description":"do it","files_hint":"a.py","priority":1}]}\n'
+			"```\n"
+			"<!-- /PLAN -->"
+		)
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert len(result.units) == 1
+		assert result.units[0]["title"] == "Task A"
+
+	def test_plan_block_with_code_fences_no_lang(self) -> None:
+		"""<!-- PLAN --> block with bare ``` fences (no language tag)."""
+		raw = (
+			"<!-- PLAN -->\n"
+			"```\n"
+			'{"type":"leaves","units":[]}\n'
+			"```\n"
+			"<!-- /PLAN -->"
+		)
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert result.units == []
+
+	def test_plan_block_with_trailing_commas(self) -> None:
+		"""<!-- PLAN --> block with trailing commas in JSON."""
+		raw = (
+			'<!-- PLAN -->{"type":"leaves","units":[\n'
+			'  {"title":"A","description":"x","files_hint":"","priority":1,},\n'
+			']}<!-- /PLAN -->'
+		)
+		result = _parse_planner_output(raw)
+		assert result.type == "leaves"
+		assert len(result.units) == 1
+		assert result.units[0]["title"] == "A"
+
 
 # -- Per-component model usage tests --
 
