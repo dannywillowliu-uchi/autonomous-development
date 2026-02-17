@@ -90,6 +90,7 @@ class ContinuousMissionResult:
 	ambition_score: int = 0
 	next_objective: str = ""
 	proposed_by_strategist: bool = False
+	db_errors: int = 0
 
 
 class ContinuousController:
@@ -125,6 +126,9 @@ class ContinuousController:
 		self._round_tracker: dict[str, _RoundTracker] = {}  # epoch_id -> tracker
 		self._failure_backoff_until: float = 0.0
 		self._all_fail_stop_reason: str = ""
+		self._in_flight_count: int = 0
+		self._db_error_count: int = 0
+		self._db_degraded: bool = False
 		self.ambition_score: float = 0.0
 		self.proposed_by_strategist: bool = False
 		self._strategist: Strategist | None = None
@@ -146,6 +150,28 @@ class ContinuousController:
 		if exc is not None:
 			logger.error("Fire-and-forget task failed: %s", exc, exc_info=exc)
 
+	_DB_ERROR_THRESHOLD: int = 5
+
+	def _record_db_error(self) -> None:
+		"""Track a DB error and enter degraded mode if threshold exceeded."""
+		count = getattr(self, "_db_error_count", 0) + 1
+		self._db_error_count = count
+		if count >= self._DB_ERROR_THRESHOLD and not getattr(self, "_db_degraded", False):
+			self._db_degraded = True
+			logger.warning(
+				"DB error budget exhausted (%d errors) -- entering degraded mode, "
+				"skipping non-critical DB writes",
+				self._db_error_count,
+			)
+
+	def _record_db_success(self) -> None:
+		"""Reset DB error counter on successful write."""
+		if getattr(self, "_db_error_count", 0) > 0:
+			if self._db_degraded:
+				logger.info("DB write succeeded -- exiting degraded mode")
+			self._db_error_count = 0
+			self._db_degraded = False
+
 	def _log_unit_event(
 		self,
 		*,
@@ -160,18 +186,21 @@ class ContinuousController:
 		cost_usd: float = 0.0,
 	) -> None:
 		"""Insert a UnitEvent into the DB and emit to the JSONL event stream."""
-		try:
-			self.db.insert_unit_event(UnitEvent(
-				mission_id=mission_id,
-				epoch_id=epoch_id,
-				work_unit_id=work_unit_id,
-				event_type=event_type,
-				details=details or "",
-				input_tokens=input_tokens,
-				output_tokens=output_tokens,
-			))
-		except Exception as exc:
-			logger.debug("Failed to insert unit event: %s", exc)
+		if not getattr(self, "_db_degraded", False):
+			try:
+				self.db.insert_unit_event(UnitEvent(
+					mission_id=mission_id,
+					epoch_id=epoch_id,
+					work_unit_id=work_unit_id,
+					event_type=event_type,
+					details=details or "",
+					input_tokens=input_tokens,
+					output_tokens=output_tokens,
+				))
+				self._record_db_success()
+			except Exception as exc:
+				logger.debug("Failed to insert unit event: %s", exc)
+				self._record_db_error()
 		if self._event_stream:
 			kwargs: dict[str, object] = {
 				"mission_id": mission_id,
@@ -432,6 +461,7 @@ class ContinuousController:
 			result.total_units_dispatched = self._total_dispatched
 			result.total_units_merged = self._total_merged
 			result.total_units_failed = self._total_failed
+			result.db_errors = self._db_error_count
 
 			if self._backlog_manager.backlog_item_ids:
 				result.backlog_item_ids = list(self._backlog_manager.backlog_item_ids)
@@ -866,6 +896,7 @@ class ContinuousController:
 			for unit in units:
 				logger.info("Waiting for semaphore to dispatch unit %s: %s", unit.id[:12], unit.title[:60])
 				await semaphore.acquire()
+				self._in_flight_count += 1
 				logger.info("Semaphore acquired, dispatching unit %s", unit.id[:12])
 				unit.epoch_id = epoch.id
 				try:
@@ -874,6 +905,7 @@ class ContinuousController:
 					logger.error(
 						"Failed to insert work unit: %s", exc, exc_info=True,
 					)
+					self._in_flight_count -= 1
 					semaphore.release()
 					continue
 
@@ -1246,8 +1278,9 @@ class ContinuousController:
 
 			try:
 				self.db.update_mission(mission)
+				self._record_db_success()
 			except Exception:
-				pass
+				self._record_db_error()
 
 			# Track round outcomes for all-fail detection
 			self._record_round_outcome(unit, epoch, merged)
@@ -1411,6 +1444,7 @@ class ContinuousController:
 		if self._semaphore is None:
 			raise RuntimeError("Controller not initialized: call start() first")
 		await self._semaphore.acquire()
+		self._in_flight_count += 1
 		task = asyncio.create_task(
 			self._execute_single_unit(unit, epoch, mission, self._semaphore),
 		)
@@ -1431,14 +1465,21 @@ class ContinuousController:
 		unit.status = "failed"
 		unit.output_summary = reason
 		unit.finished_at = _now_iso()
-		await self.db.locked_call("update_work_unit", unit)
+		try:
+			await self.db.locked_call("update_work_unit", unit)
+			self._record_db_success()
+		except Exception as exc:
+			self._record_db_error()
+			logger.error("Failed to persist unit failure for %s: %s", unit.id, exc)
 		if worker is not None:
 			worker.status = "dead"
 			worker.units_failed += 1
-			try:
-				await self.db.locked_call("update_worker", worker)
-			except Exception:
-				pass
+			if not self._db_degraded:
+				try:
+					await self.db.locked_call("update_worker", worker)
+					self._record_db_success()
+				except Exception:
+					self._record_db_error()
 		if put_on_queue:
 			await self._completion_queue.put(
 				WorkerCompletion(
@@ -1590,10 +1631,12 @@ class ContinuousController:
 					worker.last_heartbeat = _now_iso()
 					excerpt = (output_so_far or "")[-500:]
 					worker.backend_metadata = json.dumps({"output_excerpt": excerpt})
-					try:
-						await self.db.locked_call("update_worker", worker)
-					except Exception:
-						pass
+					if not self._db_degraded:
+						try:
+							await self.db.locked_call("update_worker", worker)
+							self._record_db_success()
+						except Exception:
+							self._record_db_error()
 				await asyncio.sleep(monitor_interval)
 			else:
 				await self._backend.kill(handle)
@@ -1678,10 +1721,12 @@ class ContinuousController:
 				worker.current_unit_id = None
 				worker.pid = None
 				worker.total_cost_usd += unit.cost_usd
-				try:
-					await self.db.locked_call("update_worker", worker)
-				except Exception:
-					pass
+				if not self._db_degraded:
+					try:
+						await self.db.locked_call("update_worker", worker)
+						self._record_db_success()
+					except Exception:
+						self._record_db_error()
 
 			# Put on completion queue for verify+merge
 			await self._completion_queue.put(
@@ -1705,10 +1750,12 @@ class ContinuousController:
 				worker.status = "idle"
 				worker.current_unit_id = None
 				worker.pid = None
-				try:
-					await self.db.locked_call("update_worker", worker)
-				except Exception:
-					pass
+				if not self._db_degraded:
+					try:
+						await self.db.locked_call("update_worker", worker)
+						self._record_db_success()
+					except Exception:
+						self._record_db_error()
 			if self._event_stream and worker is not None:
 				self._event_stream.emit(
 					"worker_stopped",
@@ -1723,6 +1770,7 @@ class ContinuousController:
 				)
 			if workspace:
 				await self._backend.release_workspace(workspace)
+			self._in_flight_count = max(self._in_flight_count - 1, 0)
 			semaphore.release()
 
 	def _should_stop(self, mission: Mission) -> str:
@@ -1793,13 +1841,8 @@ class ContinuousController:
 				new_count = int(params["num_workers"])
 				self.config.scheduler.parallel.num_workers = new_count
 				if self._semaphore is not None:
-					new_sem = asyncio.Semaphore(new_count)
-					in_flight = sum(
-						1 for t in self._active_tasks if not t.done()
-					)
-					for _ in range(in_flight):
-						new_sem._value = max(new_sem._value - 1, 0)
-					self._semaphore = new_sem
+					available = max(new_count - self._in_flight_count, 0)
+					self._semaphore = asyncio.Semaphore(available)
 				logger.info(
 					"Adjusted num_workers to %d",
 					self.config.scheduler.parallel.num_workers,
