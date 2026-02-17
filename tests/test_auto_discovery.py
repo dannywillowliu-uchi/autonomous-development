@@ -99,11 +99,13 @@ def _mock_proc(returncode: int = 0, stdout: bytes = b"", stderr: bytes = b"") ->
 
 class TestComputePriority:
 	def test_basic(self) -> None:
-		assert _compute_priority(7, 3) == 5.6
+		# 7 * (1.0 - 0.3 * 2/9) = 6.5 (rounded)
+		assert _compute_priority(7, 3) == 6.5
 
 	def test_clamps_values(self) -> None:
 		assert _compute_priority(0, 0) == 1.0  # clamped to 1,1
-		assert _compute_priority(15, 15) == 1.0  # clamped to 10,10
+		# 10 * (1.0 - 0.3) = 7.0 (clamped to 10,10)
+		assert _compute_priority(15, 15) == 7.0
 
 
 class TestParseDiscoveryOutput:
@@ -120,7 +122,7 @@ class TestParseDiscoveryOutput:
 		assert result.item_count == 1
 		assert items[0].title == "Fix test coverage"
 		assert items[0].track == "quality"
-		assert items[0].priority_score == 5.6
+		assert items[0].priority_score == 6.5
 
 	def test_filters_low_priority(self) -> None:
 		output = _discovery_json([

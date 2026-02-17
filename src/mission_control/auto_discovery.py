@@ -23,11 +23,15 @@ from mission_control.models import BacklogItem, DiscoveryResult
 logger = logging.getLogger(__name__)
 
 
-def _compute_priority(impact: int, effort: int) -> float:
-	"""Compute priority score: impact * (11 - effort) / 10."""
+def _compute_priority(impact: int, effort: int, effort_weight: float = 0.3) -> float:
+	"""Compute priority score: impact * (1.0 - effort_weight * (effort - 1) / 9).
+
+	High-impact hard work is no longer penalized as heavily as before.
+	"""
 	impact = max(1, min(10, impact))
 	effort = max(1, min(10, effort))
-	return round(impact * (11 - effort) / 10, 1)
+	effort_factor = 1.0 - effort_weight * (effort - 1) / 9
+	return round(impact * effort_factor, 1)
 
 
 @dataclass

@@ -36,9 +36,17 @@ def _make_item(**overrides: object) -> BacklogItem:
 
 class TestBaseScore:
 	def test_formula(self) -> None:
-		assert _compute_base_score(10, 1) == 10.0
-		assert _compute_base_score(10, 10) == 1.0
-		assert _compute_base_score(8, 3) == pytest.approx(6.4)
+		# New formula: impact * (1.0 - effort_weight * (effort - 1) / 9)
+		assert _compute_base_score(10, 1) == 10.0  # effort=1 -> no penalty
+		assert _compute_base_score(10, 10) == pytest.approx(7.0)  # max effort: 30% reduction
+		assert _compute_base_score(8, 3) == pytest.approx(8 * (1.0 - 0.3 * 2 / 9))
+
+	def test_custom_effort_weight(self) -> None:
+		# Old formula equivalent: effort_weight=1.0 gives impact*(11-effort)/10...no.
+		# With weight=0 effort is ignored: score = impact
+		assert _compute_base_score(5, 10, effort_weight=0.0) == 5.0
+		# With weight=1.0: impact * (1.0 - 1.0 * (effort-1)/9) = impact * (10-effort)/9
+		assert _compute_base_score(9, 10, effort_weight=1.0) == pytest.approx(0.0)
 
 
 class TestFailurePenalty:
@@ -122,10 +130,12 @@ class TestParseBacklogMd:
 		assert len(items) == 2
 		assert items[0].title == "Critical task"
 		assert items[0].impact == 10
-		assert items[0].priority_score == pytest.approx(6.0)
+		# impact=10, effort=5: 10 * (1.0 - 0.3 * 4/9) = 8.6667
+		assert items[0].priority_score == pytest.approx(10 * (1.0 - 0.3 * 4 / 9), rel=1e-3)
 		assert items[1].title == "Medium task"
 		assert items[1].impact == 7
-		assert items[1].priority_score == pytest.approx(4.2)
+		# impact=7, effort=5: 7 * (1.0 - 0.3 * 4/9) = 6.0667
+		assert items[1].priority_score == pytest.approx(7 * (1.0 - 0.3 * 4 / 9), rel=1e-3)
 
 	def test_parse_real_format(self, tmp_path: object) -> None:
 		from pathlib import Path
