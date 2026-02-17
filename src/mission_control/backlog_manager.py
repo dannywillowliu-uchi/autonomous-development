@@ -8,6 +8,7 @@ import logging
 from mission_control.config import MissionConfig
 from mission_control.db import Database
 from mission_control.models import BacklogItem, Handoff, WorkUnit, _now_iso
+from mission_control.priority import recalculate_priorities
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class BacklogManager:
 
 		Returns the composed objective string, or None if no backlog items found.
 		"""
+		recalculate_priorities(self.db)
 		items = self.db.get_pending_backlog(limit=limit)
 		if not items:
 			return None
@@ -96,6 +98,9 @@ class BacklogManager:
 					item.last_failure_reason = "; ".join(failure_reasons[:3])
 				item.updated_at = _now_iso()
 				self.db.update_backlog_item(item)
+
+		# Recalculate priorities after attempt_count changes
+		recalculate_priorities(self.db)
 
 		logger.info(
 			"Updated %d backlog items: %s",

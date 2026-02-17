@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 from mission_control.backlog_manager import BacklogManager
 from mission_control.config import MissionConfig
@@ -210,3 +211,152 @@ class TestUpdateBacklogFromCompletion:
 		item = db.get_backlog_item("bl1")
 		assert item is not None
 		assert item.status == "in_progress"  # unchanged
+
+
+class TestRecalculatePrioritiesIntegration:
+	"""Test that recalculate_priorities is wired into BacklogManager."""
+
+	def test_recalculate_called_before_selection(
+		self, db: Database, config: MissionConfig,
+	) -> None:
+		item = BacklogItem(
+			id="bl1", title="Task A", impact=10, effort=1,
+			priority_score=0.0, track="feature", status="pending",
+		)
+		db.insert_backlog_item(item)
+		mgr = BacklogManager(db, config)
+
+		with patch(
+			"mission_control.backlog_manager.recalculate_priorities"
+		) as mock_recalc:
+			mgr.load_backlog_objective(limit=5)
+			mock_recalc.assert_called_once_with(db)
+
+	def test_scores_are_fresh_when_selecting(
+		self, db: Database, config: MissionConfig,
+	) -> None:
+		item = BacklogItem(
+			id="bl1", title="Task A", impact=10, effort=1,
+			priority_score=0.0, track="feature", status="pending",
+		)
+		db.insert_backlog_item(item)
+		mgr = BacklogManager(db, config)
+
+		objective = mgr.load_backlog_objective(limit=5)
+		assert objective is not None
+		assert "priority=10.0" in objective
+
+	def test_recalculate_called_after_failure(
+		self, db: Database, config: MissionConfig,
+	) -> None:
+		db.insert_backlog_item(BacklogItem(
+			id="bl1", title="Task A", priority_score=5.0,
+			track="feature", status="in_progress",
+		))
+		mgr = BacklogManager(db, config)
+		mgr.backlog_item_ids = ["bl1"]
+
+		with patch(
+			"mission_control.backlog_manager.recalculate_priorities"
+		) as mock_recalc:
+			mgr.update_backlog_on_completion(objective_met=False, handoffs=[])
+			mock_recalc.assert_called_once_with(db)
+
+	def test_recalculate_called_after_success(
+		self, db: Database, config: MissionConfig,
+	) -> None:
+		db.insert_backlog_item(BacklogItem(
+			id="bl1", title="Task A", priority_score=5.0,
+			track="feature", status="in_progress",
+		))
+		mgr = BacklogManager(db, config)
+		mgr.backlog_item_ids = ["bl1"]
+
+		with patch(
+			"mission_control.backlog_manager.recalculate_priorities"
+		) as mock_recalc:
+			mgr.update_backlog_on_completion(objective_met=True, handoffs=[])
+			mock_recalc.assert_called_once_with(db)
+
+	def test_no_recalculate_when_no_items(
+		self, db: Database, config: MissionConfig,
+	) -> None:
+		mgr = BacklogManager(db, config)
+		with patch(
+			"mission_control.backlog_manager.recalculate_priorities"
+		) as mock_recalc:
+			mgr.update_backlog_on_completion(objective_met=True, handoffs=[])
+			mock_recalc.assert_not_called()
+
+
+class TestDependencyFiltering:
+	"""Test depends_on filtering in get_pending_backlog."""
+
+	def test_unblocked_items_returned(self, db: Database) -> None:
+		db.insert_backlog_item(BacklogItem(
+			id="bl1", title="No deps", priority_score=5.0,
+			track="feature", status="pending",
+		))
+		result = db.get_pending_backlog()
+		assert len(result) == 1
+		assert result[0].title == "No deps"
+
+	def test_blocked_items_excluded(self, db: Database) -> None:
+		db.insert_backlog_item(BacklogItem(
+			id="dep1", title="Dependency", priority_score=5.0,
+			track="feature", status="pending",
+		))
+		db.insert_backlog_item(BacklogItem(
+			id="bl1", title="Blocked", priority_score=8.0,
+			track="feature", status="pending", depends_on="dep1",
+		))
+		result = db.get_pending_backlog()
+		titles = [i.title for i in result]
+		assert "Dependency" in titles
+		assert "Blocked" not in titles
+
+	def test_unblocked_when_dep_completed(self, db: Database) -> None:
+		db.insert_backlog_item(BacklogItem(
+			id="dep1", title="Dependency", priority_score=5.0,
+			track="feature", status="completed",
+		))
+		db.insert_backlog_item(BacklogItem(
+			id="bl1", title="Ready", priority_score=8.0,
+			track="feature", status="pending", depends_on="dep1",
+		))
+		result = db.get_pending_backlog()
+		titles = [i.title for i in result]
+		assert "Ready" in titles
+
+	def test_multiple_deps_all_must_complete(self, db: Database) -> None:
+		db.insert_backlog_item(BacklogItem(
+			id="dep1", title="Dep 1", priority_score=5.0,
+			track="feature", status="completed",
+		))
+		db.insert_backlog_item(BacklogItem(
+			id="dep2", title="Dep 2", priority_score=5.0,
+			track="feature", status="pending",
+		))
+		db.insert_backlog_item(BacklogItem(
+			id="bl1", title="Multi-dep", priority_score=8.0,
+			track="feature", status="pending", depends_on="dep1,dep2",
+		))
+		result = db.get_pending_backlog()
+		titles = [i.title for i in result]
+		assert "Multi-dep" not in titles
+
+	def test_empty_depends_on_treated_as_unblocked(self, db: Database) -> None:
+		db.insert_backlog_item(BacklogItem(
+			id="bl1", title="Free", priority_score=5.0,
+			track="feature", status="pending", depends_on="",
+		))
+		result = db.get_pending_backlog()
+		assert len(result) == 1
+
+	def test_missing_dep_id_blocks(self, db: Database) -> None:
+		db.insert_backlog_item(BacklogItem(
+			id="bl1", title="Bad dep", priority_score=5.0,
+			track="feature", status="pending", depends_on="nonexistent-id",
+		))
+		result = db.get_pending_backlog()
+		assert len(result) == 0

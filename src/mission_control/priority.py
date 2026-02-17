@@ -108,6 +108,11 @@ def parse_backlog_md(path: Path) -> list[BacklogItem]:
 	Effort defaults to 5. Items get a base priority_score computed from impact/effort.
 	"""
 	text = path.read_text(encoding="utf-8")
+	return parse_backlog_md_text(text)
+
+
+def parse_backlog_md_text(text: str) -> list[BacklogItem]:
+	"""Parse BACKLOG.md content from a text string into BacklogItem instances."""
 	items: list[BacklogItem] = []
 	current_title = ""
 	current_priority = 0

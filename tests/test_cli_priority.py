@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from mission_control.cli import (
 	build_parser,
 	cmd_priority_defer,
 	cmd_priority_import,
 	cmd_priority_list,
+	cmd_priority_recalc,
 	cmd_priority_set,
 	parse_backlog_md,
-	recalculate_priorities,
 )
 from mission_control.db import Database
 from mission_control.models import BacklogItem, _now_iso
@@ -76,47 +78,6 @@ class TestParseBacklogMd:
 	def test_extracts_description(self) -> None:
 		items = parse_backlog_md(SAMPLE_BACKLOG_MD)
 		assert "expensive and noisy" in items[0].description
-
-
-class TestRecalculatePriorities:
-	def test_sorts_by_score_desc(self) -> None:
-		now = _now_iso()
-		items = [
-			BacklogItem(id="a", title="Low", impact=3, effort=5, created_at=now, updated_at=now),
-			BacklogItem(id="b", title="High", impact=9, effort=3, created_at=now, updated_at=now),
-		]
-		result = recalculate_priorities(items)
-		assert result[0].id == "b"
-		assert result[1].id == "a"
-
-	def test_pinned_score_overrides(self) -> None:
-		now = _now_iso()
-		items = [
-			BacklogItem(id="a", title="Low", impact=3, effort=5, pinned_score=99.0, created_at=now, updated_at=now),
-			BacklogItem(id="b", title="High", impact=9, effort=3, created_at=now, updated_at=now),
-		]
-		result = recalculate_priorities(items)
-		assert result[0].id == "a"
-		assert result[0].priority_score == 99.0
-
-	def test_failure_penalty(self) -> None:
-		now = _now_iso()
-		items = [
-			BacklogItem(id="a", title="Failed", impact=9, effort=3, attempt_count=5, created_at=now, updated_at=now),
-		]
-		result = recalculate_priorities(items)
-		base = 9 * (11 - 3) / 10.0  # 7.2
-		penalty = min(5 * 0.5, 3.0)  # 2.5
-		expected = max(base - penalty, 0.0)  # 4.7
-		assert result[0].priority_score == expected
-
-	def test_score_floors_at_zero(self) -> None:
-		now = _now_iso()
-		items = [
-			BacklogItem(id="a", title="Weak", impact=1, effort=9, attempt_count=6, created_at=now, updated_at=now),
-		]
-		result = recalculate_priorities(items)
-		assert result[0].priority_score == 0.0
 
 
 def _setup_db_with_config(tmp_path: Path) -> tuple[Path, Path]:
@@ -232,3 +193,52 @@ class TestCmdPriorityImport:
 		with Database(db_path) as db:
 			items = db.list_backlog_items()
 			assert len(items) == 3
+
+
+class TestCmdPriorityRecalc:
+	def test_recalc_arg_parsing(self) -> None:
+		parser = build_parser()
+		args = parser.parse_args(["priority", "recalc"])
+		assert args.command == "priority"
+		assert args.priority_command == "recalc"
+
+	def test_recalc_updates_scores(self, tmp_path: Path) -> None:
+		config_file, db_path = _setup_db_with_config(tmp_path)
+		now = _now_iso()
+		with Database(db_path) as db:
+			db.insert_backlog_item(BacklogItem(
+				id="item1", title="Test item", impact=10, effort=1,
+				priority_score=0.0, status="pending",
+				created_at=now, updated_at=now,
+			))
+
+		parser = build_parser()
+		args = parser.parse_args([
+			"priority", "--config", str(config_file), "recalc",
+		])
+		result = cmd_priority_recalc(args)
+		assert result == 0
+
+		with Database(db_path) as db:
+			item = db.get_backlog_item("item1")
+			assert item is not None
+			assert item.priority_score == pytest.approx(10.0)
+
+	def test_recalc_no_changes(self, tmp_path: Path) -> None:
+		config_file, db_path = _setup_db_with_config(tmp_path)
+		parser = build_parser()
+		args = parser.parse_args([
+			"priority", "--config", str(config_file), "recalc",
+		])
+		result = cmd_priority_recalc(args)
+		assert result == 0
+
+	def test_recalc_no_db(self, tmp_path: Path) -> None:
+		config_file = tmp_path / "mission-control.toml"
+		config_file.write_text('[target]\nname = "test"\npath = "/tmp/test"\n')
+		parser = build_parser()
+		args = parser.parse_args([
+			"priority", "--config", str(config_file), "recalc",
+		])
+		result = cmd_priority_recalc(args)
+		assert result == 1

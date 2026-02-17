@@ -5,13 +5,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import re
 import sys
 from pathlib import Path
 
 from mission_control.config import load_config, validate_config
 from mission_control.db import Database
-from mission_control.models import BacklogItem, _new_id, _now_iso
+from mission_control.priority import parse_backlog_md_text as parse_backlog_md
+from mission_control.priority import recalculate_priorities as recalculate_priorities_db
 
 DEFAULT_CONFIG = "mission-control.toml"
 DEFAULT_DB = "mission-control.db"
@@ -131,6 +131,9 @@ def build_parser() -> argparse.ArgumentParser:
 	# mc priority import --config <path>
 	pimport = priority_sub.add_parser("import", help="Import items from BACKLOG.md")
 	pimport.add_argument("--file", required=True, help="Path to BACKLOG.md file")
+
+	# mc priority recalc
+	priority_sub.add_parser("recalc", help="Recalculate all priority scores")
 
 	return parser
 
@@ -738,55 +741,6 @@ def cmd_mcp(args: argparse.Namespace) -> int:
 	return 0
 
 
-def recalculate_priorities(items: list[BacklogItem]) -> list[BacklogItem]:
-	"""Recalculate priority scores for backlog items based on impact, effort, and history."""
-	for item in items:
-		if item.pinned_score is not None:
-			item.priority_score = item.pinned_score
-		else:
-			base = item.impact * (11 - item.effort) / 10.0
-			failure_penalty = min(item.attempt_count * 0.5, 3.0)
-			item.priority_score = max(base - failure_penalty, 0.0)
-	items.sort(key=lambda i: i.priority_score, reverse=True)
-	return items
-
-
-def parse_backlog_md(text: str) -> list[BacklogItem]:
-	"""Parse a BACKLOG.md file into BacklogItem objects.
-
-	Expects sections like '## P0: Title' with optional **Problem** and **Files** blocks.
-	"""
-	items: list[BacklogItem] = []
-	sections = re.split(r"^## ", text, flags=re.MULTILINE)
-	for section in sections:
-		section = section.strip()
-		if not section:
-			continue
-		header_match = re.match(r"P(\d+):\s*(.+)", section)
-		if not header_match:
-			continue
-		priority_num = int(header_match.group(1))
-		title = header_match.group(2).strip()
-		lines = section.split("\n", 1)
-		description = lines[1].strip() if len(lines) > 1 else ""
-		impact = max(10 - priority_num, 1)
-		effort = 5
-		score = impact * (11 - effort) / 10.0
-		now = _now_iso()
-		item = BacklogItem(
-			id=_new_id(),
-			title=title,
-			description=description,
-			priority_score=score,
-			impact=impact,
-			effort=effort,
-			track="feature",
-			status="pending",
-			created_at=now,
-			updated_at=now,
-		)
-		items.append(item)
-	return items
 
 
 def cmd_priority_list(args: argparse.Namespace) -> int:
@@ -797,8 +751,8 @@ def cmd_priority_list(args: argparse.Namespace) -> int:
 		return 1
 
 	with Database(db_path) as db:
+		recalculate_priorities_db(db)
 		items = db.list_backlog_items()
-		items = recalculate_priorities(items)
 		if not items:
 			print("No backlog items.")
 			return 0
@@ -880,11 +834,31 @@ def cmd_priority_import(args: argparse.Namespace) -> int:
 		return 0
 
 
+def cmd_priority_recalc(args: argparse.Namespace) -> int:
+	"""Recalculate all priority scores."""
+	db_path = _get_db_path(args.config)
+	if not db_path.exists():
+		print("No database found. Run 'mc start' first.")
+		return 1
+
+	with Database(db_path) as db:
+		updated = recalculate_priorities_db(db)
+		if not updated:
+			print("All scores up to date.")
+			return 0
+
+		print(f"Recalculated {len(updated)} item(s):")
+		for item in updated:
+			title = item.title[:40] + ".." if len(item.title) > 42 else item.title
+			print(f"  {item.id[:12]}  {title:<42} -> {item.priority_score:.1f}")
+		return 0
+
+
 def cmd_priority(args: argparse.Namespace) -> int:
 	"""Dispatch priority subcommands."""
 	subcmd = getattr(args, "priority_command", None)
 	if subcmd is None:
-		print("Usage: mc priority {list|set|defer|import}")
+		print("Usage: mc priority {list|set|defer|import|recalc}")
 		return 1
 	handler = _PRIORITY_COMMANDS.get(subcmd)
 	if handler is None:
@@ -898,6 +872,7 @@ _PRIORITY_COMMANDS = {
 	"set": cmd_priority_set,
 	"defer": cmd_priority_defer,
 	"import": cmd_priority_import,
+	"recalc": cmd_priority_recalc,
 }
 
 

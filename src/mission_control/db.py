@@ -2172,7 +2172,21 @@ class Database:
 			LIMIT ?""",
 			(limit,),
 		).fetchall()
-		return [self._row_to_backlog_item(r) for r in rows]
+		items = [self._row_to_backlog_item(r) for r in rows]
+		# Filter out items whose dependencies are not yet completed
+		completed_ids = self._get_completed_backlog_ids()
+		return [
+			item for item in items
+			if not item.depends_on
+			or all(dep.strip() in completed_ids for dep in item.depends_on.split(","))
+		]
+
+	def _get_completed_backlog_ids(self) -> set[str]:
+		"""Return IDs of all completed backlog items."""
+		rows = self.conn.execute(
+			"SELECT id FROM backlog_items WHERE status = 'completed'"
+		).fetchall()
+		return {row["id"] for row in rows}
 
 	def get_backlog_items_for_mission(self, mission_id: str) -> list[BacklogItem]:
 		rows = self.conn.execute(
