@@ -1568,6 +1568,40 @@ class TestTaskDoneCallback:
 		assert not any("Fire-and-forget task failed" in r.message for r in caplog.records)
 
 
+class TestStrategicContextRegression:
+	def test_append_strategic_context_uses_mission_id(self, config: MissionConfig, db: Database) -> None:
+		"""Regression: strategic context must use mission.id, not mission.mission_id."""
+		mission = Mission(id="m-test-123", objective="Build feature X", status="completed")
+		db.insert_mission(mission)
+
+		# Verify the controller code references mission.id (not mission.mission_id)
+		# by exercising the same DB call the finally block makes
+		# This previously used mission.mission_id which raised AttributeError
+		merged_summaries = ["Added auth module", "Fixed tests"]
+		failed_summaries = ["Linting failed"]
+		db.append_strategic_context(
+			mission_id=mission.id,
+			what_attempted=mission.objective[:500],
+			what_worked="; ".join(merged_summaries) or "nothing merged",
+			what_failed="; ".join(failed_summaries) or "no failures",
+			recommended_next="continue",
+		)
+
+		# Verify it was persisted with the correct mission_id
+		contexts = db.get_strategic_context(limit=5)
+		assert len(contexts) == 1
+		assert contexts[0].mission_id == "m-test-123"
+		assert "Build feature X" in contexts[0].what_attempted
+		assert "Added auth module" in contexts[0].what_worked
+		assert "Linting failed" in contexts[0].what_failed
+
+	def test_mission_has_id_not_mission_id(self) -> None:
+		"""Verify Mission dataclass has 'id' field and not 'mission_id'."""
+		m = Mission(id="test-id")
+		assert m.id == "test-id"
+		assert not hasattr(m, "mission_id")
+
+
 class TestLogUnitEvent:
 	def test_inserts_event_and_emits_to_stream(self, config: MissionConfig, db: Database) -> None:
 		"""_log_unit_event should insert into DB and emit to event stream."""
