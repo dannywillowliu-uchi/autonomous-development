@@ -18,7 +18,7 @@ from mission_control.memory import (
 	load_context_for_work_unit,
 	summarize_session,
 )
-from mission_control.models import ContextItem, Decision, Plan, Session, TaskRecord, WorkUnit
+from mission_control.models import ContextItem, ContextScope, Decision, Plan, Session, TaskRecord, WorkUnit
 from mission_control.reviewer import ReviewVerdict
 
 
@@ -498,3 +498,288 @@ class TestInjectContextItems:
 		unit = WorkUnit(title="task")
 		result = load_context_for_mission_worker(unit, config)
 		assert "### Project Instructions" in result
+
+
+# -- ContextScope constants --
+
+
+class TestContextScope:
+	def test_scope_constants_exist(self):
+		assert ContextScope.MISSION == "mission"
+		assert ContextScope.ROUND == "round"
+		assert ContextScope.UNIT == "unit"
+
+
+# -- Mission-scoped context items --
+
+
+class TestMissionScopedContextItems:
+	def test_insert_and_retrieve_by_mission(self, db):
+		item = ContextItem(
+			id="ctx-m1", item_type="architectural", scope="src/db.py",
+			content="Use WAL mode", source_unit_id="u1", round_id="r1",
+			mission_id="mission-1", confidence=0.9,
+			scope_level=ContextScope.MISSION,
+		)
+		db.insert_context_item(item)
+		items = db.get_context_items_for_mission("mission-1")
+		assert len(items) == 1
+		assert items[0].id == "ctx-m1"
+		assert items[0].mission_id == "mission-1"
+		assert items[0].scope_level == ContextScope.MISSION
+
+	def test_mission_filter_excludes_other_missions(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-m1", mission_id="mission-1", item_type="gotcha",
+			content="gotcha for m1", scope_level=ContextScope.MISSION,
+		))
+		db.insert_context_item(ContextItem(
+			id="ctx-m2", mission_id="mission-2", item_type="gotcha",
+			content="gotcha for m2", scope_level=ContextScope.MISSION,
+		))
+		items = db.get_context_items_for_mission("mission-1")
+		assert len(items) == 1
+		assert items[0].id == "ctx-m1"
+
+	def test_mission_filter_with_scope_level(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-mission", mission_id="m1", item_type="pattern",
+			content="mission-level", scope_level=ContextScope.MISSION,
+		))
+		db.insert_context_item(ContextItem(
+			id="ctx-round", mission_id="m1", item_type="pattern",
+			content="round-level", scope_level=ContextScope.ROUND,
+		))
+		db.insert_context_item(ContextItem(
+			id="ctx-unit", mission_id="m1", item_type="pattern",
+			content="unit-level", scope_level=ContextScope.UNIT,
+		))
+		mission_only = db.get_context_items_for_mission("m1", scope_level=ContextScope.MISSION)
+		assert len(mission_only) == 1
+		assert mission_only[0].id == "ctx-mission"
+
+		round_only = db.get_context_items_for_mission("m1", scope_level=ContextScope.ROUND)
+		assert len(round_only) == 1
+		assert round_only[0].id == "ctx-round"
+
+		all_items = db.get_context_items_for_mission("m1")
+		assert len(all_items) == 3
+
+	def test_mission_filter_with_min_confidence(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-low", mission_id="m1", item_type="gotcha",
+			content="low confidence", confidence=0.3,
+		))
+		db.insert_context_item(ContextItem(
+			id="ctx-high", mission_id="m1", item_type="gotcha",
+			content="high confidence", confidence=0.9,
+		))
+		items = db.get_context_items_for_mission("m1", min_confidence=0.5)
+		assert len(items) == 1
+		assert items[0].id == "ctx-high"
+
+	def test_mission_filter_combined_scope_and_confidence(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-a", mission_id="m1", item_type="gotcha",
+			content="mission high", confidence=0.9, scope_level=ContextScope.MISSION,
+		))
+		db.insert_context_item(ContextItem(
+			id="ctx-b", mission_id="m1", item_type="gotcha",
+			content="mission low", confidence=0.3, scope_level=ContextScope.MISSION,
+		))
+		db.insert_context_item(ContextItem(
+			id="ctx-c", mission_id="m1", item_type="gotcha",
+			content="round high", confidence=0.9, scope_level=ContextScope.ROUND,
+		))
+		items = db.get_context_items_for_mission(
+			"m1", scope_level=ContextScope.MISSION, min_confidence=0.5,
+		)
+		assert len(items) == 1
+		assert items[0].id == "ctx-a"
+
+	def test_mission_items_ordered_by_confidence_desc(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-low", mission_id="m1", confidence=0.5, item_type="a", content="low",
+		))
+		db.insert_context_item(ContextItem(
+			id="ctx-high", mission_id="m1", confidence=0.95, item_type="a", content="high",
+		))
+		db.insert_context_item(ContextItem(
+			id="ctx-mid", mission_id="m1", confidence=0.7, item_type="a", content="mid",
+		))
+		items = db.get_context_items_for_mission("m1")
+		assert items[0].id == "ctx-high"
+		assert items[1].id == "ctx-mid"
+		assert items[2].id == "ctx-low"
+
+	def test_empty_mission_returns_empty(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-a", mission_id="m1", item_type="gotcha", content="stuff",
+		))
+		items = db.get_context_items_for_mission("nonexistent")
+		assert items == []
+
+	def test_get_context_item_preserves_mission_id(self, db):
+		item = ContextItem(
+			id="ctx-m", mission_id="mission-42", item_type="convention",
+			content="tabs only", scope_level=ContextScope.UNIT,
+		)
+		db.insert_context_item(item)
+		fetched = db.get_context_item("ctx-m")
+		assert fetched is not None
+		assert fetched.mission_id == "mission-42"
+		assert fetched.scope_level == ContextScope.UNIT
+
+
+# -- Scope overlap with mission context --
+
+
+class TestScopeOverlapWithMission:
+	def test_scope_overlap_returns_items_with_mission_id(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-a", scope="src/db.py", mission_id="m1",
+			item_type="gotcha", content="db gotcha", confidence=0.8,
+		))
+		results = db.get_context_items_by_scope_overlap(["src/db.py"])
+		assert len(results) == 1
+		assert results[0].mission_id == "m1"
+
+	def test_scope_overlap_across_missions(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-m1", scope="src/db.py", mission_id="m1",
+			item_type="gotcha", content="gotcha from m1", confidence=0.8,
+		))
+		db.insert_context_item(ContextItem(
+			id="ctx-m2", scope="src/db.py", mission_id="m2",
+			item_type="pattern", content="pattern from m2", confidence=0.9,
+		))
+		results = db.get_context_items_by_scope_overlap(["src/db.py"])
+		assert len(results) == 2
+
+
+# -- Additional confidence filtering edge cases --
+
+
+class TestConfidenceFiltering:
+	def test_exact_boundary_confidence(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-exact", scope="src/db.py", item_type="gotcha",
+			content="boundary", confidence=0.5,
+		))
+		results = db.get_context_items_by_scope_overlap(["src/db.py"], min_confidence=0.5)
+		assert len(results) == 1
+
+	def test_just_below_boundary(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-below", scope="src/db.py", item_type="gotcha",
+			content="below", confidence=0.499,
+		))
+		results = db.get_context_items_by_scope_overlap(["src/db.py"], min_confidence=0.5)
+		assert len(results) == 0
+
+	def test_zero_confidence_items(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-zero", scope="src/db.py", item_type="gotcha",
+			content="zero", confidence=0.0,
+		))
+		results = db.get_context_items_by_scope_overlap(["src/db.py"], min_confidence=0.0)
+		assert len(results) == 1
+
+	def test_mission_confidence_zero_threshold(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-low", mission_id="m1", item_type="gotcha",
+			content="low conf", confidence=0.1,
+		))
+		items = db.get_context_items_for_mission("m1", min_confidence=0.0)
+		assert len(items) == 1
+
+
+# -- Budget truncation in inject_context_items --
+
+
+class TestInjectContextItemsBudget:
+	def test_budget_zero_truncates_content(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-a", scope="src/db.py", item_type="gotcha",
+			content="important stuff", confidence=0.9,
+		))
+		unit = WorkUnit(files_hint="src/db.py", title="db work")
+		result = inject_context_items(unit, db, budget=0)
+		formatted_part = result.replace("### Context from Prior Workers\n", "")
+		assert len(formatted_part) <= 0
+
+	def test_budget_exactly_fits(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-a", scope="src/db.py", item_type="gotcha",
+			content="short", confidence=0.9,
+		))
+		unit = WorkUnit(files_hint="src/db.py", title="db work")
+		result = inject_context_items(unit, db, budget=5000)
+		assert "### Context from Prior Workers" in result
+		assert "short" in result
+
+	def test_many_items_truncated_to_budget(self, db):
+		for i in range(50):
+			db.insert_context_item(ContextItem(
+				id=f"ctx-{i}", scope="src/db.py", item_type="gotcha",
+				content=f"discovery number {i} with extra detail " * 5,
+				confidence=0.9,
+			))
+		unit = WorkUnit(files_hint="src/db.py", title="db work")
+		result = inject_context_items(unit, db, budget=200)
+		formatted_part = result.replace("### Context from Prior Workers\n", "")
+		assert len(formatted_part) <= 200
+
+	def test_confidence_filter_in_inject(self, db):
+		db.insert_context_item(ContextItem(
+			id="ctx-low", scope="src/db.py", item_type="gotcha",
+			content="low conf item", confidence=0.2,
+		))
+		db.insert_context_item(ContextItem(
+			id="ctx-high", scope="src/db.py", item_type="gotcha",
+			content="high conf item", confidence=0.9,
+		))
+		unit = WorkUnit(files_hint="src/db.py", title="db work")
+		result = inject_context_items(unit, db, budget=5000, min_confidence=0.5)
+		assert "high conf item" in result
+		assert "low conf item" not in result
+
+
+# -- format_context_items edge cases --
+
+
+class TestFormatContextItemsEdgeCases:
+	def test_item_with_empty_content(self):
+		items = [ContextItem(item_type="gotcha", content="")]
+		result = format_context_items(items)
+		assert "[gotcha] " in result
+
+	def test_item_with_special_characters(self):
+		items = [ContextItem(item_type="convention", content="Use {braces} & <angle> 'quotes'")]
+		result = format_context_items(items)
+		assert "{braces}" in result
+		assert "<angle>" in result
+
+	def test_confidence_exactly_one_no_annotation(self):
+		items = [ContextItem(item_type="pattern", content="some pattern", confidence=1.0)]
+		result = format_context_items(items)
+		assert "confidence" not in result
+
+	def test_confidence_just_below_one(self):
+		items = [ContextItem(item_type="pattern", content="some pattern", confidence=0.99)]
+		result = format_context_items(items)
+		assert "(confidence: 1.0)" in result
+
+	def test_many_items_formatted(self):
+		items = [
+			ContextItem(item_type=f"type-{i}", content=f"content-{i}")
+			for i in range(20)
+		]
+		result = format_context_items(items)
+		lines = result.strip().split("\n")
+		assert len(lines) == 20
+
+	def test_multiline_content_preserved(self):
+		items = [ContextItem(item_type="gotcha", content="line1\nline2\nline3")]
+		result = format_context_items(items)
+		assert "line1\nline2\nline3" in result
