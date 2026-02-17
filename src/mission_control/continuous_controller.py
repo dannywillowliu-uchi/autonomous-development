@@ -12,13 +12,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from mission_control.backends import LocalBackend, SSHBackend, WorkerBackend
+from mission_control.backlog_manager import BacklogManager
 from mission_control.config import ContinuousConfig, MissionConfig
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
 from mission_control.diff_reviewer import DiffReviewer
 from mission_control.event_stream import EventStream
 from mission_control.feedback import get_worker_context
-from mission_control.grading import compute_decomposition_grade, format_decomposition_feedback
 from mission_control.green_branch import GreenBranchManager
 from mission_control.heartbeat import Heartbeat
 from mission_control.models import (
@@ -35,6 +35,7 @@ from mission_control.models import (
 )
 from mission_control.notifier import TelegramNotifier
 from mission_control.overlap import _parse_files_hint
+from mission_control.planner_context import build_planner_context, update_mission_state
 from mission_control.session import parse_mc_result
 from mission_control.strategist import Strategist
 from mission_control.token_parser import compute_token_cost, parse_stream_json
@@ -97,7 +98,6 @@ class ContinuousController:
 		self._semaphore: asyncio.Semaphore | None = None
 		self._paused: bool = False
 		self._start_time: float = 0.0
-		self._backlog_item_ids: list[str] = []
 		self._state_changelog: list[str] = []
 		self._total_dispatched: int = 0
 		self._total_merged: int = 0
@@ -107,6 +107,7 @@ class ContinuousController:
 		self.proposed_by_strategist: bool = False
 		self._strategist: Strategist | None = None
 		self._diff_reviewer: DiffReviewer = DiffReviewer(config)
+		self._backlog_manager: BacklogManager = BacklogManager(db, config)
 
 	async def run(self, dry_run: bool = False) -> ContinuousMissionResult:
 		"""Run the continuous mission loop until objective met or stopping condition."""
@@ -177,7 +178,7 @@ class ContinuousController:
 
 		# Generate initial MISSION_STATE.md with objective and empty sections
 		try:
-			self._update_mission_state(mission)
+			update_mission_state(self.db, mission, self.config, self._state_changelog)
 		except Exception as exc:
 			logger.warning("Failed to write initial MISSION_STATE.md: %s", exc)
 
@@ -186,7 +187,7 @@ class ContinuousController:
 
 			# Load backlog items as objective if discovery is enabled
 			if self.config.discovery.enabled:
-				backlog_objective = self._load_backlog_objective()
+				backlog_objective = self._backlog_manager.load_backlog_objective()
 				if backlog_objective:
 					if self.config.target.objective:
 						self.config.target.objective += "\n\n" + backlog_objective
@@ -200,8 +201,8 @@ class ContinuousController:
 						logger.error("Failed to update mission objective: %s", exc)
 
 			# Pass loaded backlog items to planner for richer planning context
-			if self._planner and self._backlog_item_ids:
-				items = [self.db.get_backlog_item(bid) for bid in self._backlog_item_ids]
+			if self._planner and self._backlog_manager.backlog_item_ids:
+				items = [self.db.get_backlog_item(bid) for bid in self._backlog_manager.backlog_item_ids]
 				self._planner.set_backlog_items([i for i in items if i is not None])
 
 			# Initialize JSONL event stream
@@ -319,10 +320,10 @@ class ContinuousController:
 						)
 
 			# Update backlog items based on mission outcome
-			if self._backlog_item_ids:
+			if self._backlog_manager.backlog_item_ids:
 				try:
 					handoffs = self.db.get_recent_handoffs(mission.id, limit=50)
-					self._update_backlog_on_completion(result.objective_met, handoffs)
+					self._backlog_manager.update_backlog_on_completion(result.objective_met, handoffs)
 				except Exception as exc:
 					logger.error(
 						"Failed to update backlog on completion: %s", exc, exc_info=True,
@@ -353,8 +354,8 @@ class ContinuousController:
 			result.total_units_merged = self._total_merged
 			result.total_units_failed = self._total_failed
 
-			if self._backlog_item_ids:
-				result.backlog_item_ids = list(self._backlog_item_ids)
+			if self._backlog_manager.backlog_item_ids:
+				result.backlog_item_ids = list(self._backlog_manager.backlog_item_ids)
 
 			try:
 				from mission_control.mission_report import generate_mission_report
@@ -432,181 +433,6 @@ class ContinuousController:
 				await self._run_post_mission_discovery(mission.id)
 
 		return result
-
-	def _load_backlog_objective(self, limit: int = 5) -> str | None:
-		"""Load top pending backlog items and compose an objective string.
-
-		Marks selected items as in_progress and stores their IDs for
-		post-mission completion tracking.
-
-		Returns the composed objective string, or None if no backlog items found.
-		"""
-		items = self.db.get_pending_backlog(limit=limit)
-		if not items:
-			return None
-
-		self._backlog_item_ids = [item.id for item in items]
-
-		# Mark selected items as in_progress
-		for item in items:
-			item.status = "in_progress"
-			item.updated_at = _now_iso()
-			self.db.update_backlog_item(item)
-
-		# Compose objective from backlog items
-		lines = ["Priority backlog items to address:"]
-		for i, item in enumerate(items, 1):
-			lines.append(
-				f"{i}. [{item.track}] {item.title} "
-				f"(backlog_item_id={item.id}, priority={item.priority_score:.1f}): "
-				f"{item.description}"
-			)
-
-		logger.info(
-			"Loaded %d backlog items as mission objective (IDs: %s)",
-			len(items),
-			", ".join(item.id[:8] for item in items),
-		)
-		return "\n".join(lines)
-
-	def _update_backlog_on_completion(
-		self, objective_met: bool, handoffs: list[Handoff],
-	) -> None:
-		"""Update backlog items after mission ends.
-
-		If objective_met: mark all targeted items as completed.
-		If not: reset to pending, store failure context, increment attempt_count.
-		"""
-		if not self._backlog_item_ids:
-			return
-
-		# Build failure context from handoffs
-		failure_reasons: list[str] = []
-		for h in handoffs:
-			if h.status != "completed":
-				try:
-					concerns = json.loads(h.concerns) if h.concerns else []
-				except (json.JSONDecodeError, TypeError):
-					concerns = []
-				if concerns:
-					failure_reasons.append(concerns[-1][:200])
-				elif h.summary:
-					failure_reasons.append(h.summary[:200])
-
-		for item_id in self._backlog_item_ids:
-			item = self.db.get_backlog_item(item_id)
-			if item is None:
-				continue
-
-			if objective_met:
-				item.status = "completed"
-				item.updated_at = _now_iso()
-				self.db.update_backlog_item(item)
-			else:
-				item.status = "pending"
-				item.attempt_count += 1
-				if failure_reasons:
-					item.last_failure_reason = "; ".join(failure_reasons[:3])
-				item.updated_at = _now_iso()
-				self.db.update_backlog_item(item)
-
-		logger.info(
-			"Updated %d backlog items: %s",
-			len(self._backlog_item_ids),
-			"completed" if objective_met else "reset to pending",
-		)
-
-	def _update_backlog_from_completion(
-		self,
-		unit: WorkUnit,
-		merged: bool,
-		handoff: Handoff | None,
-		mission_id: str,
-	) -> None:
-		"""Update backlog items based on individual unit completion.
-
-		Searches backlog by title matching against the unit title, then:
-		- On successful merge: marks matching item 'completed', sets source_mission_id
-		- On failure after max retries: increments attempt_count, sets last_failure_reason
-		- On partial completion (retryable): keeps 'in_progress', appends context
-		"""
-		# Extract keywords from unit title for matching
-		title_words = [w for w in unit.title.lower().split() if len(w) > 2]
-		if not title_words:
-			return
-
-		matching_items = self.db.search_backlog_items(title_words, limit=5)
-		if not matching_items:
-			return
-
-		# Score matches: count how many title words appear in the backlog item title
-		best_item: BacklogItem | None = None
-		best_score = 0
-		for item in matching_items:
-			item_title_lower = item.title.lower()
-			score = sum(1 for w in title_words if w in item_title_lower)
-			if score > best_score:
-				best_score = score
-				best_item = item
-
-		if best_item is None or best_score == 0:
-			return
-
-		# Extract failure context from handoff
-		failure_reason = ""
-		context_additions: list[str] = []
-		if handoff:
-			try:
-				concerns = json.loads(handoff.concerns) if handoff.concerns else []
-			except (json.JSONDecodeError, TypeError):
-				concerns = []
-			if concerns:
-				failure_reason = "; ".join(str(c)[:200] for c in concerns[:3])
-
-			try:
-				discoveries = json.loads(handoff.discoveries) if handoff.discoveries else []
-			except (json.JSONDecodeError, TypeError):
-				discoveries = []
-			if discoveries:
-				context_additions.extend(str(d)[:200] for d in discoveries[:3])
-			if concerns:
-				context_additions.extend(str(c)[:200] for c in concerns[:3])
-
-		if not failure_reason and unit.output_summary:
-			failure_reason = unit.output_summary[:300]
-
-		if merged:
-			# Successful merge: mark completed
-			best_item.status = "completed"
-			best_item.source_mission_id = mission_id
-			best_item.updated_at = _now_iso()
-			self.db.update_backlog_item(best_item)
-			logger.info(
-				"Backlog item '%s' marked completed (matched unit '%s')",
-				best_item.title[:40], unit.title[:40],
-			)
-		elif unit.attempt >= unit.max_attempts:
-			# Failed after max retries
-			best_item.attempt_count += 1
-			best_item.last_failure_reason = failure_reason or "Max retries exceeded"
-			best_item.updated_at = _now_iso()
-			self.db.update_backlog_item(best_item)
-			logger.info(
-				"Backlog item '%s' failure recorded (attempt %d, unit '%s')",
-				best_item.title[:40], best_item.attempt_count, unit.title[:40],
-			)
-		else:
-			# Partial completion: keep in_progress, append context
-			best_item.status = "in_progress"
-			if context_additions:
-				separator = "\n\n--- Context from unit " + unit.id[:8] + " ---\n"
-				best_item.description += separator + "\n".join(context_additions)
-			best_item.updated_at = _now_iso()
-			self.db.update_backlog_item(best_item)
-			logger.info(
-				"Backlog item '%s' updated with partial context (unit '%s')",
-				best_item.title[:40], unit.title[:40],
-			)
 
 	def _score_ambition(self, units: list[WorkUnit]) -> int:
 		"""Score planned work 1-10 based on heuristics.
@@ -863,7 +689,7 @@ class ContinuousController:
 				break
 
 			# Build feedback context for the planner
-			feedback_context = self._build_planner_context(mission.id)
+			feedback_context = build_planner_context(self.db, mission.id)
 
 			# Get next batch of units from the planner
 			try:
@@ -1057,7 +883,7 @@ class ContinuousController:
 				)
 
 				try:
-					self._update_mission_state(mission)
+					update_mission_state(self.db, mission, self.config, self._state_changelog)
 				except Exception as exc:
 					logger.warning("Failed to update MISSION_STATE.md: %s", exc)
 
@@ -1145,7 +971,7 @@ class ContinuousController:
 				)
 
 				try:
-					self._update_mission_state(mission)
+					update_mission_state(self.db, mission, self.config, self._state_changelog)
 				except Exception as exc:
 					logger.warning("Failed to update MISSION_STATE.md: %s", exc)
 
@@ -1326,7 +1152,7 @@ class ContinuousController:
 
 			# Update backlog items based on this unit's outcome
 			try:
-				self._update_backlog_from_completion(
+				self._backlog_manager.update_backlog_from_completion(
 					unit, merged, handoff, mission.id,
 				)
 			except Exception as exc:
@@ -1354,7 +1180,7 @@ class ContinuousController:
 
 			# Update MISSION_STATE.md in target repo
 			try:
-				self._update_mission_state(mission)
+				update_mission_state(self.db, mission, self.config, self._state_changelog)
 			except Exception as exc:
 				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
 
@@ -1801,229 +1627,6 @@ class ContinuousController:
 				await self._backend.release_workspace(workspace)
 			semaphore.release()
 
-	def _build_planner_context(self, mission_id: str) -> str:
-		"""Build planner context from recent handoff summaries."""
-		try:
-			handoffs = self.db.get_recent_handoffs(mission_id, limit=15)
-		except Exception as exc:
-			logger.error("Failed to get recent handoffs: %s", exc)
-			return ""
-
-		if not handoffs:
-			return ""
-
-		lines = ["## Recent Handoff Summaries"]
-		merged_count = 0
-		failed_count = 0
-
-		for h in reversed(handoffs):  # oldest first
-			status_label = h.status or "unknown"
-			lines.append(f"\n### Unit {h.work_unit_id[:8]} ({status_label})")
-			if h.summary:
-				lines.append(f"Summary: {h.summary}")
-
-			try:
-				discoveries = json.loads(h.discoveries) if h.discoveries else []
-			except (json.JSONDecodeError, TypeError):
-				discoveries = []
-			if discoveries:
-				lines.append("Discoveries:")
-				for d in discoveries[:5]:
-					lines.append(f"  - {d}")
-
-			try:
-				concerns = json.loads(h.concerns) if h.concerns else []
-			except (json.JSONDecodeError, TypeError):
-				concerns = []
-			if concerns:
-				lines.append("Concerns:")
-				for c in concerns[:5]:
-					lines.append(f"  - {c}")
-
-			if status_label == "completed":
-				merged_count += 1
-			else:
-				failed_count += 1
-
-		lines.append(
-			f"\nMerge stats: {merged_count} merged, {failed_count} failed "
-			f"(of last {len(handoffs)} units)",
-		)
-
-		# Append quality review aggregates
-		try:
-			reviews = self.db.get_unit_reviews_for_mission(mission_id)
-			if reviews:
-				# Get reviews from the most recent epoch
-				recent = reviews[-10:]
-				avg_align = sum(r.alignment_score for r in recent) / len(recent)
-				avg_approach = sum(r.approach_score for r in recent) / len(recent)
-				avg_tests = sum(r.test_score for r in recent) / len(recent)
-				lines.append(
-					f"\n## Quality Review Scores (last {len(recent)} units)"
-				)
-				lines.append(
-					f"Average: alignment={avg_align:.1f}, "
-					f"approach={avg_approach:.1f}, tests={avg_tests:.1f}"
-				)
-				# Identify weakest area
-				scores = {
-					"objective alignment": avg_align,
-					"approach quality": avg_approach,
-					"test meaningfulness": avg_tests,
-				}
-				weakest = min(scores, key=scores.get)  # type: ignore[arg-type]
-				if scores[weakest] < 7.0:
-					lines.append(
-						f"Weak area: {weakest} -- prioritize improvement here"
-					)
-		except Exception:
-			pass
-
-		# Compute decomposition grade for the most recent completed epoch
-		try:
-			epochs = self.db.get_epochs_for_mission(mission_id)
-			if epochs:
-				latest_epoch = epochs[-1]
-				all_units = self.db.get_work_units_for_mission(mission_id)
-				epoch_units = [u for u in all_units if u.epoch_id == latest_epoch.id]
-				resolved = all(
-					u.status in ("completed", "failed") for u in epoch_units
-				)
-				if epoch_units and resolved:
-					epoch_reviews = self.db.get_unit_reviews_for_mission(mission_id)
-					epoch_reviews = [
-						r for r in epoch_reviews if r.epoch_id == latest_epoch.id
-					]
-					grade = compute_decomposition_grade(
-						epoch_units, epoch_reviews,
-						epoch_id=latest_epoch.id, mission_id=mission_id,
-					)
-					# Store grade if not already persisted
-					existing = self.db.get_decomposition_grades_for_mission(
-						mission_id,
-					)
-					if not any(g.epoch_id == latest_epoch.id for g in existing):
-						self.db.insert_decomposition_grade(grade)
-					lines.append("")
-					lines.append(format_decomposition_feedback(grade))
-		except Exception:
-			pass
-
-		return "\n".join(lines)
-
-	def _update_mission_state(self, mission: Mission) -> None:
-		"""Write MISSION_STATE.md in the target repo as a living checklist.
-
-		The planner reads this file to understand what's already been
-		completed, avoiding duplicate work and naturally narrowing scope.
-		"""
-		target_path = self.config.target.resolved_path
-		state_path = target_path / "MISSION_STATE.md"
-
-		try:
-			handoffs = self.db.get_recent_handoffs(mission.id, limit=50)
-		except Exception:
-			handoffs = []
-
-		lines = [
-			"# Mission State",
-			f"Objective: {mission.objective}",
-			"",
-		]
-
-		completed: list[str] = []
-		failed: list[str] = []
-		all_files: set[str] = set()
-
-		for h in reversed(handoffs):  # oldest first
-			try:
-				files = json.loads(h.files_changed) if h.files_changed else []
-			except (json.JSONDecodeError, TypeError):
-				files = []
-			file_str = ", ".join(files[:5]) if files else ""
-			for f in files:
-				all_files.add(f)
-
-			summary = h.summary[:100] if h.summary else ""
-
-			# Look up work unit for timestamp
-			try:
-				wu = self.db.get_work_unit(h.work_unit_id)
-				timestamp = wu.finished_at if wu and wu.finished_at else ""
-			except Exception:
-				timestamp = ""
-
-			if h.status == "completed":
-				ts_part = f" ({timestamp})" if timestamp else ""
-				completed.append(
-					f"- [x] {h.work_unit_id[:8]}{ts_part} -- {summary}"
-					+ (f" (files: {file_str})" if file_str else ""),
-				)
-			else:
-				try:
-					concerns = json.loads(h.concerns) if h.concerns else []
-				except (json.JSONDecodeError, TypeError):
-					concerns = []
-				detail = concerns[-1][:100] if concerns else "unknown"
-				ts_part = f" ({timestamp})" if timestamp else ""
-				failed.append(f"- [ ] {h.work_unit_id[:8]}{ts_part} -- {detail}")
-
-		if completed:
-			lines.append("## Completed")
-			lines.extend(completed)
-			lines.append("")
-
-		if failed:
-			lines.append("## Failed")
-			lines.extend(failed)
-			lines.append("")
-
-		if all_files:
-			lines.append("## Files Modified")
-			lines.append(", ".join(sorted(all_files)))
-			lines.append("")
-
-		# Quality Reviews section
-		try:
-			reviews = self.db.get_unit_reviews_for_mission(mission.id)
-			if reviews:
-				lines.append("## Quality Reviews")
-				for r in reviews[-20:]:  # show last 20
-					# Look up unit title
-					try:
-						wu = self.db.get_work_unit(r.work_unit_id)
-						title = wu.title[:40] if wu else r.work_unit_id[:8]
-					except Exception:
-						title = r.work_unit_id[:8]
-					rationale_short = r.rationale[:80] if r.rationale else ""
-					lines.append(
-						f"- {r.work_unit_id[:8]} ({title}): "
-						f"alignment={r.alignment_score} approach={r.approach_score} "
-						f"tests={r.test_score} avg={r.avg_score}"
-					)
-					if rationale_short:
-						lines.append(f"  \"{rationale_short}\"")
-				lines.append("")
-		except Exception:
-			pass
-
-		lines.extend([
-			"## Remaining",
-			"The planner should focus on what hasn't been done yet.",
-			"Do NOT re-target files in the 'Files Modified' list unless fixing a failure.",
-		])
-
-		if self._state_changelog:
-			lines.append("")
-			lines.append("## Changelog")
-			lines.extend(self._state_changelog)
-
-		try:
-			state_path.write_text("\n".join(lines) + "\n")
-		except OSError as exc:
-			logger.warning("Could not write MISSION_STATE.md: %s", exc)
-
 	def _should_stop(self, mission: Mission) -> str:
 		"""Check stopping conditions. Returns reason string or empty."""
 		if not self.running:
@@ -2178,6 +1781,46 @@ class ContinuousController:
 		# Run verification
 		ok, output = await self._green_branch._run_command(verify_cmd)
 		return ok, output
+
+	# Backward-compatible wrappers delegating to extracted modules
+	@property
+	def _backlog_item_ids(self) -> list[str]:
+		try:
+			return self._backlog_manager.backlog_item_ids
+		except AttributeError:
+			return []
+
+	@_backlog_item_ids.setter
+	def _backlog_item_ids(self, value: list[str]) -> None:
+		try:
+			self._backlog_manager.backlog_item_ids = value
+		except AttributeError:
+			# BacklogManager not yet initialized (e.g. test setup bypassing __init__)
+			self._backlog_manager = BacklogManager(self.db, self.config)
+			self._backlog_manager.backlog_item_ids = value
+
+	def _load_backlog_objective(self, limit: int = 5) -> str | None:
+		return self._backlog_manager.load_backlog_objective(limit=limit)
+
+	def _update_backlog_on_completion(
+		self, objective_met: bool, handoffs: list[Handoff],
+	) -> None:
+		self._backlog_manager.update_backlog_on_completion(objective_met, handoffs)
+
+	def _update_backlog_from_completion(
+		self,
+		unit: WorkUnit,
+		merged: bool,
+		handoff: Handoff | None,
+		mission_id: str,
+	) -> None:
+		self._backlog_manager.update_backlog_from_completion(unit, merged, handoff, mission_id)
+
+	def _build_planner_context(self, mission_id: str) -> str:
+		return build_planner_context(self.db, mission_id)
+
+	def _update_mission_state(self, mission: Mission) -> None:
+		update_mission_state(self.db, mission, self.config, self._state_changelog)
 
 	def stop(self) -> None:
 		self.running = False
