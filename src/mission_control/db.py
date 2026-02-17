@@ -12,6 +12,7 @@ from typing import Any, Generator, Sequence
 
 from mission_control.models import (
 	BacklogItem,
+	ContextItem,
 	Decision,
 	DecompositionGrade,
 	DiscoveryItem,
@@ -472,6 +473,20 @@ CREATE TABLE IF NOT EXISTS decomposition_grades (
 );
 
 CREATE INDEX IF NOT EXISTS idx_decomposition_grades_mission ON decomposition_grades(mission_id);
+
+CREATE TABLE IF NOT EXISTS context_items (
+	id TEXT PRIMARY KEY,
+	item_type TEXT NOT NULL DEFAULT '',
+	scope TEXT NOT NULL DEFAULT '',
+	content TEXT NOT NULL DEFAULT '',
+	source_unit_id TEXT NOT NULL DEFAULT '',
+	round_id TEXT NOT NULL DEFAULT '',
+	confidence REAL NOT NULL DEFAULT 1.0,
+	created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_items_round ON context_items(round_id);
+CREATE INDEX IF NOT EXISTS idx_context_items_type ON context_items(item_type);
 """
 
 
@@ -2481,4 +2496,72 @@ class Database:
 			completion_rate=row["completion_rate"],
 			composite_score=row["composite_score"],
 			unit_count=row["unit_count"],
+		)
+
+	# -- Context Items --
+
+	def insert_context_item(self, item: ContextItem) -> None:
+		self.conn.execute(
+			"""INSERT INTO context_items
+			(id, item_type, scope, content, source_unit_id, round_id, confidence, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				item.id, item.item_type, item.scope, item.content,
+				item.source_unit_id, item.round_id, item.confidence,
+				item.created_at,
+			),
+		)
+		self.conn.commit()
+
+	def get_context_item(self, item_id: str) -> ContextItem | None:
+		row = self.conn.execute("SELECT * FROM context_items WHERE id=?", (item_id,)).fetchone()
+		if row is None:
+			return None
+		return self._row_to_context_item(row)
+
+	def get_context_items_for_round(self, round_id: str) -> list[ContextItem]:
+		rows = self.conn.execute(
+			"SELECT * FROM context_items WHERE round_id=? ORDER BY created_at",
+			(round_id,),
+		).fetchall()
+		return [self._row_to_context_item(r) for r in rows]
+
+	def get_context_items_by_scope_overlap(
+		self, scope_tokens: list[str], min_confidence: float = 0.5, limit: int = 20
+	) -> list[ContextItem]:
+		"""Find context items whose scope overlaps with any of the given tokens.
+
+		Tokens are matched via LIKE against the comma-separated scope field.
+		"""
+		if not scope_tokens:
+			return []
+		conditions = []
+		params: list[str | float] = []
+		for token in scope_tokens:
+			conditions.append("scope LIKE ?")
+			params.append(f"%{token}%")
+		where = " OR ".join(conditions)
+		params.append(min_confidence)
+		rows = self.conn.execute(
+			f"SELECT * FROM context_items WHERE ({where}) AND confidence >= ? "  # noqa: S608
+			f"ORDER BY confidence DESC, created_at DESC LIMIT ?",
+			(*params, limit),
+		).fetchall()
+		return [self._row_to_context_item(r) for r in rows]
+
+	def delete_context_item(self, item_id: str) -> None:
+		self.conn.execute("DELETE FROM context_items WHERE id=?", (item_id,))
+		self.conn.commit()
+
+	@staticmethod
+	def _row_to_context_item(row: sqlite3.Row) -> ContextItem:
+		return ContextItem(
+			id=row["id"],
+			item_type=row["item_type"],
+			scope=row["scope"],
+			content=row["content"],
+			source_unit_id=row["source_unit_id"],
+			round_id=row["round_id"],
+			confidence=row["confidence"],
+			created_at=row["created_at"],
 		)
