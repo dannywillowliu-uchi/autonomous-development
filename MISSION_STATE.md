@@ -11,6 +11,22 @@ Objective: Implement P2 (Architect/Editor Model Split) and P3 (Structured Schedu
 
 Each unit: implement the feature, add tests, ensure all existing tests pass. Read BACKLOG.md for the full P2 and P3 specs.
 
+Priority backlog items to address:
+1. [security] Fix mission.mission_id AttributeError hidden by broad except at line 397 (backlog_item_id=a7fa92ca8e48, priority=9.0): In continuous_controller.py:397, `mission.mission_id` is used but the Mission dataclass (models.py:214) only has `id`. This raises AttributeError every time the strategic context append runs in the finally block after mission completion. The error is caught by the broad except at line 403, so strategic context is NEVER successfully written. Fix: change `mission.mission_id` to `mission.id`. Additionally, add a unit test that calls append_strategic_context after a mission completes to prevent regression.
+2. [security] Fix mission.mission_id AttributeError hidden by broad except at line 397 (backlog_item_id=027ceccd65a1, priority=9.0): In continuous_controller.py:397, `mission.mission_id` is used but the Mission dataclass (models.py:214) only has `id`. This raises AttributeError every time the strategic context append runs in the finally block after mission completion. The error is caught by the broad except at line 403, so strategic context is NEVER successfully written. Fix: change `mission.mission_id` to `mission.id`. Additionally, add a unit test that calls append_strategic_context after a mission completes to prevent regression.
+3. [security] Add exception logging to fire-and-forget asyncio tasks via done_callback (backlog_item_id=9f5600ae14e6, priority=7.2): In continuous_controller.py, fire-and-forget tasks created at lines 1024 (_review_merged_unit), 1298 (_retry_unit), and 1318 (_retry_unit re-dispatch) use only `task.add_done_callback(self._active_tasks.discard)` which silently swallows any unhandled exception from the coroutine. If _retry_unit raises (e.g., RuntimeError from missing semaphore at line 1316), the exception is lost -- asyncio prints 'Task exception was never retrieved' to stderr but doesn't log it. Add a shared done_callback that checks `task.exception()` and logs it, similar to the pattern already used for dispatch tasks at line 258 but missing for these secondary tasks.
+4. [security] Add exception logging to fire-and-forget asyncio tasks via done_callback (backlog_item_id=e3f30bb498bf, priority=7.2): In continuous_controller.py, fire-and-forget tasks created at lines 1024 (_review_merged_unit), 1298 (_retry_unit), and 1318 (_retry_unit re-dispatch) use only `task.add_done_callback(self._active_tasks.discard)` which silently swallows any unhandled exception from the coroutine. If _retry_unit raises (e.g., RuntimeError from missing semaphore at line 1316), the exception is lost -- asyncio prints 'Task exception was never retrieved' to stderr but doesn't log it. Add a shared done_callback that checks `task.exception()` and logs it, similar to the pattern already used for dispatch tasks at line 258 but missing for these secondary tasks.
+5. [quality] Extract unit event logging into a helper to eliminate 8 duplicate try/except blocks (backlog_item_id=bc2da83c3d5d, priority=6.3): In continuous_controller.py, there are 8 identical blocks that follow this pattern: `try: self.db.insert_unit_event(UnitEvent(...)) except Exception: pass`. These appear at lines 782-789, 1001-1011, 1038-1050, 1082-1091, 1112-1124, 1273-1282, 1342-1345, and the event_stream emit that follows each. Extract into a `_log_unit_event(self, mission_id, epoch_id, unit_id, event_type, *, details=None, input_tokens=0, output_tokens=0, cost_usd=0.0)` method that handles both the DB insert and event stream emit in one call with proper exception logging (`logger.debug` with exc binding). This removes ~80 lines of duplicated boilerplate.
+
+## Completed
+- [x] 7e07ed6b (2026-02-17T08:04:18.915936+00:00) -- Implemented architect/editor two-pass mode in worker.py. When config.models.architect_editor_mode is (files: src/mission_control/worker.py, tests/test_worker.py)
+
+## Files Modified
+src/mission_control/worker.py, tests/test_worker.py
+
 ## Remaining
 The planner should focus on what hasn't been done yet.
 Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
+
+## Changelog
+- 2026-02-17T08:04:18.915936+00:00 | 7e07ed6b merged (commit: 8d45d3c) -- Implemented architect/editor two-pass mode in worker.py. When config.models.arch
