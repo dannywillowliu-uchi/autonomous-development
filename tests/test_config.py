@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from mission_control.config import MissionConfig, load_config, validate_config
+from mission_control.config import MissionConfig, ModelsConfig, load_config, validate_config
 
 
 @pytest.fixture()
@@ -237,3 +237,60 @@ def test_validate_verification_command_not_found(tmp_path: Path) -> None:
 	issues = validate_config(cfg)
 	errors = [msg for lvl, msg in issues if lvl == "error"]
 	assert any("verification command not found" in e for e in errors)
+
+
+def test_models_defaults(minimal_config: Path) -> None:
+	"""Without [models] section, all fields use defaults."""
+	cfg = load_config(minimal_config)
+	assert cfg.models.planner_model == "opus"
+	assert cfg.models.worker_model == "opus"
+	assert cfg.models.fixup_model == "opus"
+	assert cfg.models.architect_editor_mode is False
+
+
+def test_models_parsed(tmp_path: Path) -> None:
+	"""[models] section values are parsed correctly."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[models]
+planner_model = "sonnet"
+worker_model = "haiku"
+fixup_model = "sonnet"
+architect_editor_mode = true
+""")
+	cfg = load_config(toml)
+	assert cfg.models.planner_model == "sonnet"
+	assert cfg.models.worker_model == "haiku"
+	assert cfg.models.fixup_model == "sonnet"
+	assert cfg.models.architect_editor_mode is True
+
+
+def test_models_partial(tmp_path: Path) -> None:
+	"""Partial [models] section fills only specified fields, rest default."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[models]
+worker_model = "haiku"
+""")
+	cfg = load_config(toml)
+	assert cfg.models.planner_model == "opus"
+	assert cfg.models.worker_model == "haiku"
+	assert cfg.models.fixup_model == "opus"
+	assert cfg.models.architect_editor_mode is False
+
+
+def test_models_dataclass_defaults() -> None:
+	"""ModelsConfig dataclass defaults are correct."""
+	mc = ModelsConfig()
+	assert mc.planner_model == "opus"
+	assert mc.worker_model == "opus"
+	assert mc.fixup_model == "opus"
+	assert mc.architect_editor_mode is False
