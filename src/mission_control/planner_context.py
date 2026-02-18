@@ -63,7 +63,7 @@ def build_planner_context(db: Database, mission_id: str) -> str:
 		f"(of last {len(handoffs)} units)",
 	)
 
-	# Add explicit completed-unit list so the planner doesn't re-plan finished work
+	# Add explicit completed + in-flight unit lists so the planner doesn't re-plan them
 	try:
 		all_units = db.get_work_units_for_mission(mission_id)
 		completed_units = [u for u in all_units if u.status == "completed"]
@@ -72,8 +72,17 @@ def build_planner_context(db: Database, mission_id: str) -> str:
 			for u in completed_units:
 				files_part = f" (files: {u.files_hint})" if u.files_hint else ""
 				lines.append(f"- {u.id[:8]}: \"{u.title}\"{files_part}")
+
+		running_units = [u for u in all_units if u.status == "running"]
+		if running_units:
+			lines.append("\n## In-Flight Units (currently being worked on -- DO NOT duplicate)")
+			for u in running_units:
+				files_part = f" (files: {u.files_hint})" if u.files_hint else ""
+				lines.append(f"- {u.id[:8]}: \"{u.title}\"{files_part}")
+
+		if completed_units or running_units:
 			lines.append(
-				"\nIMPORTANT: Do NOT create units that duplicate completed work above."
+				"\nIMPORTANT: Do NOT create units that duplicate completed or in-flight work above."
 			)
 	except Exception:
 		pass
@@ -212,6 +221,19 @@ def update_mission_state(
 		lines.append("## Failed")
 		lines.extend(failed)
 		lines.append("")
+
+	# In-flight units section so the planner doesn't duplicate running work
+	try:
+		all_units = db.get_work_units_for_mission(mission.id)
+		running_units = [u for u in all_units if u.status == "running"]
+		if running_units:
+			lines.append("## In-Flight (DO NOT duplicate)")
+			for u in running_units:
+				files_part = f" (files: {u.files_hint})" if u.files_hint else ""
+				lines.append(f"- [ ] {u.id[:8]} -- {u.title}{files_part}")
+			lines.append("")
+	except Exception:
+		pass
 
 	if all_files:
 		lines.append("## Files Modified")
