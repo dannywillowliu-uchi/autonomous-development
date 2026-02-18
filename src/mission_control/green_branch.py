@@ -598,15 +598,22 @@ class GreenBranchManager:
 		return (proc.returncode == 0, output)
 
 	async def _run_command(self, cmd: str | list[str]) -> tuple[bool, str]:
-		"""Run a command in self.workspace using subprocess exec."""
+		"""Run a command in self.workspace using shell for string commands."""
 		timeout = self.config.target.verification.timeout
-		args = shlex.split(cmd) if isinstance(cmd, str) else cmd
-		proc = await asyncio.create_subprocess_exec(
-			*args,
-			cwd=self.workspace,
-			stdout=asyncio.subprocess.PIPE,
-			stderr=asyncio.subprocess.STDOUT,
-		)
+		if isinstance(cmd, str):
+			proc = await asyncio.create_subprocess_shell(
+				cmd,
+				cwd=self.workspace,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.STDOUT,
+			)
+		else:
+			proc = await asyncio.create_subprocess_exec(
+				*cmd,
+				cwd=self.workspace,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.STDOUT,
+			)
 		try:
 			stdout, _ = await asyncio.wait_for(
 				proc.communicate(), timeout=timeout,

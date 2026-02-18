@@ -340,6 +340,10 @@ IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must cont
 				timeout=timeout,
 			)
 			output = stdout.decode() if stdout else ""
+			stderr_text = stderr.decode() if stderr else ""
+			if stderr_text:
+				log.debug("Planner stderr (depth %d): %s", node.depth, stderr_text[:500])
+			log.info("Planner LLM output (depth %d, %d chars): %s", node.depth, len(output), output[:1000])
 		except asyncio.TimeoutError:
 			log.error("Planner LLM timed out after %ds at depth %d", timeout, node.depth)
 			try:
