@@ -296,6 +296,13 @@ def test_models_dataclass_defaults() -> None:
 	assert mc.architect_editor_mode is False
 
 
+def test_continuous_cleanup_defaults() -> None:
+	"""ContinuousConfig has correct defaults for cleanup fields."""
+	cc = ContinuousConfig()
+	assert cc.cleanup_enabled is True
+	assert cc.cleanup_interval == 3
+
+
 def test_continuous_failure_fields_defaults() -> None:
 	"""ContinuousConfig has correct defaults for failure fields."""
 	cc = ContinuousConfig()

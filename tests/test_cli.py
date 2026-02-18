@@ -182,6 +182,7 @@ class TestMissionChainLoop:
 		config = MagicMock()
 		config.target.objective = "first objective"
 		config.scheduler.parallel.num_workers = 2
+		config.continuous.cleanup_enabled = False
 		mock_load_config.return_value = config
 
 		results = [
@@ -208,6 +209,7 @@ class TestMissionChainLoop:
 		config = MagicMock()
 		config.target.objective = "start"
 		config.scheduler.parallel.num_workers = 2
+		config.continuous.cleanup_enabled = False
 		mock_load_config.return_value = config
 
 		results = [
@@ -254,6 +256,7 @@ class TestMissionChainLoop:
 		config = MagicMock()
 		config.target.objective = "original"
 		config.scheduler.parallel.num_workers = 2
+		config.continuous.cleanup_enabled = False
 		mock_load_config.return_value = config
 
 		objectives_seen: list[str] = []
@@ -295,6 +298,7 @@ class TestMissionChainLoop:
 		config = MagicMock()
 		config.target.objective = "start"
 		config.scheduler.parallel.num_workers = 2
+		config.continuous.cleanup_enabled = False
 		mock_load_config.return_value = config
 
 		results = [

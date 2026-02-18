@@ -14,6 +14,12 @@ You are a test-writing specialist. Your primary responsibility is creating compr
 - Each test should assert one logical concept
 - Avoid testing implementation details; test behavior and outcomes
 
+## Consolidation Rules
+- Before creating a new test file, check if `tests/test_<module>.py` already exists
+- Add tests to existing test classes when testing the same component
+- Import shared fixtures from `conftest.py` instead of duplicating them
+- Only create new test files for genuinely new modules with no existing test file
+
 ## Output Format
 - Place test files alongside existing tests following project conventions
 - Name test functions with `test_` prefix and descriptive suffixes

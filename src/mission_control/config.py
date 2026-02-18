@@ -132,6 +132,8 @@ class ContinuousConfig:
 	max_replan_attempts: int = 2  # max replans before proceeding anyway
 	verify_objective_completion: bool = False  # LLM check before declaring mission done
 	max_objective_checks: int = 2  # max verification attempts before accepting
+	cleanup_enabled: bool = True  # run periodic cleanup missions
+	cleanup_interval: int = 3  # run cleanup mission every N missions
 
 
 @dataclass
@@ -429,6 +431,10 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 			setattr(cc, key, int(data[key]))
 	if "verify_objective_completion" in data:
 		cc.verify_objective_completion = bool(data["verify_objective_completion"])
+	if "cleanup_enabled" in data:
+		cc.cleanup_enabled = bool(data["cleanup_enabled"])
+	if "cleanup_interval" in data:
+		cc.cleanup_interval = int(data["cleanup_interval"])
 	return cc
 
 

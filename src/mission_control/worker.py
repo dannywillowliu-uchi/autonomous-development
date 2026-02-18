@@ -21,7 +21,7 @@ def _sanitize_braces(s: str) -> str:
 	return s.replace("{", "{{").replace("}", "}}")
 
 
-VALID_SPECIALISTS = {"test-writer", "refactorer", "debugger"}
+VALID_SPECIALISTS = {"test-writer", "refactorer", "debugger", "simplifier"}
 
 
 def load_specialist_template(specialist: str, config: MissionConfig) -> str:
@@ -221,6 +221,7 @@ You are working on {target_name} at {workspace_path}.
 - No TODOs, no partial implementations
 - No modifications to unrelated files
 - No refactoring beyond the task scope
+- Add tests to existing test files (tests/test_<module>.py), not new files.
 - Commit when done or explain why blocked
 
 ## Verification
@@ -288,6 +289,7 @@ The following analysis describes exactly what changes to make:
 - No TODOs, no partial implementations
 - No modifications to unrelated files
 - No refactoring beyond the task scope
+- Add tests to existing test files (tests/test_<module>.py), not new files.
 - Commit when done or explain why blocked
 
 ## Verification

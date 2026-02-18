@@ -113,6 +113,20 @@ class TestRenderMissionWorkerPrompt:
 		assert "src/auth.py" in prompt
 
 
+class TestConsolidationConstraint:
+	def test_mission_prompt_contains_consolidation_rule(self, config: MissionConfig) -> None:
+		"""Mission worker prompt includes test file consolidation constraint."""
+		unit = WorkUnit(title="Add feature", description="Add something")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "not new files" in prompt
+
+	def test_editor_prompt_contains_consolidation_rule(self, config: MissionConfig) -> None:
+		"""Editor prompt includes test file consolidation constraint."""
+		unit = WorkUnit(title="Add feature", description="Add something")
+		prompt = render_editor_prompt(unit, config, "/tmp/ws", architect_output="Change X")
+		assert "not new files" in prompt
+
+
 class TestResearchPromptSelection:
 	def test_research_unit_uses_research_template(self, config: MissionConfig) -> None:
 		"""Research units should use the research prompt template."""
