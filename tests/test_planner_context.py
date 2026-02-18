@@ -109,7 +109,7 @@ class TestBuildPlannerContext:
 		assert "Add auth module" in result
 		assert "auth.py, models.py" in result
 		assert "Add caching" not in result
-		assert "Do NOT create units that duplicate completed work above" in result
+		assert "Do NOT create units that duplicate completed or in-flight work above" in result
 
 	def test_completed_work_section_empty_when_no_completed(
 		self, config: MissionConfig, db: Database,
