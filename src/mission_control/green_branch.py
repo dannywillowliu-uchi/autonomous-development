@@ -156,6 +156,7 @@ class GreenBranchManager:
 			gb = self.config.green_branch
 			remote_name = f"worker-{branch_name}"
 			temp_branch = f"mc/merge-{branch_name}"
+			rebase_branch = f"mc/rebase-{branch_name}"
 
 			# Fetch the unit branch from worker workspace
 			await self._run_git("remote", "add", remote_name, worker_workspace)
@@ -165,6 +166,21 @@ class GreenBranchManager:
 				return UnitMergeResult(failure_output="Failed to fetch unit branch", failure_stage="fetch")
 
 			try:
+				# Rebase unit branch onto current mc/green
+				await self._run_git("branch", "-D", rebase_branch)  # clean stale
+				await self._run_git("checkout", "-b", rebase_branch, f"{remote_name}/{branch_name}")
+
+				rebase_ok, rebase_output = await self._run_git("rebase", gb.green_branch)
+				if not rebase_ok:
+					logger.warning("Rebase conflict for %s: %s", branch_name, rebase_output)
+					await self._run_git("rebase", "--abort")
+					return UnitMergeResult(
+						rebase_ok=False,
+						failure_output=f"Rebase conflict: {rebase_output[:500]}",
+						failure_stage="rebase_conflict",
+					)
+				logger.info("Rebased %s onto %s", branch_name, gb.green_branch)
+
 				# Create temp branch from mc/green
 				await self._run_git("checkout", gb.green_branch)
 				await self._run_git("branch", "-D", temp_branch)  # clean up stale
@@ -172,14 +188,13 @@ class GreenBranchManager:
 
 				# Merge unit branch into temp
 				ok, output = await self._run_git(
-					"merge", "--no-ff", f"{remote_name}/{branch_name}",
+					"merge", "--no-ff", rebase_branch,
 					"-m", f"Merge {branch_name} into {gb.green_branch}",
 				)
 				if not ok:
 					logger.warning("Merge conflict for %s: %s", branch_name, output)
 					await self._run_git("merge", "--abort")
 					return UnitMergeResult(
-						rebase_ok=False,
 						failure_output=f"Merge conflict: {output[:500]}",
 						failure_stage="merge_conflict",
 					)
@@ -243,9 +258,10 @@ class GreenBranchManager:
 					merge_commit_hash=merge_commit_hash,
 				)
 			finally:
-				# Clean up remote and temp branch
+				# Clean up remote, temp branch, and rebase branch
 				await self._run_git("checkout", gb.green_branch)
 				await self._run_git("branch", "-D", temp_branch)
+				await self._run_git("branch", "-D", rebase_branch)
 				await self._run_git("remote", "remove", remote_name)
 
 	async def run_fixup(self, failure_output: str) -> FixupResult:

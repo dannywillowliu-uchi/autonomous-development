@@ -63,11 +63,11 @@ class TestMergeUnit:
 		mgr._sync_to_source.assert_awaited_once()
 
 	async def test_merge_conflict(self) -> None:
-		"""Merge conflict returns rebase_ok=False with failure output."""
+		"""Rebase conflict returns rebase_ok=False with failure output."""
 		mgr = _manager()
 
 		async def side_effect(*args: str) -> tuple[bool, str]:
-			if args[0] == "merge" and args[1] == "--no-ff":
+			if args[0] == "rebase" and args[1] == "mc/green":
 				return (False, "CONFLICT (content): Merge conflict in file.py")
 			return (True, "")
 
@@ -77,7 +77,53 @@ class TestMergeUnit:
 
 		assert result.merged is False
 		assert result.rebase_ok is False
-		assert "Merge conflict" in result.failure_output
+		assert result.failure_stage == "rebase_conflict"
+		assert "Rebase conflict" in result.failure_output
+
+	async def test_rebase_conflict_returns_failure(self) -> None:
+		"""Rebase conflict returns rebase_ok=False with failure stage and calls abort."""
+		mgr = _manager()
+
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "rebase" and args[1] == "mc/green":
+				return (False, "CONFLICT (content): Merge conflict in file.py")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=side_effect)
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
+
+		assert result.merged is False
+		assert result.rebase_ok is False
+		assert result.failure_stage == "rebase_conflict"
+		# Verify rebase --abort was called
+		abort_calls = [
+			c for c in mgr._run_git.call_args_list
+			if c[0][0] == "rebase" and "--abort" in c[0]
+		]
+		assert len(abort_calls) >= 1
+
+	async def test_merge_uses_rebased_branch_not_remote(self) -> None:
+		"""Merge --no-ff targets the rebase branch, not the remote branch."""
+		mgr = _manager()
+		git_calls: list[tuple[str, ...]] = []
+
+		async def tracking_git(*args: str) -> tuple[bool, str]:
+			git_calls.append(args)
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=tracking_git)
+		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		await mgr.merge_unit("/tmp/worker", "feat/branch")
+
+		# Find the merge --no-ff call
+		merge_calls = [c for c in git_calls if c[0] == "merge" and len(c) > 1 and c[1] == "--no-ff"]
+		assert len(merge_calls) == 1
+		merge_target = merge_calls[0][2]
+		assert merge_target == "mc/rebase-feat/branch"
+		assert "worker-" not in merge_target
 
 	async def test_auto_push(self) -> None:
 		"""When auto_push is configured, push_green_to_main is called."""
@@ -168,6 +214,8 @@ class TestMergeUnitVerification:
 		# Verify cleanup happened (finally block runs): branch -D and remote remove
 		cleanup_cmds = [c for c in git_calls if c[0] == "branch" and c[1] == "-D" and "mc/merge-" in c[2]]
 		assert len(cleanup_cmds) >= 1
+		rebase_cleanup = [c for c in git_calls if c[0] == "branch" and c[1] == "-D" and "mc/rebase-" in c[2]]
+		assert len(rebase_cleanup) >= 1
 		remote_removes = [c for c in git_calls if c[0] == "remote" and c[1] == "remove"]
 		assert len(remote_removes) >= 1
 
@@ -404,20 +452,20 @@ class TestParallelMergeConflicts:
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 
-		# Track mc/green state: first --no-ff merge succeeds, subsequent ones conflict
+		# Track mc/green state: first rebase succeeds, subsequent ones conflict
 		# because the green branch has advanced.
-		merge_count = 0
+		rebase_count = 0
 
 		async def stateful_git(*args: str) -> tuple[bool, str]:
-			nonlocal merge_count
-			# The critical merge command: "merge --no-ff <remote>/<branch>"
-			if args[0] == "merge" and len(args) > 1 and args[1] == "--no-ff":
-				merge_count += 1
-				if merge_count == 1:
-					return (True, "Merge made by the 'ort' strategy.")
+			nonlocal rebase_count
+			# The rebase command: "rebase mc/green"
+			if args[0] == "rebase" and len(args) > 1 and not args[1].startswith("--"):
+				rebase_count += 1
+				if rebase_count == 1:
+					return (True, "")
 				return (False, "CONFLICT (content): Merge conflict in shared.py")
-			# merge --abort is fine
-			if args[0] == "merge" and "--abort" in args:
+			# rebase --abort is fine
+			if args[0] == "rebase" and "--abort" in args:
 				return (True, "")
 			# All other git commands succeed
 			return (True, "")
@@ -438,7 +486,7 @@ class TestParallelMergeConflicts:
 		assert len(failed) == 2
 		for r in failed:
 			assert r.rebase_ok is False
-			assert "Merge conflict" in r.failure_output
+			assert "Rebase conflict" in r.failure_output
 
 	async def test_concurrent_merge_lock_serialization(self) -> None:
 		"""_merge_lock serializes concurrent merge attempts (no true parallelism)."""
@@ -470,7 +518,7 @@ class TestParallelMergeConflicts:
 		assert len(execution_order) == 3
 		# Since asyncio.Lock serializes, no two merges ran simultaneously.
 		# Verify all branches were processed (order may vary due to asyncio scheduling)
-		assert set(execution_order) == {"unit-a", "unit-b", "unit-c"}
+		assert set(execution_order) == {"rebase-unit-a", "rebase-unit-b", "rebase-unit-c"}
 
 
 class TestRunDeploy:
@@ -706,6 +754,42 @@ class TestGreenBranchRealGit:
 		_run(["git", "checkout", "mc/green"], workspace)
 		assert (workspace / "feature_a.py").exists()
 
+	async def test_rebase_resolves_stale_branch(self, tmp_path: Path) -> None:
+		"""Two workers branch from same mc/green, edit different files -- both merge."""
+		source, workspace = _setup_source_repo(tmp_path)
+		config = _real_config(source)
+		db = Database(":memory:")
+		mgr = GreenBranchManager(config, db)
+		mgr.workspace = str(workspace)
+
+		# Worker 1: branch from mc/green, add feature_a.py
+		worker1 = _make_worker_clone(tmp_path, source, "worker-rebase-1")
+		_run(["git", "checkout", "-b", "unit/rebase-a"], worker1)
+		(worker1 / "feature_a.py").write_text("# Feature A\n")
+		_run(["git", "add", "feature_a.py"], worker1)
+		_run(["git", "commit", "-m", "Add feature A"], worker1)
+
+		# Worker 2: branch from mc/green (same base), add feature_b.py (different file)
+		worker2 = _make_worker_clone(tmp_path, source, "worker-rebase-2")
+		_run(["git", "checkout", "-b", "unit/rebase-b"], worker2)
+		(worker2 / "feature_b.py").write_text("# Feature B\n")
+		_run(["git", "add", "feature_b.py"], worker2)
+		_run(["git", "commit", "-m", "Add feature B"], worker2)
+
+		# Merge worker 1 -- succeeds, mc/green advances
+		result1 = await mgr.merge_unit(str(worker1), "unit/rebase-a")
+		assert result1.merged is True
+
+		# Merge worker 2 -- previously would fail, now rebase resolves divergence
+		result2 = await mgr.merge_unit(str(worker2), "unit/rebase-b")
+		assert result2.merged is True
+		assert result2.rebase_ok is True
+
+		# Verify mc/green has both files
+		_run(["git", "checkout", "mc/green"], workspace)
+		assert (workspace / "feature_a.py").exists()
+		assert (workspace / "feature_b.py").exists()
+
 	async def test_merge_conflict_detection_real(self, tmp_path: Path) -> None:
 		"""Two workers modifying the same line -- first merges, second gets conflict."""
 		source, workspace = _setup_source_repo(tmp_path)
@@ -732,10 +816,11 @@ class TestGreenBranchRealGit:
 		result1 = await mgr.merge_unit(str(worker1), "unit/change-1")
 		assert result1.merged is True
 
-		# Second merge should fail with conflict
+		# Second merge should fail with rebase conflict
 		result2 = await mgr.merge_unit(str(worker2), "unit/change-2")
 		assert result2.merged is False
 		assert result2.rebase_ok is False
+		assert result2.failure_stage == "rebase_conflict"
 		assert "conflict" in result2.failure_output.lower()
 
 		# Verify mc/green still has worker 1's content (not corrupted)
