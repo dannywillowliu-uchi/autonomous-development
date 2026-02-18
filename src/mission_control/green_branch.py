@@ -140,14 +140,16 @@ class GreenBranchManager:
 		worker_workspace: str,
 		branch_name: str,
 	) -> UnitMergeResult:
-		"""Merge a unit branch directly to mc/green without verification.
+		"""Merge a unit branch into mc/green with smoke-test verification.
 
 		Flow:
 		1. Fetch the unit branch from the worker workspace
 		2. Create a temp branch from mc/green, merge unit into it
 		3. If merge conflict -> fail
-		4. Fast-forward mc/green to the merge commit
-		5. If auto_push -> push mc/green to main
+		4. Run verification command on the merged result
+		5. If verification fails -> abort
+		6. Fast-forward mc/green to the merge commit
+		7. If auto_push -> push mc/green to main
 		"""
 		async with self._merge_lock:
 			gb = self.config.green_branch
@@ -179,6 +181,18 @@ class GreenBranchManager:
 						rebase_ok=False,
 						failure_output=f"Merge conflict: {output[:500]}",
 						failure_stage="merge_conflict",
+					)
+
+				# Run smoke-test verification before promoting to mc/green
+				verify_cmd = self.config.target.verification.command
+				verify_ok, verify_output = await self._run_command(verify_cmd)
+				if not verify_ok:
+					logger.warning("Verification failed for %s: %s", branch_name, verify_output[:200])
+					await self._run_git("checkout", gb.green_branch)
+					return UnitMergeResult(
+						verification_passed=False,
+						failure_output=verify_output,
+						failure_stage="verification",
 					)
 
 				# Fast-forward mc/green to the merge commit
