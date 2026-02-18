@@ -36,7 +36,7 @@ body {
 
 .layout {
 	display: grid;
-	grid-template-rows: auto auto 1fr auto auto;
+	grid-template-rows: auto auto 1fr auto auto auto;
 	height: 100vh;
 	width: 100vw;
 	overflow: hidden;
@@ -793,6 +793,312 @@ body {
 	margin-top: 2px;
 }
 
+/* Backlog Queue section */
+.backlog-section {
+	background: var(--surface);
+	border-top: 1px solid var(--border);
+}
+
+.backlog-toggle {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 20px;
+	cursor: pointer;
+	user-select: none;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	border: none;
+	background: none;
+	width: 100%;
+	text-align: left;
+}
+
+.backlog-toggle:hover {
+	color: var(--text);
+	background: rgba(255, 255, 255, 0.02);
+}
+
+.backlog-toggle .toggle-arrow {
+	display: inline-block;
+	transition: transform 0.2s ease;
+	font-size: 10px;
+}
+
+.backlog-section.collapsed .toggle-arrow {
+	transform: rotate(-90deg);
+}
+
+.backlog-section.collapsed .backlog-content {
+	display: none;
+}
+
+.backlog-count-badge {
+	background: var(--purple);
+	color: #fff;
+	font-size: 11px;
+	font-weight: 600;
+	padding: 1px 6px;
+	border-radius: 10px;
+	margin-left: 4px;
+}
+
+.backlog-content {
+	padding: 0 20px 12px 20px;
+	overflow-x: auto;
+	max-height: 300px;
+	overflow-y: auto;
+}
+
+.backlog-toolbar {
+	display: flex;
+	gap: 8px;
+	padding: 0 0 10px 0;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.backlog-toolbar input[type="text"] {
+	flex: 1;
+	min-width: 120px;
+	max-width: 220px;
+	padding: 4px 8px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	color: var(--text);
+	font-size: 12px;
+}
+
+.backlog-toolbar select {
+	padding: 4px 8px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	color: var(--text);
+	font-size: 12px;
+}
+
+.backlog-toolbar button {
+	padding: 4px 10px;
+	background: var(--purple);
+	color: #fff;
+	border: none;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.backlog-toolbar button:hover {
+	opacity: 0.85;
+}
+
+.backlog-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 12px;
+}
+
+.backlog-table th {
+	text-align: left;
+	padding: 6px 8px;
+	border-bottom: 1px solid var(--border);
+	color: var(--text-muted);
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.3px;
+	white-space: nowrap;
+}
+
+.backlog-table td {
+	padding: 6px 8px;
+	border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+	vertical-align: top;
+}
+
+.backlog-table tr:hover {
+	background: rgba(255, 255, 255, 0.02);
+}
+
+.backlog-table tr.active-item {
+	border-left: 3px solid var(--purple);
+}
+
+.backlog-table .bl-title {
+	font-weight: 500;
+	max-width: 300px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.backlog-status-badge {
+	display: inline-block;
+	padding: 1px 6px;
+	border-radius: 10px;
+	font-size: 11px;
+	font-weight: 500;
+}
+
+.backlog-status-badge.in_progress { background: rgba(88, 166, 255, 0.15); color: var(--blue); }
+.backlog-status-badge.pending { background: rgba(210, 153, 34, 0.15); color: var(--yellow); }
+.backlog-status-badge.completed { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+.backlog-status-badge.deferred { background: rgba(139, 148, 158, 0.15); color: var(--text-muted); }
+.backlog-status-badge.rejected { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+
+.backlog-track-badge {
+	display: inline-block;
+	padding: 1px 6px;
+	border-radius: 10px;
+	font-size: 11px;
+	background: rgba(188, 140, 255, 0.12);
+	color: var(--purple);
+}
+
+.backlog-actions button {
+	padding: 2px 6px;
+	font-size: 11px;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 3px;
+	color: var(--text-muted);
+	cursor: pointer;
+	margin-right: 2px;
+}
+
+.backlog-actions button:hover {
+	color: var(--text);
+	border-color: var(--text-muted);
+}
+
+.backlog-actions button.danger:hover {
+	color: var(--red);
+	border-color: var(--red);
+}
+
+.backlog-desc-row td {
+	padding: 4px 8px 8px 28px;
+	color: var(--text-muted);
+	font-size: 11px;
+	border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+}
+
+.backlog-highlight {
+	animation: backlog-flash 1.5s ease-out;
+}
+
+@keyframes backlog-flash {
+	0% { background: rgba(188, 140, 255, 0.3); }
+	100% { background: transparent; }
+}
+
+/* Backlog modal */
+.backlog-modal-overlay {
+	display: none;
+	position: fixed;
+	inset: 0;
+	background: rgba(0, 0, 0, 0.6);
+	z-index: 1000;
+	justify-content: center;
+	align-items: center;
+}
+
+.backlog-modal-overlay.active {
+	display: flex;
+}
+
+.backlog-modal {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 20px;
+	width: 480px;
+	max-width: 90vw;
+	max-height: 80vh;
+	overflow-y: auto;
+}
+
+.backlog-modal h3 {
+	margin-bottom: 12px;
+	font-size: 16px;
+}
+
+.backlog-modal label {
+	display: block;
+	margin-top: 10px;
+	font-size: 12px;
+	color: var(--text-muted);
+	font-weight: 500;
+}
+
+.backlog-modal input, .backlog-modal textarea, .backlog-modal select {
+	width: 100%;
+	margin-top: 4px;
+	padding: 6px 8px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	color: var(--text);
+	font-size: 13px;
+	font-family: inherit;
+}
+
+.backlog-modal textarea {
+	resize: vertical;
+	min-height: 60px;
+}
+
+.backlog-modal .modal-actions {
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+	margin-top: 16px;
+}
+
+.backlog-modal .modal-actions button {
+	padding: 6px 14px;
+	border-radius: 4px;
+	border: 1px solid var(--border);
+	cursor: pointer;
+	font-size: 13px;
+}
+
+.backlog-modal .modal-actions button.primary {
+	background: var(--purple);
+	color: #fff;
+	border-color: var(--purple);
+}
+
+.backlog-modal .modal-actions button.secondary {
+	background: var(--surface);
+	color: var(--text);
+}
+
+/* Backlog link badge in plan tree */
+.backlog-link-badge {
+	display: inline-block;
+	background: var(--purple);
+	color: #fff;
+	font-size: 9px;
+	font-weight: 700;
+	width: 14px;
+	height: 14px;
+	line-height: 14px;
+	text-align: center;
+	border-radius: 3px;
+	margin-left: 4px;
+	cursor: pointer;
+	flex-shrink: 0;
+}
+
+.backlog-link-badge:hover {
+	opacity: 0.8;
+}
+
 /* Mission History section */
 .history-section {
 	background: var(--surface);
@@ -994,6 +1300,32 @@ body {
 		</div>
 	</div>
 
+	<!-- Backlog Queue -->
+	<div class="backlog-section collapsed" id="backlog-section">
+		<button class="backlog-toggle" onclick="toggleBacklog()">
+			<span class="toggle-arrow">&#9662;</span>
+			Backlog Queue
+			<span class="backlog-count-badge" id="backlog-count">0</span>
+		</button>
+		<div class="backlog-content" id="backlog-content">
+			<div class="backlog-toolbar">
+				<input type="text" id="backlog-search" placeholder="Search..." oninput="filterBacklog()">
+				<select id="backlog-status-filter" onchange="filterBacklog()">
+					<option value="">All Status</option>
+					<option value="in_progress">In Progress</option>
+					<option value="pending">Pending</option>
+					<option value="completed">Completed</option>
+					<option value="deferred">Deferred</option>
+				</select>
+				<select id="backlog-track-filter" onchange="filterBacklog()">
+					<option value="">All Tracks</option>
+				</select>
+				<button onclick="openBacklogModal()">+ Add Item</button>
+			</div>
+			<div id="backlog-table-container"></div>
+		</div>
+	</div>
+
 	<!-- Mission History -->
 	<div class="history-section collapsed" id="history-section">
 		<button class="history-toggle" onclick="toggleHistory()">
@@ -1023,6 +1355,45 @@ body {
 		<div class="modal-actions">
 			<button onclick="closeModal()">Cancel</button>
 			<button class="primary" onclick="submitObjective()">Add</button>
+		</div>
+	</div>
+</div>
+
+<!-- Backlog Add/Edit Modal -->
+<div class="backlog-modal-overlay" id="backlog-modal-overlay" onclick="if(event.target===this)closeBacklogModal()">
+	<div class="backlog-modal">
+		<h3 id="backlog-modal-title">Add Backlog Item</h3>
+		<input type="hidden" id="backlog-edit-id" value="">
+		<label>Title *</label>
+		<input type="text" id="bl-input-title" placeholder="Item title">
+		<label>Description</label>
+		<textarea id="bl-input-desc" placeholder="Details about this item..."></textarea>
+		<div style="display:flex;gap:12px">
+			<div style="flex:1">
+				<label>Impact (1-10)</label>
+				<input type="number" id="bl-input-impact" min="1" max="10" value="5">
+			</div>
+			<div style="flex:1">
+				<label>Effort (1-10)</label>
+				<input type="number" id="bl-input-effort" min="1" max="10" value="5">
+			</div>
+		</div>
+		<label>Track</label>
+		<select id="bl-input-track">
+			<option value="">None</option>
+			<option value="feature">Feature</option>
+			<option value="quality">Quality</option>
+			<option value="security">Security</option>
+			<option value="docs">Docs</option>
+			<option value="infra">Infra</option>
+		</select>
+		<label>Tags (comma-separated)</label>
+		<input type="text" id="bl-input-tags" placeholder="auth, perf, ui">
+		<label>Acceptance Criteria</label>
+		<textarea id="bl-input-criteria" placeholder="What must be true for this to be done..."></textarea>
+		<div class="modal-actions">
+			<button class="secondary" onclick="closeBacklogModal()">Cancel</button>
+			<button class="primary" onclick="submitBacklogItem()">Save</button>
 		</div>
 	</div>
 </div>
@@ -1092,11 +1463,13 @@ function updateAll(snapshot) {
 			workersByUnit[w.id] = w;
 		}
 	}
+	unitBacklogMap = snapshot.unit_backlog_map || {};
 	updateHeader(snapshot.mission, snapshot.summary);
 	updatePlanTree(snapshot.plan_tree);
 	updateWorkerCards(snapshot.units, snapshot.unit_reviews || {});
 	updateEventLog(snapshot.events);
 	updateHistory(snapshot.history);
+	updateBacklog(snapshot.backlog, snapshot.active_backlog_ids);
 }
 
 function updateHeader(mission, summary) {
@@ -1194,9 +1567,13 @@ function updatePlanTree(tree) {
 			unitTitles[unit.id] = unit.title;
 			const dotClass = unit.status === "completed" ? "completed" : unit.status;
 			const duration = formatUnitDuration(unit);
+			const linkedBacklog = unitBacklogMap[unit.id] || [];
 			html += `<div class="unit-node" onclick="scrollToCard('${unit.id}')" title="${escapeHtml(unit.title)}">`;
 			html += `<span class="unit-dot ${dotClass}"></span>`;
 			html += `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(unit.title)}</span>`;
+			if (linkedBacklog.length > 0) {
+				html += `<span class="backlog-link-badge" onclick="event.stopPropagation();scrollToBacklogItem('${escapeHtml(linkedBacklog[0])}')\" title="Linked to backlog item">B</span>`;
+			}
 			if (duration) html += `<span class="unit-duration">${duration}</span>`;
 			html += `</div>`;
 		}
@@ -1594,8 +1971,12 @@ document.addEventListener("keydown", function(e) {
 	// Ignore with modifier keys
 	if (e.ctrlKey || e.metaKey || e.altKey) return;
 
-	// Close confirm dialog on Escape
+	// Close dialogs on Escape
 	if (e.key === "Escape") {
+		if (document.getElementById("backlog-modal-overlay").classList.contains("active")) {
+			closeBacklogModal();
+			return;
+		}
 		if (document.getElementById("confirm-overlay").classList.contains("active")) {
 			closeConfirm();
 			return;
@@ -1792,6 +2173,251 @@ function viewMissionDetail(missionId) {
 
 // Update relative timestamps every 15 seconds
 setInterval(refreshRelativeTimestamps, 15000);
+
+// -- Backlog Queue --
+
+let backlogData = [];
+let backlogActiveIds = [];
+let unitBacklogMap = {};
+let expandedBacklogDescs = new Set();
+
+function toggleBacklog() {
+	const section = document.getElementById("backlog-section");
+	section.classList.toggle("collapsed");
+}
+
+function updateBacklog(backlog, activeIds) {
+	backlogData = backlog || [];
+	backlogActiveIds = activeIds || [];
+	document.getElementById("backlog-count").textContent = backlogData.length;
+
+	// Populate track filter options dynamically
+	const trackFilter = document.getElementById("backlog-track-filter");
+	const currentTrack = trackFilter.value;
+	const tracks = [...new Set(backlogData.map(b => b.track).filter(Boolean))].sort();
+	let trackHtml = '<option value="">All Tracks</option>';
+	for (const t of tracks) {
+		trackHtml += `<option value="${escapeHtml(t)}"${t === currentTrack ? " selected" : ""}>${escapeHtml(t)}</option>`;
+	}
+	trackFilter.innerHTML = trackHtml;
+
+	filterBacklog();
+}
+
+function filterBacklog() {
+	const search = (document.getElementById("backlog-search").value || "").toLowerCase();
+	const statusFilter = document.getElementById("backlog-status-filter").value;
+	const trackFilter = document.getElementById("backlog-track-filter").value;
+
+	let items = backlogData;
+	if (search) {
+		items = items.filter(b =>
+			b.title.toLowerCase().includes(search) ||
+			(b.tags || "").toLowerCase().includes(search) ||
+			(b.description || "").toLowerCase().includes(search)
+		);
+	}
+	if (statusFilter) {
+		items = items.filter(b => b.status === statusFilter);
+	}
+	if (trackFilter) {
+		items = items.filter(b => b.track === trackFilter);
+	}
+
+	renderBacklogTable(items);
+}
+
+function renderBacklogTable(items) {
+	const container = document.getElementById("backlog-table-container");
+	if (!items || items.length === 0) {
+		container.innerHTML = '<div style="padding:12px 0;color:var(--text-muted);font-size:13px;text-align:center">No backlog items</div>';
+		return;
+	}
+
+	// Group by status in order
+	const order = ["in_progress", "pending", "completed", "deferred", "rejected"];
+	const grouped = {};
+	for (const item of items) {
+		const s = item.status || "pending";
+		if (!grouped[s]) grouped[s] = [];
+		grouped[s].push(item);
+	}
+
+	let html = '<table class="backlog-table"><thead><tr>';
+	html += '<th></th><th>Title</th><th>Score</th><th>Impact</th><th>Effort</th><th>Track</th><th>Status</th><th>Actions</th>';
+	html += '</tr></thead><tbody>';
+
+	for (const status of order) {
+		const group = grouped[status];
+		if (!group) continue;
+		for (const b of group) {
+			const isActive = backlogActiveIds.includes(b.id);
+			const score = b.pinned_score != null ? b.pinned_score : b.priority_score;
+			const hasDesc = b.description && b.description.length > 0;
+			const isExpanded = expandedBacklogDescs.has(b.id);
+
+			html += `<tr class="${isActive ? "active-item" : ""}" id="backlog-row-${escapeHtml(b.id)}">`;
+			html += `<td style="width:16px;cursor:pointer" onclick="toggleBacklogDescription('${escapeHtml(b.id)}')">${hasDesc ? (isExpanded ? "&#9662;" : "&#9656;") : ""}</td>`;
+			html += `<td class="bl-title" title="${escapeHtml(b.title)}">${escapeHtml(b.title)}</td>`;
+			html += `<td>${score.toFixed(1)}${b.pinned_score != null ? " (P)" : ""}</td>`;
+			html += `<td>${b.impact}</td>`;
+			html += `<td>${b.effort}</td>`;
+			html += `<td>${b.track ? `<span class="backlog-track-badge">${escapeHtml(b.track)}</span>` : ""}</td>`;
+			html += `<td><span class="backlog-status-badge ${b.status}">${b.status.replace("_", " ")}</span></td>`;
+			html += `<td class="backlog-actions">`;
+			html += `<button onclick="event.stopPropagation();openBacklogModal('${escapeHtml(b.id)}')" title="Edit">Ed</button>`;
+			if (b.status !== "deferred") html += `<button onclick="event.stopPropagation();deferBacklogItem('${escapeHtml(b.id)}')" title="Defer">Df</button>`;
+			html += `<button onclick="event.stopPropagation();pinBacklogItem('${escapeHtml(b.id)}')" title="Pin score">Pin</button>`;
+			html += `<button class="danger" onclick="event.stopPropagation();deleteBacklogItem('${escapeHtml(b.id)}')" title="Delete">X</button>`;
+			html += `</td></tr>`;
+
+			if (isExpanded && hasDesc) {
+				html += `<tr class="backlog-desc-row"><td colspan="8">${escapeHtml(b.description)}</td></tr>`;
+			}
+		}
+	}
+
+	html += '</tbody></table>';
+	container.innerHTML = html;
+}
+
+function toggleBacklogDescription(id) {
+	if (expandedBacklogDescs.has(id)) {
+		expandedBacklogDescs.delete(id);
+	} else {
+		expandedBacklogDescs.add(id);
+	}
+	filterBacklog();
+}
+
+function openBacklogModal(editId) {
+	const overlay = document.getElementById("backlog-modal-overlay");
+	const titleEl = document.getElementById("backlog-modal-title");
+	const editIdEl = document.getElementById("backlog-edit-id");
+
+	if (editId) {
+		const item = backlogData.find(b => b.id === editId);
+		if (!item) return;
+		titleEl.textContent = "Edit Backlog Item";
+		editIdEl.value = editId;
+		document.getElementById("bl-input-title").value = item.title;
+		document.getElementById("bl-input-desc").value = item.description || "";
+		document.getElementById("bl-input-impact").value = item.impact;
+		document.getElementById("bl-input-effort").value = item.effort;
+		document.getElementById("bl-input-track").value = item.track || "";
+		document.getElementById("bl-input-tags").value = item.tags || "";
+		document.getElementById("bl-input-criteria").value = item.acceptance_criteria || "";
+	} else {
+		titleEl.textContent = "Add Backlog Item";
+		editIdEl.value = "";
+		document.getElementById("bl-input-title").value = "";
+		document.getElementById("bl-input-desc").value = "";
+		document.getElementById("bl-input-impact").value = "5";
+		document.getElementById("bl-input-effort").value = "5";
+		document.getElementById("bl-input-track").value = "";
+		document.getElementById("bl-input-tags").value = "";
+		document.getElementById("bl-input-criteria").value = "";
+	}
+	overlay.classList.add("active");
+	document.getElementById("bl-input-title").focus();
+}
+
+function closeBacklogModal() {
+	document.getElementById("backlog-modal-overlay").classList.remove("active");
+}
+
+function submitBacklogItem() {
+	const editId = document.getElementById("backlog-edit-id").value;
+	const title = document.getElementById("bl-input-title").value.trim();
+	if (!title) {
+		showToast("Title is required", "warn");
+		return;
+	}
+
+	const payload = {
+		title: title,
+		description: document.getElementById("bl-input-desc").value.trim(),
+		impact: parseInt(document.getElementById("bl-input-impact").value) || 5,
+		effort: parseInt(document.getElementById("bl-input-effort").value) || 5,
+		track: document.getElementById("bl-input-track").value,
+		tags: document.getElementById("bl-input-tags").value.trim(),
+		acceptance_criteria: document.getElementById("bl-input-criteria").value.trim(),
+	};
+
+	const url = editId ? `/api/backlog/${editId}` : "/api/backlog";
+	const method = editId ? "PATCH" : "POST";
+
+	fetch(url, {
+		method: method,
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(payload),
+	})
+	.then(r => r.json())
+	.then(data => {
+		if (data.status === "ok") {
+			showToast(editId ? "Item updated" : "Item created", "info");
+			closeBacklogModal();
+		} else {
+			showToast("Error: " + (data.detail || "Unknown"), "error");
+		}
+	})
+	.catch(err => showToast("Error: " + err.message, "error"));
+}
+
+function deferBacklogItem(id) {
+	fetch(`/api/backlog/${id}/defer`, { method: "POST" })
+		.then(r => r.json())
+		.then(data => {
+			if (data.status === "ok") showToast("Item deferred", "info");
+		})
+		.catch(err => showToast("Error: " + err.message, "error"));
+}
+
+function pinBacklogItem(id) {
+	const score = prompt("Enter pinned priority score:");
+	if (score === null) return;
+	const num = parseFloat(score);
+	if (isNaN(num)) {
+		showToast("Invalid score", "warn");
+		return;
+	}
+	fetch(`/api/backlog/${id}/pin`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ score: num }),
+	})
+	.then(r => r.json())
+	.then(data => {
+		if (data.status === "ok") showToast("Score pinned: " + num.toFixed(1), "info");
+	})
+	.catch(err => showToast("Error: " + err.message, "error"));
+}
+
+function deleteBacklogItem(id) {
+	showConfirm("Delete Backlog Item", "This will mark the item as rejected. Continue?", function() {
+		fetch(`/api/backlog/${id}`, { method: "DELETE" })
+			.then(r => r.json())
+			.then(data => {
+				if (data.status === "ok") showToast("Item deleted", "info");
+			})
+			.catch(err => showToast("Error: " + err.message, "error"));
+	});
+}
+
+function scrollToBacklogItem(id) {
+	const section = document.getElementById("backlog-section");
+	if (section.classList.contains("collapsed")) {
+		section.classList.remove("collapsed");
+	}
+	setTimeout(function() {
+		const row = document.getElementById("backlog-row-" + id);
+		if (row) {
+			row.scrollIntoView({ behavior: "smooth", block: "center" });
+			row.classList.add("backlog-highlight");
+			setTimeout(() => row.classList.remove("backlog-highlight"), 1500);
+		}
+	}, 100);
+}
 
 // Start
 connect();

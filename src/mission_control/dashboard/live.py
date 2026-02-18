@@ -17,7 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 
 from mission_control.db import Database
-from mission_control.models import Signal, TrajectoryRating
+from mission_control.models import BacklogItem, Signal, TrajectoryRating, _now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,37 @@ class SignalRequest(BaseModel):
 
 	signal_type: str
 	payload: dict[str, Any] = {}
+
+
+class BacklogCreateRequest(BaseModel):
+	"""Request body for creating a backlog item."""
+
+	title: str
+	description: str = ""
+	impact: int = 5
+	effort: int = 5
+	track: str = ""
+	tags: str = ""
+	acceptance_criteria: str = ""
+
+
+class BacklogUpdateRequest(BaseModel):
+	"""Request body for partially updating a backlog item."""
+
+	title: str | None = None
+	description: str | None = None
+	impact: int | None = None
+	effort: int | None = None
+	track: str | None = None
+	tags: str | None = None
+	status: str | None = None
+	acceptance_criteria: str | None = None
+
+
+class BacklogPinRequest(BaseModel):
+	"""Request body for pinning a backlog item's priority score."""
+
+	score: float
 
 
 class LiveDashboard:
@@ -246,6 +277,75 @@ class LiveDashboard:
 				for r in ratings
 			]
 
+		# -- Backlog endpoints --
+
+		@self.app.get("/api/backlog", dependencies=[Depends(verify_token)])
+		async def list_backlog(
+			status: str | None = Query(default=None),
+			track: str | None = Query(default=None),
+		) -> list[dict[str, Any]]:
+			items = self.db.list_backlog_items(status=status, track=track, limit=100)
+			return [_serialize_backlog_item(b) for b in items]
+
+		@self.app.post("/api/backlog", dependencies=[Depends(verify_token)])
+		async def create_backlog(body: BacklogCreateRequest) -> dict[str, Any]:
+			score = body.impact * (11 - body.effort) / 10.0
+			item = BacklogItem(
+				title=body.title,
+				description=body.description,
+				impact=body.impact,
+				effort=body.effort,
+				track=body.track,
+				tags=body.tags,
+				acceptance_criteria=body.acceptance_criteria,
+				priority_score=score,
+				status="pending",
+			)
+			self.db.insert_backlog_item(item)
+			return {"status": "ok", "id": item.id}
+
+		@self.app.patch("/api/backlog/{item_id}", dependencies=[Depends(verify_token)])
+		async def update_backlog(item_id: str, body: BacklogUpdateRequest) -> dict[str, Any]:
+			item = self.db.get_backlog_item(item_id)
+			if item is None:
+				raise HTTPException(status_code=404, detail="Backlog item not found")
+			updates = body.model_dump(exclude_none=True)
+			for key, value in updates.items():
+				setattr(item, key, value)
+			item.updated_at = _now_iso()
+			# Recalculate score if impact/effort changed
+			if "impact" in updates or "effort" in updates:
+				item.priority_score = item.impact * (11 - item.effort) / 10.0
+			self.db.update_backlog_item(item)
+			return {"status": "ok"}
+
+		@self.app.post("/api/backlog/{item_id}/defer", dependencies=[Depends(verify_token)])
+		async def defer_backlog(item_id: str) -> dict[str, Any]:
+			item = self.db.get_backlog_item(item_id)
+			if item is None:
+				raise HTTPException(status_code=404, detail="Backlog item not found")
+			self.db.defer_backlog_item(item_id)
+			return {"status": "ok"}
+
+		@self.app.post("/api/backlog/{item_id}/pin", dependencies=[Depends(verify_token)])
+		async def pin_backlog(item_id: str, body: BacklogPinRequest) -> dict[str, Any]:
+			item = self.db.get_backlog_item(item_id)
+			if item is None:
+				raise HTTPException(status_code=404, detail="Backlog item not found")
+			self.db.pin_backlog_score(item_id, body.score)
+			return {"status": "ok"}
+
+		@self.app.delete("/api/backlog/{item_id}", dependencies=[Depends(verify_token)])
+		async def delete_backlog(item_id: str) -> dict[str, Any]:
+			item = self.db.get_backlog_item(item_id)
+			if item is None:
+				raise HTTPException(status_code=404, detail="Backlog item not found")
+			# Soft delete: set status to rejected
+			item.status = "rejected"
+			item.updated_at = _now_iso()
+			self.db.update_backlog_item(item)
+			return {"status": "ok"}
+
 	async def _broadcast_loop(self) -> None:
 		"""Poll DB every 1s, push snapshot to all connected clients."""
 		while True:
@@ -271,7 +371,8 @@ class LiveDashboard:
 			return {
 				"mission": None, "units": [], "events": [],
 				"plan_tree": [], "workers": [], "summary": None,
-				"history": [],
+				"history": [], "backlog": [], "active_backlog_ids": [],
+				"unit_backlog_map": {},
 			}
 
 		units = self.db.get_work_units_for_mission(mission.id)
@@ -297,6 +398,14 @@ class LiveDashboard:
 				"rationale": r.rationale[:200],
 			}
 
+		# Include backlog queue
+		backlog_items = self.db.list_backlog_items(limit=100)
+		backlog_serialized = [_serialize_backlog_item(b) for b in backlog_items]
+		active_backlog_ids = [b.id for b in backlog_items if b.status == "in_progress"]
+
+		# Build unit->backlog mapping
+		unit_backlog_map = self._build_unit_backlog_mapping(units, backlog_items)
+
 		return {
 			"mission": _serialize_mission(mission),
 			"units": [_serialize_unit(u) for u in units],
@@ -307,6 +416,9 @@ class LiveDashboard:
 			"history": self._build_history(),
 			"ratings": rating_data,
 			"unit_reviews": review_by_unit,
+			"backlog": backlog_serialized,
+			"active_backlog_ids": active_backlog_ids,
+			"unit_backlog_map": unit_backlog_map,
 		}
 
 	def _build_plan_tree(self, mission_id: str) -> list[dict[str, Any]]:
@@ -360,6 +472,46 @@ class LiveDashboard:
 			"started_at": mission.started_at,
 		}
 
+	@staticmethod
+	def _build_unit_backlog_mapping(
+		units: list[Any], backlog_items: list[Any],
+	) -> dict[str, list[str]]:
+		"""Map unit IDs to backlog item IDs via regex + keyword fallback."""
+		import re
+
+		mapping: dict[str, list[str]] = {}
+		# Index in-progress backlog items for keyword fallback
+		active_items = [b for b in backlog_items if b.status == "in_progress"]
+
+		for unit in units:
+			matched_ids: list[str] = []
+			text = f"{unit.title} {unit.description}"
+
+			# Primary: regex parse backlog_item_id=<hex>
+			for m in re.finditer(r"backlog_item_id=([a-f0-9]+)", text):
+				bid = m.group(1)
+				if any(b.id == bid or b.id.startswith(bid) for b in backlog_items):
+					full_id = next(
+						(b.id for b in backlog_items if b.id == bid or b.id.startswith(bid)),
+						bid,
+					)
+					if full_id not in matched_ids:
+						matched_ids.append(full_id)
+
+			# Fallback: keyword matching against in-progress backlog titles
+			if not matched_ids:
+				unit_words = set(re.findall(r"\w{3,}", unit.title.lower()))
+				for b in active_items:
+					backlog_words = set(re.findall(r"\w{3,}", b.title.lower()))
+					overlap = unit_words & backlog_words
+					if len(overlap) >= 2:
+						matched_ids.append(b.id)
+
+			if matched_ids:
+				mapping[unit.id] = matched_ids
+
+		return mapping
+
 	def _build_history(self) -> list[dict[str, Any]]:
 		"""Build mission history from all past missions."""
 		missions = self.db.get_all_missions(limit=50)
@@ -391,6 +543,26 @@ class LiveDashboard:
 				"trajectory_rating": latest_rating,
 			})
 		return result
+
+
+def _serialize_backlog_item(item: Any) -> dict[str, Any]:
+	return {
+		"id": item.id,
+		"title": item.title,
+		"description": item.description[:500] if item.description else "",
+		"priority_score": item.priority_score,
+		"impact": item.impact,
+		"effort": item.effort,
+		"track": item.track,
+		"status": item.status,
+		"tags": item.tags,
+		"attempt_count": item.attempt_count,
+		"last_failure_reason": item.last_failure_reason,
+		"pinned_score": item.pinned_score,
+		"acceptance_criteria": item.acceptance_criteria,
+		"created_at": item.created_at,
+		"updated_at": item.updated_at,
+	}
 
 
 def _serialize_mission(m: Any) -> dict[str, Any]:

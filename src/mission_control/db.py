@@ -2262,6 +2262,12 @@ class Database:
 		)
 		self.conn.commit()
 
+	def delete_backlog_item(self, item_id: str) -> bool:
+		"""Hard-delete a backlog item. Returns True if a row was deleted."""
+		cursor = self.conn.execute("DELETE FROM backlog_items WHERE id = ?", (item_id,))
+		self.conn.commit()
+		return cursor.rowcount > 0
+
 	@staticmethod
 	def _row_to_backlog_item(row: sqlite3.Row) -> BacklogItem:
 		keys = row.keys()

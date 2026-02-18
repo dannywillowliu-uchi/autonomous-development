@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 from mission_control.cli import (
+	_render_backlog_markdown,
 	build_parser,
 	cmd_priority_defer,
+	cmd_priority_export,
 	cmd_priority_import,
 	cmd_priority_list,
 	cmd_priority_recalc,
@@ -242,3 +244,155 @@ class TestCmdPriorityRecalc:
 		])
 		result = cmd_priority_recalc(args)
 		assert result == 1
+
+
+class TestArgParsingExport:
+	def test_export_default_args(self) -> None:
+		parser = build_parser()
+		args = parser.parse_args(["priority", "export"])
+		assert args.command == "priority"
+		assert args.priority_command == "export"
+		assert args.file is None
+		assert args.status is None
+
+	def test_export_with_file(self) -> None:
+		parser = build_parser()
+		args = parser.parse_args(["priority", "export", "--file", "/tmp/backlog.md"])
+		assert args.file == "/tmp/backlog.md"
+
+	def test_export_with_status(self) -> None:
+		parser = build_parser()
+		args = parser.parse_args(["priority", "export", "--status", "pending"])
+		assert args.status == "pending"
+
+
+class TestCmdPriorityExport:
+	def test_export_stdout(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+		config_file, db_path = _setup_db_with_config(tmp_path)
+		_insert_sample_items(db_path)
+		parser = build_parser()
+		args = parser.parse_args(["priority", "--config", str(config_file), "export"])
+		result = cmd_priority_export(args)
+		assert result == 0
+		captured = capsys.readouterr()
+		assert "# Backlog Queue" in captured.out
+		assert "Fix auth bug" in captured.out
+		assert "Add caching" in captured.out
+
+	def test_export_to_file(self, tmp_path: Path) -> None:
+		config_file, db_path = _setup_db_with_config(tmp_path)
+		_insert_sample_items(db_path)
+		outfile = tmp_path / "export.md"
+		parser = build_parser()
+		args = parser.parse_args([
+			"priority", "--config", str(config_file), "export", "--file", str(outfile),
+		])
+		result = cmd_priority_export(args)
+		assert result == 0
+		assert outfile.exists()
+		content = outfile.read_text()
+		assert "# Backlog Queue" in content
+		assert "Fix auth bug" in content
+
+	def test_export_with_status_filter(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+		config_file, db_path = _setup_db_with_config(tmp_path)
+		now = _now_iso()
+		with Database(db_path) as db:
+			db.insert_backlog_item(BacklogItem(
+				id="done1", title="Done task", impact=5, effort=3,
+				priority_score=4.0, status="completed",
+				created_at=now, updated_at=now,
+			))
+			db.insert_backlog_item(BacklogItem(
+				id="pend1", title="Pending task", impact=8, effort=2,
+				priority_score=7.2, status="pending",
+				created_at=now, updated_at=now,
+			))
+		parser = build_parser()
+		args = parser.parse_args([
+			"priority", "--config", str(config_file), "export", "--status", "pending",
+		])
+		result = cmd_priority_export(args)
+		assert result == 0
+		captured = capsys.readouterr()
+		assert "Pending task" in captured.out
+		assert "Done task" not in captured.out
+		assert "Filtered by status: pending" in captured.out
+
+	def test_export_empty_db(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+		config_file, _ = _setup_db_with_config(tmp_path)
+		parser = build_parser()
+		args = parser.parse_args(["priority", "--config", str(config_file), "export"])
+		result = cmd_priority_export(args)
+		assert result == 0
+		captured = capsys.readouterr()
+		assert "No backlog items" in captured.out
+
+	def test_export_shows_attempt_count(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+		config_file, db_path = _setup_db_with_config(tmp_path)
+		now = _now_iso()
+		with Database(db_path) as db:
+			db.insert_backlog_item(BacklogItem(
+				id="retry1", title="Retried task", impact=7, effort=3,
+				priority_score=5.6, status="pending", attempt_count=3,
+				created_at=now, updated_at=now,
+			))
+		parser = build_parser()
+		args = parser.parse_args(["priority", "--config", str(config_file), "export"])
+		result = cmd_priority_export(args)
+		assert result == 0
+		captured = capsys.readouterr()
+		assert "**Attempts**: 3" in captured.out
+
+	def test_export_no_db(self, tmp_path: Path) -> None:
+		config_file = tmp_path / "mission-control.toml"
+		config_file.write_text('[target]\nname = "test"\npath = "/tmp/test"\n')
+		parser = build_parser()
+		args = parser.parse_args([
+			"priority", "--config", str(config_file), "export",
+		])
+		result = cmd_priority_export(args)
+		assert result == 1
+
+
+class TestRenderBacklogMarkdown:
+	def test_groups_by_status(self) -> None:
+		now = _now_iso()
+		items = [
+			BacklogItem(
+				id="a", title="Active", status="in_progress",
+				impact=8, effort=3, priority_score=6.4,
+				created_at=now, updated_at=now,
+			),
+			BacklogItem(
+				id="b", title="Waiting", status="pending",
+				impact=6, effort=4, priority_score=4.2,
+				created_at=now, updated_at=now,
+			),
+			BacklogItem(
+				id="c", title="Done", status="completed",
+				impact=5, effort=2, priority_score=4.5,
+				created_at=now, updated_at=now,
+			),
+		]
+		md = _render_backlog_markdown(items)
+		# in_progress should appear before pending which should appear before completed
+		pos_active = md.index("In Progress")
+		pos_pending = md.index("Pending")
+		pos_completed = md.index("Completed")
+		assert pos_active < pos_pending < pos_completed
+
+	def test_sorts_by_score_within_group(self) -> None:
+		now = _now_iso()
+		items = [
+			BacklogItem(
+				id="lo", title="Low score", status="pending",
+				priority_score=1.0, created_at=now, updated_at=now,
+			),
+			BacklogItem(
+				id="hi", title="High score", status="pending",
+				priority_score=9.0, created_at=now, updated_at=now,
+			),
+		]
+		md = _render_backlog_markdown(items)
+		assert md.index("High score") < md.index("Low score")
