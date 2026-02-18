@@ -268,6 +268,14 @@ class SpecialistConfig:
 
 
 @dataclass
+class ToolSynthesisConfig:
+	"""Runtime tool synthesis settings."""
+
+	enabled: bool = False
+	tools_dir: str = ".mc-tools"
+
+
+@dataclass
 class MissionConfig:
 	"""Top-level mission-control configuration."""
 
@@ -287,6 +295,7 @@ class MissionConfig:
 	deploy: DeployConfig = field(default_factory=DeployConfig)
 	models: ModelsConfig = field(default_factory=ModelsConfig)
 	specialist: SpecialistConfig = field(default_factory=SpecialistConfig)
+	tool_synthesis: ToolSynthesisConfig = field(default_factory=ToolSynthesisConfig)
 
 
 def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
@@ -558,6 +567,15 @@ def _build_specialist(data: dict[str, Any]) -> SpecialistConfig:
 	return sc
 
 
+def _build_tool_synthesis(data: dict[str, Any]) -> ToolSynthesisConfig:
+	tc = ToolSynthesisConfig()
+	if "enabled" in data:
+		tc.enabled = bool(data["enabled"])
+	if "tools_dir" in data:
+		tc.tools_dir = str(data["tools_dir"])
+	return tc
+
+
 def _build_deploy(data: dict[str, Any]) -> DeployConfig:
 	dc = DeployConfig()
 	if "enabled" in data:
@@ -641,6 +659,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.models = _build_models(data["models"])
 	if "specialist" in data:
 		mc.specialist = _build_specialist(data["specialist"])
+	if "tool_synthesis" in data:
+		mc.tool_synthesis = _build_tool_synthesis(data["tool_synthesis"])
 	# Allow env vars as fallback for Telegram credentials
 	tg = mc.notifications.telegram
 	if not tg.bot_token:
