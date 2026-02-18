@@ -131,6 +131,7 @@ class ContinuousController:
 		self._all_fail_stop_reason: str = ""
 		self._in_flight_count: int = 0
 		self._deferred_units: list[tuple[WorkUnit, Epoch, Mission]] = []
+		self._merged_files: set[str] = set()  # files covered by merged units
 		self._db_error_count: int = 0
 		self._db_degraded: bool = False
 		self.ambition_score: float = 0.0
@@ -289,6 +290,23 @@ class ContinuousController:
 			result.stopped_reason = "db_error"
 			return result
 		result.mission_id = mission.id
+
+		# Clean up orphaned work units from previously killed missions.
+		# When a mission is killed, units with status='running' are never
+		# updated. New missions see them as in-flight and defer everything.
+		try:
+			orphaned = self.db.conn.execute(
+				"UPDATE work_units SET status='failed' "
+				"WHERE status='running' OR status='pending'",
+			)
+			if orphaned.rowcount:
+				self.db.conn.commit()
+				logger.info(
+					"Cleaned up %d orphaned work units from prior missions",
+					orphaned.rowcount,
+				)
+		except Exception as exc:
+			logger.warning("Failed to clean orphaned work units: %s", exc)
 
 		# Generate initial MISSION_STATE.md with objective and empty sections
 		try:
@@ -749,6 +767,19 @@ class ContinuousController:
 			enable_recovery=hb.enable_recovery,
 		)
 
+	def _check_already_merged(self, unit: WorkUnit) -> bool:
+		"""Check if a deferred unit's files have already been covered by a merged unit.
+
+		Returns True if the unit should be dropped (work already done).
+		"""
+		if not self._merged_files:
+			return False
+		unit_files = _parse_files_hint(unit.files_hint)
+		if not unit_files:
+			return False
+		# Drop if all of this unit's files are already covered by merged work
+		return unit_files <= self._merged_files
+
 	def _check_in_flight_overlap(self, unit: WorkUnit) -> bool:
 		"""Check if a unit overlaps with any currently running units.
 
@@ -792,6 +823,13 @@ class ContinuousController:
 
 		still_deferred: list[tuple[WorkUnit, Epoch, Mission]] = []
 		for unit, epoch, mission_ref in self._deferred_units:
+			# Drop deferred units whose files are already covered by merged work
+			if self._check_already_merged(unit):
+				logger.info(
+					"Dropping deferred unit %s (%s): files already covered by merged work",
+					unit.id[:12], unit.title[:50],
+				)
+				continue
 			if self._check_in_flight_overlap(unit):
 				still_deferred.append((unit, epoch, mission_ref))
 				continue
@@ -1043,6 +1081,14 @@ class ContinuousController:
 			for unit in units:
 				unit.epoch_id = epoch.id
 
+				# Skip units whose files are already covered by merged work
+				if self._check_already_merged(unit):
+					logger.info(
+						"Skipping unit %s (%s): files already covered by merged work",
+						unit.id[:12], unit.title[:50],
+					)
+					continue
+
 				# Cross-epoch overlap check: defer if overlapping with in-flight work
 				if self._check_in_flight_overlap(unit):
 					logger.warning(
@@ -1287,6 +1333,10 @@ class ContinuousController:
 							unit.id,
 						)
 						self._total_merged += 1
+						# Track merged files so deferred duplicates are dropped
+						merged_files = _parse_files_hint(unit.files_hint)
+						if merged_files:
+							self._merged_files |= merged_files
 						# Log merge event
 						self._log_unit_event(
 							mission_id=mission.id,
