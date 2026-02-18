@@ -2,15 +2,15 @@
 name = "autonomous-dev-scheduler"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = """Work through the priority backlog. Top items:
+objective = """Implement the top-priority improvements discovered via codebase analysis:
 
-1. P4 - EMA BUDGET TRACKING: Implement exponential moving average cost tracking per work unit. Add EMA module with alpha=0.3, outlier dampening (>3x EMA clamped to 2x), conservatism factor (k=1.0+0.5/sqrt(n)). Wire into _should_stop() in continuous_controller.py. Add adaptive cooldown that increases when costs exceed budget. Add comprehensive tests.
+1. DEPENDENCY-AWARE DISPATCH: The dispatch loop in continuous_controller.py dispatches all units in parallel without checking depends_on. Modify the dispatch logic to respect dependency ordering -- units with unresolved dependencies must wait until their blockers complete. Add tests.
 
-2. P6 - TYPED CONTEXT STORE: Replace flat text memory.py with structured ContextItem dataclass backed by SQLite. Add scope-based filtering (mission, round, unit). Support selective injection into worker prompts based on relevance. Add tests.
+2. SMOKE-TEST VERIFICATION BEFORE MERGE: GreenBranchManager.merge_unit() merges directly to mc/green without verification. Add a lightweight smoke-test step (run the verification command) BEFORE merging to mc/green. Only merge if verification passes. Add tests.
 
-3. QUALITY FIXES from backlog: Replace silent 'except Exception: pass' patterns with logged catches. Add cost accumulation resilience. Sanitize brace characters in worker prompt .format() inputs. Fix semaphore private attribute manipulation.
+3. SANDBOX TOOL SYNTHESIS: tool_synthesis.py writes arbitrary Python scripts from worker output directly to disk with no validation. Add content validation (no imports of dangerous modules, no file system access outside project), and restrict execution to a sandboxed subprocess. Add tests.
 
-Each unit: implement the feature, add tests, ensure all existing tests pass. Read BACKLOG.md for full specs."""
+Each feature: implement, add tests, ensure all existing tests pass."""
 
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
@@ -30,7 +30,7 @@ auto_merge = false
 
 [scheduler.budget]
 max_per_session_usd = 10.0
-max_per_run_usd = 500.0
+max_per_run_usd = 200.0
 
 [scheduler.parallel]
 num_workers = 2
@@ -56,6 +56,14 @@ budget_per_call_usd = 2.0
 max_wall_time_seconds = 3600
 backlog_min_size = 1
 timeout_multiplier = 1.5
+min_ambition_score = 4
+max_replan_attempts = 2
+verify_objective_completion = true
+max_objective_checks = 2
+
+[review]
+gate_completion = false
+min_review_score = 3.0
 
 [green_branch]
 working_branch = "mc/working"

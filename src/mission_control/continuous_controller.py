@@ -477,23 +477,24 @@ class ContinuousController:
 				logger.error("Failed to generate mission report: %s", exc, exc_info=True)
 
 			# Determine if follow-up work is needed (mission chaining)
-			if not result.objective_met:
-				try:
-					remaining_backlog = self.db.get_pending_backlog(limit=5)
-					if remaining_backlog:
-						top_items = remaining_backlog[:3]
-						descriptions = [
-							f"[{item.track}] {item.title} (priority={item.priority_score:.1f})"
-							for item in top_items
-						]
-						result.next_objective = (
-							f"Continue with {len(remaining_backlog)} remaining backlog items. "
-							f"Top priorities: {'; '.join(descriptions)}"
-						)
-						mission.next_objective = result.next_objective
-						logger.info("Next objective set for mission chaining: %s", result.next_objective[:100])
-				except Exception as exc:
-					logger.error("Failed to determine next objective: %s", exc, exc_info=True)
+			# Chain on both success and failure -- there's always more backlog to work through.
+			try:
+				remaining_backlog = self.db.get_pending_backlog(limit=5)
+				if remaining_backlog:
+					top_items = remaining_backlog[:3]
+					descriptions = [
+						f"[{item.track}] {item.title} (priority={item.priority_score:.1f})"
+						for item in top_items
+					]
+					prefix = "Objective met. " if result.objective_met else ""
+					result.next_objective = (
+						f"{prefix}Continue with {len(remaining_backlog)} remaining backlog items. "
+						f"Top priorities: {'; '.join(descriptions)}"
+					)
+					mission.next_objective = result.next_objective
+					logger.info("Next objective set for mission chaining: %s", result.next_objective[:100])
+			except Exception as exc:
+				logger.error("Failed to determine next objective: %s", exc, exc_info=True)
 
 			# Append strategic context for future strategist calls
 			try:
