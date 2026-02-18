@@ -151,6 +151,7 @@ class WorkUnit:
 	verification_command: str | None = None  # per-unit verification override
 	epoch_id: str | None = None  # continuous mode epoch
 	acceptance_criteria: str = ""  # what must be true for this unit to be "done"
+	specialist: str = ""  # specialist type: test-writer, refactorer, debugger, or empty for general
 	input_tokens: int = 0
 	output_tokens: int = 0
 	cost_usd: float = 0.0

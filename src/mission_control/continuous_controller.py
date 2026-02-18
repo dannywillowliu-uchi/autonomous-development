@@ -43,7 +43,7 @@ from mission_control.planner_context import build_planner_context, update_missio
 from mission_control.session import parse_mc_result
 from mission_control.strategist import Strategist
 from mission_control.token_parser import compute_token_cost, parse_stream_json
-from mission_control.worker import render_mission_worker_prompt
+from mission_control.worker import load_specialist_template, render_mission_worker_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -1759,6 +1759,8 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			except Exception as exc:
 				logger.warning("Could not compute overlap warnings: %s", exc)
 
+			specialist_template = load_specialist_template(unit.specialist, self.config)
+
 			prompt = render_mission_worker_prompt(
 				unit=unit,
 				config=self.config,
@@ -1771,6 +1773,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				experience_context=experience_context,
 				mission_state=mission_state,
 				overlap_warnings=overlap_warnings,
+				specialist_template=specialist_template,
 			)
 
 			budget = self.config.scheduler.budget.max_per_session_usd
