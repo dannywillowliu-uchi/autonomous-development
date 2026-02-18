@@ -12,13 +12,14 @@ from fastapi.testclient import TestClient
 from mission_control.dashboard.live import (
 	VALID_SIGNAL_TYPES,
 	LiveDashboard,
+	_serialize_backlog_item,
 	_serialize_event,
 	_serialize_mission,
 	_serialize_unit,
 	_serialize_worker,
 )
 from mission_control.db import Database
-from mission_control.models import Epoch, Mission, Plan, UnitEvent, Worker, WorkUnit
+from mission_control.models import BacklogItem, Epoch, Mission, Plan, UnitEvent, Worker, WorkUnit, _now_iso
 
 
 def _setup_db(*, check_same_thread: bool = True) -> Database:
@@ -751,3 +752,227 @@ class TestSnapshotHistory:
 		resp = client.get("/api/history")
 
 		assert snapshot["history"] == resp.json()
+
+
+def _setup_db_with_backlog(*, check_same_thread: bool = True) -> Database:
+	"""Create an in-memory DB with test data + backlog items."""
+	db = _setup_db(check_same_thread=check_same_thread)
+	now = _now_iso()
+	db.insert_backlog_item(BacklogItem(
+		id="bl1", title="Fix auth bug", description="Auth is broken",
+		impact=9, effort=3, priority_score=7.2, track="security",
+		status="in_progress", tags="auth,security",
+		created_at=now, updated_at=now,
+	))
+	db.insert_backlog_item(BacklogItem(
+		id="bl2", title="Add caching layer", description="Need Redis caching",
+		impact=7, effort=5, priority_score=4.2, track="feature",
+		status="pending", tags="perf",
+		created_at=now, updated_at=now,
+	))
+	db.insert_backlog_item(BacklogItem(
+		id="bl3", title="Update docs", description="Docs are stale",
+		impact=4, effort=2, priority_score=3.6, track="docs",
+		status="completed",
+		created_at=now, updated_at=now,
+	))
+	return db
+
+
+class TestBacklogEndpoints:
+	def _make_client(self) -> tuple[TestClient, Database]:
+		db = _setup_db_with_backlog(check_same_thread=False)
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+		dashboard.auth_token = ""
+		dashboard._connections = set()
+		dashboard._broadcast_task = None
+		dashboard._signal_timestamps = defaultdict(list)
+		from fastapi import FastAPI
+		dashboard.app = FastAPI()
+		dashboard._setup_routes()
+		return TestClient(dashboard.app), db
+
+	def test_list_backlog(self) -> None:
+		client, _ = self._make_client()
+		resp = client.get("/api/backlog")
+		assert resp.status_code == 200
+		data = resp.json()
+		assert len(data) == 3
+
+	def test_list_backlog_filter_status(self) -> None:
+		client, _ = self._make_client()
+		resp = client.get("/api/backlog?status=pending")
+		assert resp.status_code == 200
+		data = resp.json()
+		assert len(data) == 1
+		assert data[0]["title"] == "Add caching layer"
+
+	def test_list_backlog_filter_track(self) -> None:
+		client, _ = self._make_client()
+		resp = client.get("/api/backlog?track=security")
+		assert resp.status_code == 200
+		data = resp.json()
+		assert len(data) == 1
+		assert data[0]["title"] == "Fix auth bug"
+
+	def test_create_backlog(self) -> None:
+		client, db = self._make_client()
+		resp = client.post("/api/backlog", json={
+			"title": "New item",
+			"description": "A new task",
+			"impact": 8,
+			"effort": 4,
+			"track": "feature",
+		})
+		assert resp.status_code == 200
+		data = resp.json()
+		assert data["status"] == "ok"
+		assert "id" in data
+		item = db.get_backlog_item(data["id"])
+		assert item is not None
+		assert item.title == "New item"
+		assert item.priority_score == 8 * (11 - 4) / 10.0
+
+	def test_update_backlog(self) -> None:
+		client, db = self._make_client()
+		resp = client.patch("/api/backlog/bl2", json={"title": "Updated title", "impact": 10})
+		assert resp.status_code == 200
+		item = db.get_backlog_item("bl2")
+		assert item is not None
+		assert item.title == "Updated title"
+		assert item.impact == 10
+		# Score recalculated: 10 * (11-5) / 10 = 6.0
+		assert item.priority_score == 6.0
+
+	def test_update_backlog_not_found(self) -> None:
+		client, _ = self._make_client()
+		resp = client.patch("/api/backlog/nonexistent", json={"title": "Nope"})
+		assert resp.status_code == 404
+
+	def test_defer_backlog(self) -> None:
+		client, db = self._make_client()
+		resp = client.post("/api/backlog/bl2/defer")
+		assert resp.status_code == 200
+		item = db.get_backlog_item("bl2")
+		assert item is not None
+		assert item.status == "deferred"
+
+	def test_defer_backlog_not_found(self) -> None:
+		client, _ = self._make_client()
+		resp = client.post("/api/backlog/nonexistent/defer")
+		assert resp.status_code == 404
+
+	def test_pin_backlog(self) -> None:
+		client, db = self._make_client()
+		resp = client.post("/api/backlog/bl2/pin", json={"score": 99.0})
+		assert resp.status_code == 200
+		item = db.get_backlog_item("bl2")
+		assert item is not None
+		assert item.pinned_score == 99.0
+
+	def test_pin_backlog_not_found(self) -> None:
+		client, _ = self._make_client()
+		resp = client.post("/api/backlog/nonexistent/pin", json={"score": 5.0})
+		assert resp.status_code == 404
+
+	def test_delete_backlog_soft(self) -> None:
+		client, db = self._make_client()
+		resp = client.delete("/api/backlog/bl2")
+		assert resp.status_code == 200
+		item = db.get_backlog_item("bl2")
+		assert item is not None
+		assert item.status == "rejected"
+
+	def test_delete_backlog_not_found(self) -> None:
+		client, _ = self._make_client()
+		resp = client.delete("/api/backlog/nonexistent")
+		assert resp.status_code == 404
+
+	def test_snapshot_includes_backlog(self) -> None:
+		db = _setup_db_with_backlog()
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+
+		snapshot = dashboard._build_snapshot()
+		assert "backlog" in snapshot
+		assert len(snapshot["backlog"]) == 3
+		assert "active_backlog_ids" in snapshot
+		assert "bl1" in snapshot["active_backlog_ids"]
+		assert "bl2" not in snapshot["active_backlog_ids"]
+
+
+class TestBacklogSerialization:
+	def test_serialize_backlog_item(self) -> None:
+		now = _now_iso()
+		item = BacklogItem(
+			id="bl-test", title="Test", description="A" * 600,
+			impact=8, effort=3, priority_score=6.4, track="feature",
+			status="pending", tags="test,demo",
+			created_at=now, updated_at=now,
+		)
+		result = _serialize_backlog_item(item)
+		assert result["id"] == "bl-test"
+		assert result["title"] == "Test"
+		assert len(result["description"]) <= 500
+		assert result["impact"] == 8
+		assert result["tags"] == "test,demo"
+
+
+class TestBacklogMapping:
+	def test_regex_matching(self) -> None:
+		now = _now_iso()
+		units = [
+			WorkUnit(id="wu-x", title="Fix auth backlog_item_id=bl1", description=""),
+		]
+		backlog = [
+			BacklogItem(id="bl1", title="Fix auth bug", status="in_progress", created_at=now, updated_at=now),
+		]
+		mapping = LiveDashboard._build_unit_backlog_mapping(units, backlog)
+		assert "wu-x" in mapping
+		assert "bl1" in mapping["wu-x"]
+
+	def test_keyword_fallback(self) -> None:
+		now = _now_iso()
+		units = [
+			WorkUnit(id="wu-y", title="Fix authentication bug in login", description=""),
+		]
+		backlog = [
+			BacklogItem(
+				id="bl-auth", title="Fix authentication bug",
+				status="in_progress", created_at=now, updated_at=now,
+			),
+		]
+		mapping = LiveDashboard._build_unit_backlog_mapping(units, backlog)
+		assert "wu-y" in mapping
+		assert "bl-auth" in mapping["wu-y"]
+
+	def test_keyword_fallback_insufficient_overlap(self) -> None:
+		now = _now_iso()
+		units = [
+			WorkUnit(id="wu-z", title="Add new feature", description=""),
+		]
+		backlog = [
+			BacklogItem(id="bl-unrelated", title="Fix auth bug", status="in_progress", created_at=now, updated_at=now),
+		]
+		mapping = LiveDashboard._build_unit_backlog_mapping(units, backlog)
+		assert "wu-z" not in mapping
+
+	def test_snapshot_includes_mapping(self) -> None:
+		db = _setup_db_with_backlog()
+		# Add a unit that references a backlog item
+		plan = db.conn.execute("SELECT id FROM plans LIMIT 1").fetchone()
+		unit = WorkUnit(
+			id="wu-linked", plan_id=plan["id"],
+			title="Work on auth backlog_item_id=bl1",
+			status="running", epoch_id="ep1",
+		)
+		db.insert_work_unit(unit)
+
+		dashboard = LiveDashboard.__new__(LiveDashboard)
+		dashboard.db = db
+
+		snapshot = dashboard._build_snapshot()
+		assert "unit_backlog_map" in snapshot
+		assert "wu-linked" in snapshot["unit_backlog_map"]
+		assert "bl1" in snapshot["unit_backlog_map"]["wu-linked"]

@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
-from mission_control.config import load_config, validate_config
+from mission_control.config import MissionConfig, load_config, validate_config
 from mission_control.db import Database
+from mission_control.models import Mission
 from mission_control.priority import parse_backlog_md_text as parse_backlog_md
 from mission_control.priority import recalculate_priorities as recalculate_priorities_db
 
@@ -134,6 +136,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 	# mc priority recalc
 	priority_sub.add_parser("recalc", help="Recalculate all priority scores")
+
+	# mc priority export
+	pexport = priority_sub.add_parser("export", help="Export backlog queue to markdown")
+	pexport.add_argument("--file", default=None, help="Output file (default: stdout)")
+	pexport.add_argument("--status", default=None, help="Filter by status")
 
 	return parser
 
@@ -266,6 +273,63 @@ def _print_discovery_table(items: list) -> None:
 	print(f"\nTotal: {len(items)} items")
 
 
+def _is_cleanup_mission(mission: Mission) -> bool:
+	"""Check if a mission is a cleanup mission by convention prefix."""
+	return mission.objective.startswith("[CLEANUP]")
+
+
+def _is_cleanup_due(db: Database, interval: int) -> bool:
+	"""Check if a cleanup mission is due based on completed non-cleanup missions since last cleanup."""
+	missions = db.get_all_missions(limit=interval + 5)
+	count_since_cleanup = 0
+	for m in missions:
+		if m.status not in ("completed", "stopped"):
+			continue
+		if _is_cleanup_mission(m):
+			break
+		count_since_cleanup += 1
+	return count_since_cleanup >= interval
+
+
+def _build_cleanup_objective(config: MissionConfig) -> str:
+	"""Build a cleanup mission objective with current test suite metrics."""
+	target_path = str(config.target.resolved_path)
+	num_files = 0
+	num_tests = 0
+
+	try:
+		result = subprocess.run(
+			["find", "tests", "-name", "test_*.py"],
+			capture_output=True, text=True, cwd=target_path, timeout=10,
+		)
+		if result.returncode == 0:
+			num_files = len([line for line in result.stdout.strip().splitlines() if line])
+	except (subprocess.TimeoutExpired, OSError):
+		pass
+
+	try:
+		result = subprocess.run(
+			["pytest", "--co", "-q"],
+			capture_output=True, text=True, cwd=target_path, timeout=30,
+		)
+		if result.returncode == 0:
+			# Last line of pytest --co -q is "N tests collected"
+			for line in reversed(result.stdout.strip().splitlines()):
+				if "test" in line:
+					parts = line.split()
+					if parts and parts[0].isdigit():
+						num_tests = int(parts[0])
+					break
+	except (subprocess.TimeoutExpired, OSError):
+		pass
+
+	return (
+		f"[CLEANUP] Consolidate test suite: {num_files} files, {num_tests} tests. "
+		"Merge test files for the same module, consolidate small test classes, "
+		"remove dead code. All tests must pass."
+	)
+
+
 def cmd_mission(args: argparse.Namespace) -> int:
 	"""Run the continuous mission mode (outer loop)."""
 	config = load_config(args.config)
@@ -376,6 +440,15 @@ def cmd_mission(args: argparse.Namespace) -> int:
 	last_result = None
 
 	while True:
+		# Check if a cleanup mission is due (only when chaining is enabled)
+		if config.continuous.cleanup_enabled and args.chain:
+			with Database(db_path) as db:
+				if _is_cleanup_due(db, config.continuous.cleanup_interval):
+					cleanup_obj = _build_cleanup_objective(config)
+					config.target.objective = cleanup_obj
+					print(f"\n--- Cleanup mission triggered (every {config.continuous.cleanup_interval} missions) ---")
+					print(f"Objective: {cleanup_obj}")
+
 		with Database(db_path) as db:
 			controller = ContinuousController(config, db)
 			if args.strategist:
@@ -854,11 +927,105 @@ def cmd_priority_recalc(args: argparse.Namespace) -> int:
 		return 0
 
 
+def _render_backlog_markdown(items: list, status_filter: str | None = None) -> str:
+	"""Render backlog items as grouped markdown."""
+	from mission_control.models import BacklogItem
+
+	status_order = ["in_progress", "pending", "completed", "deferred"]
+	grouped: dict[str, list[BacklogItem]] = {}
+	for item in items:
+		grouped.setdefault(item.status, []).append(item)
+
+	lines: list[str] = ["# Backlog Queue", ""]
+	if status_filter:
+		lines.append(f"*Filtered by status: {status_filter}*")
+		lines.append("")
+
+	any_items = False
+	for status in status_order:
+		group = grouped.get(status, [])
+		if not group:
+			continue
+		any_items = True
+		# Sort by priority_score descending within group
+		group.sort(key=lambda x: x.priority_score, reverse=True)
+		lines.append(f"## {status.replace('_', ' ').title()} ({len(group)})")
+		lines.append("")
+		for item in group:
+			lines.append(f"### {item.title}")
+			lines.append(
+				f"- **Score**: {item.priority_score:.1f} | **Impact**: {item.impact} | **Effort**: {item.effort}"
+			)
+			if item.track:
+				lines.append(f"- **Track**: {item.track}")
+			if item.tags:
+				lines.append(f"- **Tags**: {item.tags}")
+			if item.attempt_count > 0:
+				lines.append(f"- **Attempts**: {item.attempt_count}")
+			if item.description:
+				desc = item.description[:200]
+				if len(item.description) > 200:
+					desc += "..."
+				lines.append(f"- {desc}")
+			lines.append("")
+
+	# Include any statuses not in the predefined order
+	for status, group in grouped.items():
+		if status not in status_order:
+			any_items = True
+			group.sort(key=lambda x: x.priority_score, reverse=True)
+			lines.append(f"## {status.replace('_', ' ').title()} ({len(group)})")
+			lines.append("")
+			for item in group:
+				lines.append(f"### {item.title}")
+				lines.append(
+				f"- **Score**: {item.priority_score:.1f} | **Impact**: {item.impact} | **Effort**: {item.effort}"
+			)
+				if item.track:
+					lines.append(f"- **Track**: {item.track}")
+				if item.tags:
+					lines.append(f"- **Tags**: {item.tags}")
+				if item.attempt_count > 0:
+					lines.append(f"- **Attempts**: {item.attempt_count}")
+				if item.description:
+					desc = item.description[:200]
+					if len(item.description) > 200:
+						desc += "..."
+					lines.append(f"- {desc}")
+				lines.append("")
+
+	if not any_items:
+		lines.append("*No backlog items.*")
+		lines.append("")
+
+	return "\n".join(lines)
+
+
+def cmd_priority_export(args: argparse.Namespace) -> int:
+	"""Export backlog queue to markdown."""
+	db_path = _get_db_path(args.config)
+	if not db_path.exists():
+		print("No database found. Run 'mc start' first.")
+		return 1
+
+	with Database(db_path) as db:
+		recalculate_priorities_db(db)
+		items = db.list_backlog_items(status=args.status, limit=1000)
+		md = _render_backlog_markdown(items, status_filter=args.status)
+
+		if args.file:
+			Path(args.file).write_text(md)
+			print(f"Exported {len(items)} items to {args.file}")
+		else:
+			print(md)
+		return 0
+
+
 def cmd_priority(args: argparse.Namespace) -> int:
 	"""Dispatch priority subcommands."""
 	subcmd = getattr(args, "priority_command", None)
 	if subcmd is None:
-		print("Usage: mc priority {list|set|defer|import|recalc}")
+		print("Usage: mc priority {list|set|defer|import|recalc|export}")
 		return 1
 	handler = _PRIORITY_COMMANDS.get(subcmd)
 	if handler is None:
@@ -873,6 +1040,7 @@ _PRIORITY_COMMANDS = {
 	"defer": cmd_priority_defer,
 	"import": cmd_priority_import,
 	"recalc": cmd_priority_recalc,
+	"export": cmd_priority_export,
 }
 
 
