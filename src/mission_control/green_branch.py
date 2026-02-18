@@ -57,6 +57,7 @@ class UnitMergeResult:
 	verification_passed: bool = False
 	failure_output: str = ""
 	failure_stage: str = ""
+	merge_commit_hash: str = ""
 
 
 class GreenBranchManager:
@@ -209,6 +210,9 @@ class GreenBranchManager:
 						failure_stage="fast_forward",
 					)
 
+				# Capture the merge commit hash before state file commit
+				_, merge_hash = await self._run_git("rev-parse", "HEAD")
+				merge_commit_hash = merge_hash.strip()
 				logger.info("Merged %s directly into %s", branch_name, gb.green_branch)
 
 				# Commit MISSION_STATE.md into mc/green if it exists
@@ -236,6 +240,7 @@ class GreenBranchManager:
 					merged=True,
 					rebase_ok=True,
 					verification_passed=True,
+					merge_commit_hash=merge_commit_hash,
 				)
 			finally:
 				# Clean up remote and temp branch

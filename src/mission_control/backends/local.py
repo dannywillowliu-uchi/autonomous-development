@@ -91,6 +91,15 @@ class LocalBackend(WorkerBackend):
 				f"Failed to create branch {branch_name}: "
 				f"{stdout.decode(errors='replace')}"
 			)
+
+		# Symlink source .venv into worker workspace for verification commands.
+		# _reset_clone() runs git clean -fdx which deletes symlinks, so this
+		# must be recreated on every provision.
+		source_venv = Path(source_repo) / ".venv"
+		workspace_venv = Path(workspace) / ".venv"
+		if source_venv.exists() and not workspace_venv.exists():
+			workspace_venv.symlink_to(source_venv)
+
 		return str(workspace)
 
 	async def spawn(

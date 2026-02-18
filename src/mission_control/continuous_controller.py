@@ -1193,6 +1193,7 @@ class ContinuousController:
 							if self.config.review.gate_completion:
 								review = await self._blocking_review(
 									unit, workspace, mission, epoch,
+									merge_commit_hash=merge_result.merge_commit_hash,
 								)
 								if review and review.avg_score < self.config.review.min_review_score:
 									logger.warning(
@@ -1207,6 +1208,7 @@ class ContinuousController:
 								task = asyncio.create_task(
 									self._review_merged_unit(
 										unit, workspace, mission, epoch,
+										merge_commit_hash=merge_result.merge_commit_hash,
 									),
 								)
 								self._active_tasks.add(task)
@@ -1498,11 +1500,15 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		workspace: str,
 		mission: Mission,
 		epoch: Epoch,
+		merge_commit_hash: str = "",
 	) -> UnitReview | None:
 		"""Blocking review: returns UnitReview for gating decisions."""
 		try:
-			green_branch = self.config.green_branch.green_branch
-			diff_cmd = ["git", "diff", f"{green_branch}~1..{green_branch}", "--", "."]
+			if merge_commit_hash:
+				diff_cmd = ["git", "diff", f"{merge_commit_hash}^..{merge_commit_hash}", "--", "."]
+			else:
+				green_branch = self.config.green_branch.green_branch
+				diff_cmd = ["git", "diff", f"{green_branch}~1..{green_branch}", "--", "."]
 			proc = await asyncio.create_subprocess_exec(
 				*diff_cmd,
 				stdout=asyncio.subprocess.PIPE,
@@ -1541,12 +1547,16 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		workspace: str,
 		mission: Mission,
 		epoch: Epoch,
+		merge_commit_hash: str = "",
 	) -> None:
 		"""Fire-and-forget: review a merged unit's diff via LLM."""
 		try:
-			# Get the diff from the green branch
-			green_branch = self.config.green_branch.green_branch
-			diff_cmd = ["git", "diff", f"{green_branch}~1..{green_branch}", "--", "."]
+			# Get the diff from the merge commit (not mc/green HEAD which may be MISSION_STATE.md)
+			if merge_commit_hash:
+				diff_cmd = ["git", "diff", f"{merge_commit_hash}^..{merge_commit_hash}", "--", "."]
+			else:
+				green_branch = self.config.green_branch.green_branch
+				diff_cmd = ["git", "diff", f"{green_branch}~1..{green_branch}", "--", "."]
 			proc = await asyncio.create_subprocess_exec(
 				*diff_cmd,
 				stdout=asyncio.subprocess.PIPE,
