@@ -130,12 +130,14 @@ class ContinuousController:
 		self._failure_backoff_until: float = 0.0
 		self._all_fail_stop_reason: str = ""
 		self._in_flight_count: int = 0
+		self._deferred_units: list[tuple[WorkUnit, Epoch, Mission]] = []
 		self._db_error_count: int = 0
 		self._db_degraded: bool = False
 		self.ambition_score: float = 0.0
 		self.proposed_by_strategist: bool = False
 		self._objective_check_count: int = 0
 		self._strategist: Strategist | None = None
+		self._is_cleanup_mission: bool = config.target.objective.startswith("[CLEANUP]")
 		self._diff_reviewer: DiffReviewer = DiffReviewer(config)
 		self._backlog_manager: BacklogManager = BacklogManager(db, config)
 		budget = config.scheduler.budget
@@ -747,6 +749,97 @@ class ContinuousController:
 			enable_recovery=hb.enable_recovery,
 		)
 
+	def _check_in_flight_overlap(self, unit: WorkUnit) -> bool:
+		"""Check if a unit overlaps with any currently running units.
+
+		Returns True if the unit should be deferred (overlap detected).
+		"""
+		try:
+			rows = self.db.conn.execute(
+				"SELECT * FROM work_units WHERE status='running' AND id != ?",
+				(unit.id,),
+			).fetchall()
+			running_units = [Database._row_to_work_unit(r) for r in rows]
+		except Exception as exc:
+			logger.warning("Could not query running units for overlap check: %s", exc)
+			return False
+
+		unit_files = _parse_files_hint(unit.files_hint)
+
+		for other in running_units:
+			other_files = _parse_files_hint(other.files_hint)
+
+			if unit_files and other_files:
+				# Both have populated hints -- check file overlap
+				if unit_files & other_files:
+					return True
+			elif not unit_files and not other_files:
+				# Both unknown scope -- block concurrent execution
+				return True
+			# One empty, one populated -- allow (can't determine overlap)
+
+		return False
+
+	async def _dispatch_deferred(
+		self,
+		mission: Mission,
+		epoch_map: dict[str, Epoch],
+		semaphore: asyncio.Semaphore,
+	) -> None:
+		"""Try to dispatch previously deferred units that no longer overlap."""
+		if not self._deferred_units:
+			return
+
+		still_deferred: list[tuple[WorkUnit, Epoch, Mission]] = []
+		for unit, epoch, mission_ref in self._deferred_units:
+			if self._check_in_flight_overlap(unit):
+				still_deferred.append((unit, epoch, mission_ref))
+				continue
+
+			# No longer overlapping -- dispatch
+			logger.info(
+				"Dispatching previously deferred unit %s: %s",
+				unit.id[:12], unit.title[:60],
+			)
+			await semaphore.acquire()
+			self._in_flight_count += 1
+			try:
+				self.db.insert_work_unit(unit)
+			except Exception as exc:
+				logger.error(
+					"Failed to insert deferred work unit: %s", exc, exc_info=True,
+				)
+				self._in_flight_count -= 1
+				semaphore.release()
+				continue
+
+			self._log_unit_event(
+				mission_id=mission_ref.id,
+				epoch_id=epoch.id,
+				work_unit_id=unit.id,
+				event_type="dispatched",
+				stream_details={"title": unit.title, "files": unit.files_hint, "deferred": True},
+			)
+			self._total_dispatched += 1
+
+			task = asyncio.create_task(
+				self._execute_single_unit(unit, epoch, mission_ref, semaphore),
+			)
+			self._active_tasks.add(task)
+			self._unit_tasks[unit.id] = task
+
+			def _on_task_done(t: asyncio.Task[None], uid: str = unit.id) -> None:
+				self._active_tasks.discard(t)
+				self._unit_tasks.pop(uid, None)
+				if not t.cancelled():
+					exc = t.exception()
+					if exc is not None:
+						logger.error("Fire-and-forget task failed: %s", exc, exc_info=exc)
+
+			task.add_done_callback(_on_task_done)
+
+		self._deferred_units = still_deferred
+
 	async def _dispatch_loop(
 		self,
 		mission: Mission,
@@ -762,8 +855,12 @@ class ContinuousController:
 		semaphore = asyncio.Semaphore(num_workers)
 		self._semaphore = semaphore
 		cooldown = self.config.continuous.cooldown_between_units
+		epoch_map: dict[str, Epoch] = {}
 
 		while self.running:
+			# Try to dispatch previously deferred units before planning new ones
+			await self._dispatch_deferred(mission, epoch_map, semaphore)
+
 			# Honor pause state
 			if self._paused:
 				await asyncio.sleep(1)
@@ -933,6 +1030,8 @@ class ContinuousController:
 			except Exception as exc:
 				logger.error("Failed to insert epoch: %s", exc, exc_info=True)
 
+			epoch_map[epoch.id] = epoch
+
 			# Track this round for all-fail detection
 			self._round_tracker[epoch.id] = _RoundTracker(
 				unit_ids={u.id for u in units},
@@ -942,11 +1041,21 @@ class ContinuousController:
 
 			# Dispatch each unit
 			for unit in units:
+				unit.epoch_id = epoch.id
+
+				# Cross-epoch overlap check: defer if overlapping with in-flight work
+				if self._check_in_flight_overlap(unit):
+					logger.warning(
+						"Deferring unit %s: overlaps with in-flight work",
+						unit.id[:12],
+					)
+					self._deferred_units.append((unit, epoch, mission))
+					continue
+
 				logger.info("Waiting for semaphore to dispatch unit %s: %s", unit.id[:12], unit.title[:60])
 				await semaphore.acquire()
 				self._in_flight_count += 1
 				logger.info("Semaphore acquired, dispatching unit %s", unit.id[:12])
-				unit.epoch_id = epoch.id
 				try:
 					self.db.insert_work_unit(unit)
 				except Exception as exc:
@@ -1769,6 +1878,9 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 						overlap_warnings = "\n".join(conflicts)
 			except Exception as exc:
 				logger.warning("Could not compute overlap warnings: %s", exc)
+
+			if self._is_cleanup_mission and not unit.specialist:
+				unit.specialist = "simplifier"
 
 			specialist_template = load_specialist_template(unit.specialist, self.config)
 

@@ -2245,3 +2245,125 @@ class TestDbErrorBudget:
 		assert ctrl._db_degraded is False
 		assert ctrl._db_error_count == 0
 
+
+class TestInFlightOverlapCheck:
+	"""Tests for _check_in_flight_overlap cross-epoch guard."""
+
+	def _insert_running_unit(
+		self, db: Database, unit_id: str, files_hint: str,
+	) -> WorkUnit:
+		"""Insert a running work unit into the DB."""
+		plan = Plan(id=f"plan-{unit_id}", objective="test")
+		db.insert_plan(plan)
+		unit = WorkUnit(
+			id=unit_id,
+			plan_id=plan.id,
+			title=f"Running {unit_id}",
+			files_hint=files_hint,
+			status="running",
+		)
+		db.insert_work_unit(unit)
+		return unit
+
+	def test_overlapping_files_detected(self, config: MissionConfig, db: Database) -> None:
+		"""Unit with files_hint overlapping a running unit returns True."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		self._insert_running_unit(db, "running-1", "shared.py,other.py")
+
+		ctrl = ContinuousController(config, db)
+		candidate = WorkUnit(
+			id="candidate-1",
+			plan_id="plan-running-1",
+			title="Candidate",
+			files_hint="shared.py,new.py",
+		)
+		assert ctrl._check_in_flight_overlap(candidate) is True
+
+	def test_no_overlap_passes(self, config: MissionConfig, db: Database) -> None:
+		"""Unit with disjoint files_hint returns False."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		self._insert_running_unit(db, "running-1", "a.py,b.py")
+
+		ctrl = ContinuousController(config, db)
+		candidate = WorkUnit(
+			id="candidate-1",
+			plan_id="plan-running-1",
+			title="Candidate",
+			files_hint="c.py,d.py",
+		)
+		assert ctrl._check_in_flight_overlap(candidate) is False
+
+	def test_both_empty_hints_blocked(self, config: MissionConfig, db: Database) -> None:
+		"""Unit with empty files_hint blocked when another empty-hint unit is running."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		self._insert_running_unit(db, "running-1", "")
+
+		ctrl = ContinuousController(config, db)
+		candidate = WorkUnit(
+			id="candidate-1",
+			plan_id="plan-running-1",
+			title="Candidate",
+			files_hint="",
+		)
+		assert ctrl._check_in_flight_overlap(candidate) is True
+
+	def test_one_empty_hint_allowed(self, config: MissionConfig, db: Database) -> None:
+		"""Unit with empty files_hint allowed when all running units have populated hints."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		self._insert_running_unit(db, "running-1", "a.py,b.py")
+
+		ctrl = ContinuousController(config, db)
+		candidate = WorkUnit(
+			id="candidate-1",
+			plan_id="plan-running-1",
+			title="Candidate",
+			files_hint="",
+		)
+		assert ctrl._check_in_flight_overlap(candidate) is False
+
+
+class TestDeferredUnitRecovery:
+	"""Tests for deferred unit dispatch after blockers complete."""
+
+	def test_deferred_unit_dispatched_after_blocker_completes(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""Deferred unit gets dispatched once the overlapping unit finishes."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		# Insert a running unit that will block
+		blocker = WorkUnit(
+			id="blocker-1",
+			plan_id="p1",
+			title="Blocker",
+			files_hint="shared.py",
+			status="running",
+		)
+		db.insert_work_unit(blocker)
+
+		ctrl = ContinuousController(config, db)
+		ctrl._semaphore = asyncio.Semaphore(2)
+
+		# Create a deferred unit that overlaps with the blocker
+		deferred_unit = WorkUnit(
+			id="deferred-1",
+			plan_id="p1",
+			title="Deferred",
+			files_hint="shared.py",
+			epoch_id="ep1",
+		)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		# The unit should be blocked initially
+		assert ctrl._check_in_flight_overlap(deferred_unit) is True
+
+		# Simulate the blocker completing
+		blocker.status = "completed"
+		db.update_work_unit(blocker)
+
+		# Now it should no longer be blocked
+		assert ctrl._check_in_flight_overlap(deferred_unit) is False
+
