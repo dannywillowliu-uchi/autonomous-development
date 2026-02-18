@@ -680,7 +680,7 @@ class TestControllerStrategistIntegration:
 			patch.object(ctrl, "_score_ambition", return_value=2),
 			patch("mission_control.continuous_controller.EventStream"),
 		):
-			result = await asyncio.wait_for(ctrl.run(), timeout=5.0)
+			await asyncio.wait_for(ctrl.run(), timeout=5.0)
 
 		# Planner called: 1 (initial) + 2 (replans) + 1 (next loop, returns []) = 4
 		assert mock_planner.get_next_units.call_count >= 3

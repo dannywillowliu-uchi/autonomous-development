@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mission_control.config import MissionConfig, PricingConfig, load_config
+from mission_control.config import PricingConfig, load_config
 from mission_control.token_parser import TokenUsage, compute_token_cost, parse_stream_json
 
 
