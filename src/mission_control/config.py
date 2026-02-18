@@ -261,6 +261,13 @@ class ModelsConfig:
 
 
 @dataclass
+class SpecialistConfig:
+	"""Specialist template settings."""
+
+	templates_dir: str = str(Path(__file__).parent / "specialist_templates")
+
+
+@dataclass
 class MissionConfig:
 	"""Top-level mission-control configuration."""
 
@@ -279,6 +286,7 @@ class MissionConfig:
 	dashboard: DashboardConfig = field(default_factory=DashboardConfig)
 	deploy: DeployConfig = field(default_factory=DeployConfig)
 	models: ModelsConfig = field(default_factory=ModelsConfig)
+	specialist: SpecialistConfig = field(default_factory=SpecialistConfig)
 
 
 def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
@@ -543,6 +551,13 @@ def _build_models(data: dict[str, Any]) -> ModelsConfig:
 	return mc
 
 
+def _build_specialist(data: dict[str, Any]) -> SpecialistConfig:
+	sc = SpecialistConfig()
+	if "templates_dir" in data:
+		sc.templates_dir = str(data["templates_dir"])
+	return sc
+
+
 def _build_deploy(data: dict[str, Any]) -> DeployConfig:
 	dc = DeployConfig()
 	if "enabled" in data:
@@ -624,6 +639,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.deploy = _build_deploy(data["deploy"])
 	if "models" in data:
 		mc.models = _build_models(data["models"])
+	if "specialist" in data:
+		mc.specialist = _build_specialist(data["specialist"])
 	# Allow env vars as fallback for Telegram credentials
 	tg = mc.notifications.telegram
 	if not tg.bot_token:
