@@ -7,6 +7,15 @@ Objective: Implement two features from BACKLOG.md:
 
 Read BACKLOG.md for full specs. Each feature: implement, add tests, ensure all existing tests pass.
 
+## Completed
+- [x] bccfbe18 (2026-02-18T02:33:03.318134+00:00) -- Added specialist templates infrastructure: SpecialistConfig in config.py, specialist field on WorkUn (files: src/mission_control/config.py, src/mission_control/models.py, src/mission_control/db.py, src/mission_control/specialist.py, src/mission_control/specialist_templates/test-writer.md)
+
+## Files Modified
+src/mission_control/config.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/specialist.py, src/mission_control/specialist_templates/debugger.md, src/mission_control/specialist_templates/refactorer.md, src/mission_control/specialist_templates/test-writer.md
+
 ## Remaining
 The planner should focus on what hasn't been done yet.
 Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
+
+## Changelog
+- 2026-02-18T02:33:03.318134+00:00 | bccfbe18 merged (commit: 96d5ca2) -- Added specialist templates infrastructure: SpecialistConfig in config.py, specia
