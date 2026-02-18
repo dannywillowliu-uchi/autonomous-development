@@ -152,6 +152,7 @@ class WorkUnit:
 	epoch_id: str | None = None  # continuous mode epoch
 	specialist: str = ""  # specialist template name (e.g. "test-writer")
 	acceptance_criteria: str = ""  # what must be true for this unit to be "done"
+	specialist: str = ""  # specialist type: test-writer, refactorer, debugger, or empty for general
 	input_tokens: int = 0
 	output_tokens: int = 0
 	cost_usd: float = 0.0
