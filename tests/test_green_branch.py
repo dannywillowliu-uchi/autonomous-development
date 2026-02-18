@@ -45,20 +45,21 @@ def _manager() -> GreenBranchManager:
 
 
 class TestMergeUnit:
-	"""Tests for merge_unit() -- merge-only path without verification."""
+	"""Tests for merge_unit() -- merge with smoke-test verification."""
 
 	async def test_successful_merge(self) -> None:
-		"""Successful merge: merged=True, no verification run."""
+		"""Successful merge: merged=True, verification passes."""
 		mgr = _manager()
 		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(True, "all tests passed"))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
 		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
 
 		assert result.merged is True
 		assert result.rebase_ok is True
-		# Verify no _run_command was called (no verification)
-		assert not hasattr(mgr, "_run_command") or not getattr(mgr._run_command, "called", False)
+		assert result.verification_passed is True
+		mgr._run_command.assert_awaited_once_with("pytest -q")
 		mgr._sync_to_source.assert_awaited_once()
 
 	async def test_merge_conflict(self) -> None:
@@ -83,6 +84,7 @@ class TestMergeUnit:
 		mgr = _manager()
 		mgr.config.green_branch.auto_push = True
 		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 		mgr.push_green_to_main = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
@@ -90,6 +92,84 @@ class TestMergeUnit:
 
 		assert result.merged is True
 		mgr.push_green_to_main.assert_awaited_once()
+
+
+class TestMergeUnitVerification:
+	"""Tests for smoke-test verification in merge_unit()."""
+
+	async def test_verification_pass_allows_merge(self) -> None:
+		"""When verification passes, merge succeeds with verification_passed=True."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(True, "12 passed"))  # type: ignore[method-assign]
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/verified")
+
+		assert result.merged is True
+		assert result.verification_passed is True
+		assert result.failure_output == ""
+		assert result.failure_stage == ""
+		mgr._run_command.assert_awaited_once_with("pytest -q")
+
+	async def test_verification_fail_blocks_merge(self) -> None:
+		"""When verification fails, merge is blocked with failure details."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(False, "FAILED test_foo.py::test_bar - AssertionError"))  # type: ignore[method-assign]
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/broken")
+
+		assert result.merged is False
+		assert result.verification_passed is False
+		assert result.failure_stage == "verification"
+		assert "FAILED" in result.failure_output
+		mgr._sync_to_source.assert_not_awaited()
+
+	async def test_verification_failure_output_preserved(self) -> None:
+		"""Full verification output is captured in failure_output."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		failure_text = "FAILED tests/test_api.py::test_auth\nERROR tests/test_db.py::test_connect\n2 failed, 1 error"
+		mgr._run_command = AsyncMock(return_value=(False, failure_text))  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/multi-fail")
+
+		assert result.failure_output == failure_text
+
+	async def test_verification_runs_configured_command(self) -> None:
+		"""Verification uses the command from config.target.verification.command."""
+		mgr = _manager()
+		mgr.config.target.verification.command = "make test && make lint"
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(True, "ok"))  # type: ignore[method-assign]
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		await mgr.merge_unit("/tmp/worker", "feat/custom-cmd")
+
+		mgr._run_command.assert_awaited_once_with("make test && make lint")
+
+	async def test_verification_failure_cleans_up(self) -> None:
+		"""On verification failure, temp branch and remote are cleaned up."""
+		mgr = _manager()
+		git_calls: list[tuple[str, ...]] = []
+
+		async def tracking_git(*args: str) -> tuple[bool, str]:
+			git_calls.append(args)
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=tracking_git)
+		mgr._run_command = AsyncMock(return_value=(False, "tests failed"))  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/cleanup-test")
+
+		assert result.merged is False
+		# Verify cleanup happened (finally block runs): branch -D and remote remove
+		cleanup_cmds = [c for c in git_calls if c[0] == "branch" and c[1] == "-D" and "mc/merge-" in c[2]]
+		assert len(cleanup_cmds) >= 1
+		remote_removes = [c for c in git_calls if c[0] == "remote" and c[1] == "remove"]
+		assert len(remote_removes) >= 1
 
 
 class TestPushGreenToMain:
@@ -322,6 +402,7 @@ class TestParallelMergeConflicts:
 		"""3 workers modify the same file; only 1 merge succeeds, 2 get conflicts."""
 		mgr = _manager()
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 
 		# Track mc/green state: first --no-ff merge succeeds, subsequent ones conflict
 		# because the green branch has advanced.
@@ -363,6 +444,7 @@ class TestParallelMergeConflicts:
 		"""_merge_lock serializes concurrent merge attempts (no true parallelism)."""
 		mgr = _manager()
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 
 		execution_order: list[str] = []
 
@@ -470,6 +552,7 @@ class TestRunDeploy:
 		mgr = GreenBranchManager(config, db)
 		mgr.workspace = "/tmp/test-workspace"
 		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 		mgr.push_green_to_main = AsyncMock(return_value=True)  # type: ignore[method-assign]
 		mgr.run_deploy = AsyncMock(return_value=(True, "ok"))  # type: ignore[method-assign]
@@ -812,6 +895,7 @@ class TestMergeUnitCommitsState:
 
 		mgr = _state_manager(target_path=str(target_dir), workspace=str(workspace))
 		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 		mgr.commit_state_file = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
@@ -833,6 +917,7 @@ class TestMergeUnitCommitsState:
 
 		mgr = _state_manager(target_path=str(target_dir), workspace=str(workspace))
 		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 		mgr.commit_state_file = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
