@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from mission_control.config import ContinuousConfig, MissionConfig, load_config
+from mission_control.config import ContinuousConfig, load_config
 from mission_control.db import Database
 from mission_control.models import Epoch, UnitEvent, WorkUnit
 
