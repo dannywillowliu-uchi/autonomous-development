@@ -62,7 +62,7 @@ verify_objective_completion = true
 max_objective_checks = 2
 
 [review]
-gate_completion = false
+gate_completion = true
 min_review_score = 3.0
 
 [green_branch]
