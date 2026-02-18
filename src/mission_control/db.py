@@ -516,6 +516,19 @@ class Database:
 		self._migrate_experiment_mode_column()
 		self._migrate_context_items_mission_columns()
 		self._migrate_acceptance_criteria_columns()
+		self._migrate_specialist_column()
+
+	def _migrate_specialist_column(self) -> None:
+		"""Add specialist column to work_units table (idempotent)."""
+		try:
+			self.conn.execute("ALTER TABLE work_units ADD COLUMN specialist TEXT NOT NULL DEFAULT ''")
+			logger.debug("Migration: added column work_units.specialist")
+		except sqlite3.OperationalError as exc:
+			if "duplicate column name" in str(exc):
+				logger.debug("Migration: work_units.specialist already exists")
+			else:
+				logger.warning("Migration failed for work_units.specialist: %s", exc)
+				raise
 
 	def _migrate_context_items_mission_columns(self) -> None:
 		"""Add mission_id and scope_level columns to context_items (idempotent)."""
@@ -937,8 +950,9 @@ class Database:
 			 exit_code, commit_hash, output_summary, attempt, max_attempts,
 			 unit_type, timeout, verification_command,
 			 epoch_id, input_tokens, output_tokens, cost_usd, experiment_mode,
-			 acceptance_criteria)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			 acceptance_criteria, specialist)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				unit.id, unit.plan_id, unit.title, unit.description,
 				unit.files_hint, unit.verification_hint, unit.priority,
@@ -949,7 +963,7 @@ class Database:
 				unit.output_summary, unit.attempt, unit.max_attempts,
 				unit.unit_type, unit.timeout, unit.verification_command,
 				unit.epoch_id, unit.input_tokens, unit.output_tokens, unit.cost_usd,
-				int(unit.experiment_mode), unit.acceptance_criteria,
+				int(unit.experiment_mode), unit.acceptance_criteria, unit.specialist,
 			),
 		)
 		self.conn.commit()
@@ -966,7 +980,7 @@ class Database:
 			output_summary=?, attempt=?, max_attempts=?,
 			unit_type=?, timeout=?, verification_command=?,
 			epoch_id=?, input_tokens=?, output_tokens=?, cost_usd=?,
-			experiment_mode=?, acceptance_criteria=?
+			experiment_mode=?, acceptance_criteria=?, specialist=?
 			WHERE id=?""",
 			(
 				unit.plan_id, unit.title, unit.description, unit.files_hint,
@@ -978,7 +992,7 @@ class Database:
 				unit.output_summary, unit.attempt, unit.max_attempts,
 				unit.unit_type, unit.timeout, unit.verification_command,
 				unit.epoch_id, unit.input_tokens, unit.output_tokens, unit.cost_usd,
-				int(unit.experiment_mode), unit.acceptance_criteria,
+				int(unit.experiment_mode), unit.acceptance_criteria, unit.specialist,
 				unit.id,
 			),
 		)
@@ -1135,6 +1149,7 @@ class Database:
 			cost_usd=row["cost_usd"] if "cost_usd" in keys else 0.0,
 			experiment_mode=bool(row["experiment_mode"]) if "experiment_mode" in keys else False,
 			acceptance_criteria=row["acceptance_criteria"] if "acceptance_criteria" in keys else "",
+			specialist=row["specialist"] if "specialist" in keys else "",
 		)
 
 	# -- Workers --

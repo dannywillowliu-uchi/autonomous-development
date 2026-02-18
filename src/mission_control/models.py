@@ -150,6 +150,7 @@ class WorkUnit:
 	timeout: int | None = None  # per-unit timeout override (seconds)
 	verification_command: str | None = None  # per-unit verification override
 	epoch_id: str | None = None  # continuous mode epoch
+	specialist: str = ""  # specialist template name (e.g. "test-writer")
 	acceptance_criteria: str = ""  # what must be true for this unit to be "done"
 	input_tokens: int = 0
 	output_tokens: int = 0
