@@ -21,6 +21,28 @@ def _sanitize_braces(s: str) -> str:
 	return s.replace("{", "{{").replace("}", "}}")
 
 
+VALID_SPECIALISTS = {"test-writer", "refactorer", "debugger"}
+
+
+def load_specialist_template(specialist: str, config: MissionConfig) -> str:
+	"""Load a specialist template from the specialist_templates directory.
+
+	Returns the template content, or empty string if not found or invalid.
+	"""
+	if not specialist or specialist not in VALID_SPECIALISTS:
+		return ""
+	templates_dir = config.target.resolved_path / "specialist_templates"
+	template_path = templates_dir / f"{specialist}.md"
+	if not template_path.is_file():
+		logger.debug("Specialist template not found: %s", template_path)
+		return ""
+	try:
+		return template_path.read_text().strip()
+	except OSError as exc:
+		logger.warning("Failed to read specialist template %s: %s", template_path, exc)
+		return ""
+
+
 class _SpawnError(Exception):
 	"""Raised by _spawn_and_wait on timeout."""
 
@@ -309,6 +331,7 @@ def render_mission_worker_prompt(
 	experience_context: str = "",
 	mission_state: str = "",
 	overlap_warnings: str = "",
+	specialist_template: str = "",
 ) -> str:
 	"""Render constraint-based prompt for mission mode workers."""
 	verify_cmd = unit.verification_command or config.target.verification.command
@@ -322,7 +345,7 @@ def render_mission_worker_prompt(
 		template = EXPERIMENT_WORKER_PROMPT_TEMPLATE
 	else:
 		template = MISSION_WORKER_PROMPT_TEMPLATE
-	return template.format(
+	rendered = template.format(
 		target_name=config.target.name,
 		workspace_path=workspace_path,
 		title=_sanitize_braces(unit.title),
@@ -335,6 +358,10 @@ def render_mission_worker_prompt(
 		overlap_warnings_block=ow_block,
 		acceptance_criteria_block=ac_block,
 	)
+	if specialist_template:
+		specialist_section = f"## Specialist Role\n{specialist_template}\n\n"
+		rendered = specialist_section + rendered
+	return rendered
 
 
 def render_architect_prompt(
