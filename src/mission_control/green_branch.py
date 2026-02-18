@@ -188,7 +188,7 @@ class GreenBranchManager:
 				verify_cmd = self.config.target.verification.command
 				verify_ok, verify_output = await self._run_command(verify_cmd)
 				if not verify_ok:
-					logger.warning("Verification failed for %s: %s", branch_name, verify_output[:200])
+					logger.warning("Verification failed for %s: %s", branch_name, verify_output[-500:])
 					await self._run_git("checkout", gb.green_branch)
 					return UnitMergeResult(
 						verification_passed=False,

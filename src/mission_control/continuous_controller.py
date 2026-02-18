@@ -1216,12 +1216,12 @@ class ContinuousController:
 					else:
 						logger.warning(
 							"Unit %s failed merge: %s",
-							unit.id, merge_result.failure_output[:200],
+							unit.id, merge_result.failure_output[-200:],
 						)
 
 						# Log merge_failed event
 						_fail_details = {
-							"failure_output": merge_result.failure_output[:500],
+							"failure_output": merge_result.failure_output[-2000:],
 							"failure_stage": merge_result.failure_stage,
 						}
 						self._log_unit_event(
@@ -1240,11 +1240,11 @@ class ContinuousController:
 							except (json.JSONDecodeError, TypeError):
 								concerns = []
 							concerns.append(
-								f"Merge failed: {merge_result.failure_output[:200]}",
+								f"Merge failed: {merge_result.failure_output[-500:]}",
 							)
 							handoff.concerns = json.dumps(concerns)
 
-						failure_reason = merge_result.failure_output[:300]
+						failure_reason = merge_result.failure_output[-1000:]
 
 						# Check if retryable
 						if unit.attempt < unit.max_attempts:
@@ -1257,14 +1257,14 @@ class ContinuousController:
 								epoch_id=epoch.id,
 								work_unit_id=unit.id,
 								event_type="rejected",
-								details=merge_result.failure_output[:500],
-								stream_details={"failure_output": merge_result.failure_output[:500]},
+								details=merge_result.failure_output[-2000:],
+								stream_details={"failure_output": merge_result.failure_output[-2000:]},
 							)
 
 							# Notify merge conflict via Telegram
 							if self._notifier:
 								await self._notifier.send_merge_conflict(
-									unit.title, merge_result.failure_output[:300],
+									unit.title, merge_result.failure_output[-500:],
 								)
 				except Exception as exc:
 					logger.error(
@@ -1607,7 +1607,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		# Append failure context to description
 		unit.description += (
 			f"\n\n[Retry attempt {unit.attempt}] Previous failure: "
-			f"{failure_reason[:300]}. Avoid the same mistake."
+			f"{failure_reason[-1000:]}. Avoid the same mistake."
 		)
 
 		# Reset unit for re-dispatch
@@ -1623,7 +1623,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			logger.error("Failed to persist retry state for %s: %s", unit.id, exc)
 
 		# Log retry event
-		_retry_details = {"delay": delay, "failure_reason": failure_reason[:300]}
+		_retry_details = {"delay": delay, "failure_reason": failure_reason[-1000:]}
 		self._log_unit_event(
 			mission_id=mission.id,
 			epoch_id=epoch.id,
