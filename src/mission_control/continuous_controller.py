@@ -94,6 +94,8 @@ class ContinuousMissionResult:
 	next_objective: str = ""
 	proposed_by_strategist: bool = False
 	db_errors: int = 0
+	units_failed_unrecovered: int = 0
+	sync_failures: int = 0
 
 
 class ContinuousController:
@@ -139,6 +141,7 @@ class ContinuousController:
 		self.ambition_score: float = 0.0
 		self.proposed_by_strategist: bool = False
 		self._objective_check_count: int = 0
+		self._failed_unit_replan_count: int = 0
 		self._strategist: Strategist | None = None
 		self._is_cleanup_mission: bool = config.target.objective.startswith("[CLEANUP]")
 		self._diff_reviewer: DiffReviewer = DiffReviewer(config)
@@ -487,6 +490,7 @@ class ContinuousController:
 			result.total_units_dispatched = self._total_dispatched
 			result.total_units_merged = self._total_merged
 			result.total_units_failed = self._total_failed
+			result.units_failed_unrecovered = self._total_failed
 			result.db_errors = self._db_error_count
 
 			if self._backlog_manager.backlog_item_ids:
@@ -1007,8 +1011,38 @@ class ContinuousController:
 					await asyncio.gather(*running_tasks.values(), return_exceptions=True)
 					continue
 
-				# Optional: verify the objective is actually met before declaring done
+				# Gate: if units failed to merge, inform planner before accepting completion
 				cont = self.config.continuous
+				if self._total_failed > 0 and self._failed_unit_replan_count < cont.max_objective_checks:
+					self._failed_unit_replan_count += 1
+					try:
+						all_units = await self.db.locked_call(
+							"get_work_units_for_mission", mission.id,
+						)
+					except Exception as exc:
+						logger.warning("Failed to query units for failure gate: %s", exc)
+						all_units = []
+					failed_units = [u for u in all_units if u.status == "failed"]
+					if failed_units:
+						rejection_summary = "\n".join(
+							f"- {u.title} (files: {u.files_hint}): FAILED after {u.attempt} attempts"
+							for u in failed_units
+						)
+						feedback_context += (
+							f"\n\nWARNING: {len(failed_units)} work unit(s) FAILED and their changes "
+							"are NOT in mc/green:\n"
+							f"{rejection_summary}\n"
+							"You MUST create replacement units for this unfinished work, or the objective "
+							"is NOT complete. If you believe the work is truly unnecessary, return empty units "
+							"to confirm."
+						)
+						logger.warning(
+							"%d failed units detected, re-entering planner (attempt %d/%d)",
+							len(failed_units), self._failed_unit_replan_count, cont.max_objective_checks,
+						)
+						continue
+
+				# Optional: verify the objective is actually met before declaring done
 				if cont.verify_objective_completion:
 					check = await self._verify_objective(
 						mission, feedback_context,
@@ -1024,14 +1058,23 @@ class ContinuousController:
 						)
 						continue
 
+				if self._total_failed > 0:
+					logger.warning(
+						"Completing with %d unrecovered failed units after %d replan attempts",
+						self._total_failed, self._failed_unit_replan_count,
+					)
+
 				logger.info("Planner returned no units and no in-flight work -- objective complete")
 				result.objective_met = True
 				result.stopped_reason = "planner_completed"
 				self.running = False
 				if self._notifier:
-					await self._notifier.send(
-						"Mission complete: planner returned no more work units.",
-					)
+					notify_msg = "Mission complete: planner returned no more work units."
+					if self._total_failed > 0:
+						notify_msg += (
+							f" WARNING: {self._total_failed} unit(s) failed and were not recovered."
+						)
+					await self._notifier.send(notify_msg)
 				break
 
 			# Score ambition of planned work -- enforce minimum
@@ -1403,6 +1446,15 @@ class ContinuousController:
 							output_tokens=unit.output_tokens,
 							cost_usd=unit.cost_usd,
 						)
+						# Check sync result
+						if not merge_result.sync_ok:
+							result.sync_failures += 1
+							logger.warning("Unit %s merged but sync to source repo failed", unit.id)
+							if self._notifier:
+								await self._notifier.send(
+									f"Sync warning: Unit '{unit.title}' merged to green but failed "
+									"to sync back to source repo. Changes may not be visible in the source.",
+								)
 						# LLM diff review (blocking if gate_completion, else fire-and-forget)
 						if self.config.review.enabled:
 							if self.config.review.gate_completion:

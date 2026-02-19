@@ -59,6 +59,7 @@ class UnitMergeResult:
 	failure_stage: str = ""
 	merge_commit_hash: str = ""
 	changed_files: list[str] = field(default_factory=list)
+	sync_ok: bool = True
 
 
 class GreenBranchManager:
@@ -258,7 +259,7 @@ class GreenBranchManager:
 					except Exception as exc:
 						logger.warning("Failed to commit MISSION_STATE.md: %s", exc)
 
-				await self._sync_to_source()
+				sync_ok = await self._sync_to_source()
 
 				# Auto-push if configured
 				if gb.auto_push:
@@ -276,6 +277,7 @@ class GreenBranchManager:
 					verification_passed=True,
 					merge_commit_hash=merge_commit_hash,
 					changed_files=changed_files,
+					sync_ok=sync_ok,
 				)
 			finally:
 				# Clean up remote, temp branch, and rebase branch
@@ -466,21 +468,26 @@ class GreenBranchManager:
 			return False
 		return True
 
-	async def _sync_to_source(self) -> None:
+	async def _sync_to_source(self) -> bool:
 		"""Sync mc/green and mc/working refs from workspace clone to source repo.
 
 		After promotion in the workspace clone, the source repo's refs are stale.
 		Workers provision from the source repo, so they'd start from the old base
 		unless we push the updated refs back.
+
+		Returns True if all syncs succeeded.
 		"""
 		source_repo = self.config.target.path
 		gb = self.config.green_branch
+		all_ok = True
 		for branch in (gb.green_branch, gb.working_branch):
 			ok, output = await self._run_git_in(
 				source_repo, "fetch", self.workspace, f"{branch}:{branch}",
 			)
 			if not ok:
 				logger.warning("Failed to sync %s to source repo: %s", branch, output)
+				all_ok = False
+		return all_ok
 
 	async def push_green_to_main(self) -> bool:
 		"""Merge mc/green into the push branch and push to origin.
