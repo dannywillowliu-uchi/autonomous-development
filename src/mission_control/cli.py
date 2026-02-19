@@ -64,6 +64,14 @@ def build_parser() -> argparse.ArgumentParser:
 		"--max-chain-depth", type=int, default=3,
 		help="Maximum number of chained missions (default: 3)",
 	)
+	mission.add_argument(
+		"--no-dashboard", action="store_true",
+		help="Disable the live dashboard (enabled by default)",
+	)
+	mission.add_argument(
+		"--dashboard-port", type=int, default=8080,
+		help="Port for the live dashboard (default: 8080)",
+	)
 
 	# mc discover
 	discover = sub.add_parser("discover", help="Run codebase discovery analysis")
@@ -330,6 +338,59 @@ def _build_cleanup_objective(config: MissionConfig) -> str:
 	)
 
 
+def _start_dashboard_background(
+	db_path: Path, port: int,
+) -> tuple[object, object]:
+	"""Start the live dashboard in a background thread and open the browser.
+
+	The LiveDashboard (and its Database connection) must be created inside
+	the background thread because SQLite objects are not thread-safe.
+	"""
+	import threading
+	import webbrowser
+
+	import uvicorn
+
+	# Ensure the DB file exists before the dashboard tries to read it
+	if not db_path.exists():
+		db = Database(db_path)
+		db.close()
+
+	# We need the server ref to signal shutdown, but it's created in the thread.
+	# Use a list as a mutable container to pass it back.
+	server_ref: list[uvicorn.Server | None] = [None]
+	ready = threading.Event()
+
+	def _run_dashboard() -> None:
+		from mission_control.dashboard.live import LiveDashboard
+
+		dashboard = LiveDashboard(str(db_path))
+		config = uvicorn.Config(
+			dashboard.app, host="127.0.0.1", port=port, log_level="warning",
+		)
+		server = uvicorn.Server(config)
+		server_ref[0] = server
+		ready.set()
+		server.run()
+
+	thread = threading.Thread(target=_run_dashboard, daemon=True)
+	thread.start()
+	ready.wait(timeout=5)
+
+	url = f"http://127.0.0.1:{port}"
+	print(f"Live dashboard: {url}")
+
+	# Give the server a moment to bind, then open browser
+	def _open_browser() -> None:
+		import time
+		time.sleep(1.5)
+		webbrowser.open(url)
+
+	threading.Thread(target=_open_browser, daemon=True).start()
+
+	return thread, server_ref[0]
+
+
 def cmd_mission(args: argparse.Namespace) -> int:
 	"""Run the continuous mission mode (outer loop)."""
 	config = load_config(args.config)
@@ -435,52 +496,67 @@ def cmd_mission(args: argparse.Namespace) -> int:
 
 	from mission_control.continuous_controller import ContinuousController
 
+	# Start live dashboard in background thread (default: on)
+	dashboard_thread = None
+	dashboard_server = None
+	if not args.no_dashboard:
+		dashboard_thread, dashboard_server = _start_dashboard_background(
+			db_path, args.dashboard_port,
+		)
+
 	chain_depth = 0
 	max_chain_depth = getattr(args, "max_chain_depth", 3)
 	last_result = None
 
-	while True:
-		# Check if a cleanup mission is due (only when chaining is enabled)
-		if config.continuous.cleanup_enabled and args.chain:
+	try:
+		while True:
+			# Check if a cleanup mission is due (only when chaining is enabled)
+			if config.continuous.cleanup_enabled and args.chain:
+				with Database(db_path) as db:
+					if _is_cleanup_due(db, config.continuous.cleanup_interval):
+						cleanup_obj = _build_cleanup_objective(config)
+						config.target.objective = cleanup_obj
+						interval = config.continuous.cleanup_interval
+						print(f"\n--- Cleanup mission triggered (every {interval} missions) ---")
+						print(f"Objective: {cleanup_obj}")
+
 			with Database(db_path) as db:
-				if _is_cleanup_due(db, config.continuous.cleanup_interval):
-					cleanup_obj = _build_cleanup_objective(config)
-					config.target.objective = cleanup_obj
-					print(f"\n--- Cleanup mission triggered (every {config.continuous.cleanup_interval} missions) ---")
-					print(f"Objective: {cleanup_obj}")
+				controller = ContinuousController(config, db)
+				if args.strategist:
+					controller.proposed_by_strategist = True
+				result = asyncio.run(controller.run())
 
-		with Database(db_path) as db:
-			controller = ContinuousController(config, db)
-			if args.strategist:
-				controller.proposed_by_strategist = True
-			result = asyncio.run(controller.run())
+			print(f"Mission: {result.mission_id}")
+			print(f"Objective met: {result.objective_met}")
+			disp = result.total_units_dispatched
+			merged = result.total_units_merged
+			failed = result.total_units_failed
+			print(f"Units: {disp} dispatched, {merged} merged, {failed} failed")
+			if result.final_verification_passed is not None:
+				fv_status = "PASS" if result.final_verification_passed else "FAIL"
+				print(f"Final verification: {fv_status}")
+			print(f"Wall time: {result.wall_time_seconds:.1f}s")
+			print(f"Stopped: {result.stopped_reason}")
 
-		print(f"Mission: {result.mission_id}")
-		print(f"Objective met: {result.objective_met}")
-		disp = result.total_units_dispatched
-		merged = result.total_units_merged
-		failed = result.total_units_failed
-		print(f"Units: {disp} dispatched, {merged} merged, {failed} failed")
-		if result.final_verification_passed is not None:
-			fv_status = "PASS" if result.final_verification_passed else "FAIL"
-			print(f"Final verification: {fv_status}")
-		print(f"Wall time: {result.wall_time_seconds:.1f}s")
-		print(f"Stopped: {result.stopped_reason}")
+			last_result = result
+			chain_depth += 1
 
-		last_result = result
-		chain_depth += 1
+			if not args.chain:
+				break
+			if not result.next_objective:
+				break
+			if chain_depth >= max_chain_depth:
+				print(f"Chain depth limit reached ({max_chain_depth}). Stopping.")
+				break
 
-		if not args.chain:
-			break
-		if not result.next_objective:
-			break
-		if chain_depth >= max_chain_depth:
-			print(f"Chain depth limit reached ({max_chain_depth}). Stopping.")
-			break
-
-		print(f"\n--- Chaining mission {chain_depth + 1}/{max_chain_depth} ---")
-		print(f"Next objective: {result.next_objective}")
-		config.target.objective = result.next_objective
+			print(f"\n--- Chaining mission {chain_depth + 1}/{max_chain_depth} ---")
+			print(f"Next objective: {result.next_objective}")
+			config.target.objective = result.next_objective
+	finally:
+		if dashboard_server is not None:
+			dashboard_server.should_exit = True
+		if dashboard_thread is not None:
+			dashboard_thread.join(timeout=5)
 
 	return 0 if last_result.objective_met else 1
 
