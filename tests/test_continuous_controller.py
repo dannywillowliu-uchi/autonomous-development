@@ -500,7 +500,7 @@ class TestEndToEnd:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -1020,7 +1020,7 @@ class TestConcurrentDispatchAndCompletion:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -1286,7 +1286,7 @@ class TestAmbitionScoringInDispatch:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -1366,7 +1366,7 @@ class TestNextObjectivePopulation:
 		))
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			# Always return units (never complete)
 			plan = Plan(id="p1", objective="test")
@@ -1425,7 +1425,7 @@ class TestNextObjectivePopulation:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -1505,7 +1505,7 @@ class TestInFlightUnitsPreventPrematureCompletion:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -1941,7 +1941,7 @@ class TestAutoFailurePause:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -2007,7 +2007,7 @@ class TestAutoFailurePause:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1

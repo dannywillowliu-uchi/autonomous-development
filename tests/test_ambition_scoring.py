@@ -270,7 +270,7 @@ class TestControllerStrategistIntegration:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -345,7 +345,7 @@ class TestControllerStrategistIntegration:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -417,7 +417,7 @@ class TestControllerStrategistIntegration:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -488,7 +488,7 @@ class TestControllerStrategistIntegration:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -558,7 +558,7 @@ class TestControllerStrategistIntegration:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1
@@ -632,7 +632,7 @@ class TestControllerStrategistIntegration:
 		call_count = 0
 
 		async def mock_get_next(
-			mission: Mission, max_units: int = 3, feedback_context: str = "",
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
 		) -> tuple[Plan, list[WorkUnit], Epoch]:
 			nonlocal call_count
 			call_count += 1

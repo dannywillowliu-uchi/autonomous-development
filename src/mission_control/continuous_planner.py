@@ -69,6 +69,7 @@ class ContinuousPlanner:
 		feedback_context: str = "",
 		backlog_item_ids: list[str] | None = None,
 		decomposition_feedback: str = "",
+		locked_files: dict[str, list[str]] | None = None,
 	) -> tuple[Plan, list[WorkUnit], Epoch]:
 		"""Return next work units from backlog, replanning if needed.
 
@@ -99,6 +100,7 @@ class ContinuousPlanner:
 			# Need to replan
 			plan, units, epoch = await self._replan(
 				mission, max_units, feedback_context, backlog_item_ids,
+				locked_files=locked_files,
 			)
 			# Empty replan + empty backlog = objective complete
 			if not units and not self._backlog:
@@ -136,6 +138,7 @@ class ContinuousPlanner:
 		max_units: int,
 		feedback_context: str,
 		backlog_item_ids: list[str] | None = None,
+		locked_files: dict[str, list[str]] | None = None,
 	) -> tuple[Plan, list[WorkUnit], Epoch]:
 		"""Invoke the planner LLM to generate new work units."""
 		self._epoch_count += 1
@@ -180,6 +183,7 @@ class ContinuousPlanner:
 			prior_discoveries=curated_discoveries,
 			round_number=self._epoch_count,
 			feedback_context=enriched_context,
+			locked_files=locked_files,
 		)
 
 		# Extract work units from the plan tree

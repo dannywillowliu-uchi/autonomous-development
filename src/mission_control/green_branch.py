@@ -58,6 +58,7 @@ class UnitMergeResult:
 	failure_output: str = ""
 	failure_stage: str = ""
 	merge_commit_hash: str = ""
+	changed_files: list[str] = field(default_factory=list)
 
 
 class GreenBranchManager:
@@ -172,13 +173,22 @@ class GreenBranchManager:
 
 				rebase_ok, rebase_output = await self._run_git("rebase", gb.green_branch)
 				if not rebase_ok:
-					logger.warning("Rebase conflict for %s: %s", branch_name, rebase_output)
+					# Retry rebase once: green may have advanced since we fetched
+					logger.info("Rebase conflict for %s, retrying after brief wait", branch_name)
 					await self._run_git("rebase", "--abort")
-					return UnitMergeResult(
-						rebase_ok=False,
-						failure_output=f"Rebase conflict: {rebase_output[:500]}",
-						failure_stage="rebase_conflict",
-					)
+					await asyncio.sleep(2)
+					# Re-checkout the unit branch and retry rebase onto latest green
+					await self._run_git("checkout", rebase_branch)
+					rebase_ok, rebase_output = await self._run_git("rebase", gb.green_branch)
+					if not rebase_ok:
+						logger.warning("Rebase retry also failed for %s: %s", branch_name, rebase_output)
+						await self._run_git("rebase", "--abort")
+						return UnitMergeResult(
+							rebase_ok=False,
+							failure_output=f"Rebase conflict (after retry): {rebase_output[:500]}",
+							failure_stage="rebase_conflict",
+						)
+					logger.info("Rebase retry succeeded for %s", branch_name)
 				logger.info("Rebased %s onto %s", branch_name, gb.green_branch)
 
 				# Create temp branch from mc/green
@@ -225,9 +235,18 @@ class GreenBranchManager:
 						failure_stage="fast_forward",
 					)
 
-				# Capture the merge commit hash before state file commit
+				# Capture the merge commit hash and actual changed files
 				_, merge_hash = await self._run_git("rev-parse", "HEAD")
 				merge_commit_hash = merge_hash.strip()
+
+				# Get actual files changed via git diff (not files_hint)
+				_, diff_output = await self._run_git(
+					"diff", "--name-only", "HEAD~1", "HEAD",
+				)
+				changed_files = [
+					f.strip() for f in diff_output.splitlines() if f.strip()
+				]
+
 				logger.info("Merged %s directly into %s", branch_name, gb.green_branch)
 
 				# Commit MISSION_STATE.md into mc/green if it exists
@@ -256,6 +275,7 @@ class GreenBranchManager:
 					rebase_ok=True,
 					verification_passed=True,
 					merge_commit_hash=merge_commit_hash,
+					changed_files=changed_files,
 				)
 			finally:
 				# Clean up remote, temp branch, and rebase branch
@@ -585,6 +605,17 @@ class GreenBranchManager:
 				if remaining <= 0:
 					return False
 				await asyncio.sleep(random.uniform(3.0, 7.0))
+
+	async def run_reconciliation_check(self) -> tuple[bool, str]:
+		"""Run verification on the current green branch state.
+
+		Used as a reconciler sweep after merging multiple units to catch
+		cross-unit integration issues (import conflicts, duplicate definitions).
+		"""
+		gb = self.config.green_branch
+		await self._run_git("checkout", gb.green_branch)
+		verify_cmd = self.config.target.verification.command
+		return await self._run_command(verify_cmd)
 
 	async def get_green_hash(self) -> str:
 		"""Return the current commit hash of mc/green."""

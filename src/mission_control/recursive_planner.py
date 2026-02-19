@@ -110,6 +110,7 @@ class RecursivePlanner:
 		prior_discoveries: list[str],
 		round_number: int,
 		feedback_context: str = "",
+		locked_files: dict[str, list[str]] | None = None,
 	) -> tuple[Plan, PlanNode]:
 		plan = Plan(objective=objective)
 		root = PlanNode(
@@ -120,6 +121,7 @@ class RecursivePlanner:
 		)
 		plan.root_node_id = root.id
 		self._feedback_context = feedback_context
+		self._locked_files = locked_files or {}
 
 		await self.expand_node(root, plan, objective, snapshot_hash, prior_discoveries)
 
@@ -250,6 +252,20 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 		if feedback_text and node.depth == 0:
 			feedback_section = f"\n## Past Round Performance\n{feedback_text}\n"
 
+		locked_files = getattr(self, "_locked_files", {})
+		locked_section = ""
+		if locked_files and node.depth == 0:
+			lines = []
+			for fpath, reasons in sorted(locked_files.items()):
+				reason_str = "; ".join(reasons)
+				lines.append(f"- {fpath} ({reason_str})")
+			locked_section = (
+				"\n## Locked Files (DO NOT target these)\n"
+				"The following files are currently being worked on or have already been merged.\n"
+				"Creating units that target these files will be REJECTED by the dispatcher.\n"
+				+ "\n".join(lines) + "\n"
+			)
+
 		prompt = f"""You are a recursive planner decomposing work for parallel execution.
 
 ## Objective
@@ -262,7 +278,7 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 
 ## Prior Discoveries
 {discoveries_text}
-{feedback_section}
+{feedback_section}{locked_section}
 ## Heuristics
 - SUBDIVIDE when: scope spans multiple unrelated subsystems, >5 files across different directories
 - PRODUCE LEAVES when: scope is focused, 1-3 concrete tasks can handle it
@@ -270,6 +286,7 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 - NEVER let sibling leaves touch the same file. Merge them or add depends_on_indices.
 - Read MISSION_STATE.md in the project root to see what's already been completed.
 - If Past Round Performance lists already-modified files, do NOT target those files again.
+- Units targeting locked files will be AUTOMATICALLY DROPPED. This is enforced, not optional.
 - If the objective has been fully achieved based on MISSION_STATE.md and past discoveries, return EMPTY units:
   <!-- PLAN -->{{"type":"leaves","units":[]}}<!-- /PLAN -->
 

@@ -135,6 +135,7 @@ class ContinuousController:
 		self._completed_unit_ids: set[str] = set()  # units that completed/merged successfully
 		self._db_error_count: int = 0
 		self._db_degraded: bool = False
+		self._last_reconcile_count: int = 0
 		self.ambition_score: float = 0.0
 		self.proposed_by_strategist: bool = False
 		self._objective_check_count: int = 0
@@ -768,6 +769,29 @@ class ContinuousController:
 			enable_recovery=hb.enable_recovery,
 		)
 
+	def _get_locked_files(self) -> dict[str, list[str]]:
+		"""Return files locked by running units and already merged.
+
+		Keys are file paths, values are lists of reasons (e.g. "in-flight: Build API").
+		"""
+		locked: dict[str, list[str]] = {}
+		# In-flight files
+		try:
+			rows = self.db.conn.execute(
+				"SELECT * FROM work_units WHERE status='running'",
+			).fetchall()
+			for r in rows:
+				unit = Database._row_to_work_unit(r)
+				files = _parse_files_hint(unit.files_hint)
+				for f in files:
+					locked.setdefault(f, []).append(f"in-flight: {unit.title}")
+		except Exception as exc:
+			logger.warning("Could not query running units for locked files: %s", exc)
+		# Merged files
+		for f in self._merged_files:
+			locked.setdefault(f, []).append("already merged")
+		return locked
+
 	def _check_already_merged(self, unit: WorkUnit) -> bool:
 		"""Check if a deferred unit's files have already been covered by a merged unit.
 
@@ -957,12 +981,16 @@ class ContinuousController:
 			# Build feedback context for the planner
 			feedback_context = build_planner_context(self.db, mission.id)
 
+			# Gather locked files for the planner
+			locked_files = self._get_locked_files()
+
 			# Get next batch of units from the planner
 			try:
 				plan, units, epoch = await self._planner.get_next_units(
 					mission,
 					max_units=min(num_workers, 3),
 					feedback_context=feedback_context,
+					locked_files=locked_files,
 				)
 			except Exception as exc:
 				logger.error("Planner failed: %s", exc, exc_info=True)
@@ -1038,6 +1066,7 @@ class ContinuousController:
 						mission,
 						max_units=min(num_workers, 3),
 						feedback_context=enriched_context,
+						locked_files=locked_files,
 					)
 				except Exception as exc:
 					logger.error("Replan failed: %s", exc, exc_info=True)
@@ -1357,7 +1386,11 @@ class ContinuousController:
 						self._total_merged += 1
 						self._completed_unit_ids.add(unit.id)
 						# Track merged files so deferred duplicates are dropped
-						merged_files = _parse_files_hint(unit.files_hint)
+						# Use actual git diff files when available, fall back to files_hint
+						if merge_result.changed_files:
+							merged_files = set(merge_result.changed_files)
+						else:
+							merged_files = _parse_files_hint(unit.files_hint)
 						if merged_files:
 							self._merged_files |= merged_files
 						# Log merge event
@@ -1530,6 +1563,25 @@ class ContinuousController:
 
 			# Track round outcomes for all-fail detection
 			self._record_round_outcome(unit, epoch, merged)
+
+			# Reconciler sweep: verify combined green state after new merges
+			if merged and self._total_merged > self._last_reconcile_count:
+				try:
+					reconcile_ok, reconcile_output = await self._green_branch.run_reconciliation_check()
+					if not reconcile_ok:
+						logger.warning(
+							"Reconciler sweep failed: %s", reconcile_output[-500:],
+						)
+						fixup_result = await self._green_branch.run_fixup(reconcile_output)
+						if not fixup_result.success:
+							logger.warning("Reconciler fixup failed")
+							if self._notifier:
+								await self._notifier.send(
+									f"Reconciler fixup failed: {reconcile_output[-200:]}",
+								)
+					self._last_reconcile_count = self._total_merged
+				except Exception as exc:
+					logger.warning("Reconciler sweep error: %s", exc)
 
 	def _record_round_outcome(self, unit: WorkUnit, epoch: Epoch, merged: bool) -> None:
 		"""Record a unit outcome in its round tracker and handle all-fail rounds."""
