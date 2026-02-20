@@ -2,6 +2,48 @@
 
 from __future__ import annotations
 
+# -- Unit event types --
+
+UNIT_EVENT_DISPATCHED = "dispatched"
+UNIT_EVENT_CLAIMED = "claimed"
+UNIT_EVENT_RUNNING = "running"
+UNIT_EVENT_COMPLETED = "completed"
+UNIT_EVENT_FAILED = "failed"
+UNIT_EVENT_MERGED = "merged"
+UNIT_EVENT_MERGE_FAILED = "merge_failed"
+UNIT_EVENT_REJECTED = "rejected"
+UNIT_EVENT_RETRY_QUEUED = "retry_queued"
+UNIT_EVENT_RESEARCH_COMPLETED = "research_completed"
+UNIT_EVENT_EXPERIMENT_COMPLETED = "experiment_completed"
+
+UNIT_EVENT_TYPES: frozenset[str] = frozenset({
+	UNIT_EVENT_DISPATCHED,
+	UNIT_EVENT_CLAIMED,
+	UNIT_EVENT_RUNNING,
+	UNIT_EVENT_COMPLETED,
+	UNIT_EVENT_FAILED,
+	UNIT_EVENT_MERGED,
+	UNIT_EVENT_MERGE_FAILED,
+	UNIT_EVENT_REJECTED,
+	UNIT_EVENT_RETRY_QUEUED,
+	UNIT_EVENT_RESEARCH_COMPLETED,
+	UNIT_EVENT_EXPERIMENT_COMPLETED,
+})
+
+EVENT_TO_STATUS: dict[str, str] = {
+	UNIT_EVENT_DISPATCHED: "pending",
+	UNIT_EVENT_CLAIMED: "claimed",
+	UNIT_EVENT_RUNNING: "running",
+	UNIT_EVENT_COMPLETED: "completed",
+	UNIT_EVENT_FAILED: "failed",
+	UNIT_EVENT_MERGED: "completed",
+	UNIT_EVENT_MERGE_FAILED: "failed",
+	UNIT_EVENT_REJECTED: "failed",
+	UNIT_EVENT_RETRY_QUEUED: "pending",
+	UNIT_EVENT_RESEARCH_COMPLETED: "completed",
+	UNIT_EVENT_EXPERIMENT_COMPLETED: "completed",
+}
+
 # Evaluator round-scoring weights (test_improvement, lint_improvement, completion_rate, no_regression)
 EVALUATOR_WEIGHTS: tuple[float, float, float, float] = (0.4, 0.2, 0.2, 0.2)
 

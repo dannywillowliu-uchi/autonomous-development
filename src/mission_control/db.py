@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator, Sequence
 
+from mission_control.constants import EVENT_TO_STATUS
 from mission_control.models import (
 	BacklogItem,
 	ContextItem,
@@ -328,6 +329,8 @@ CREATE TABLE IF NOT EXISTS unit_events (
 	timestamp TEXT NOT NULL,
 	score_after REAL NOT NULL DEFAULT 0.0,
 	details TEXT NOT NULL DEFAULT '',
+	input_tokens INTEGER DEFAULT 0,
+	output_tokens INTEGER DEFAULT 0,
 	FOREIGN KEY (mission_id) REFERENCES missions(id),
 	FOREIGN KEY (epoch_id) REFERENCES epochs(id),
 	FOREIGN KEY (work_unit_id) REFERENCES work_units(id)
@@ -481,6 +484,21 @@ CREATE INDEX IF NOT EXISTS idx_context_items_round ON context_items(round_id);
 CREATE INDEX IF NOT EXISTS idx_context_items_type ON context_items(item_type);
 CREATE INDEX IF NOT EXISTS idx_context_items_mission ON context_items(mission_id);
 """
+
+
+def derive_unit_status(events: Sequence[UnitEvent]) -> str:
+	"""Derive a work unit's status by folding events through EVENT_TO_STATUS.
+
+	Pure function: takes a chronological sequence of UnitEvent objects and
+	returns the last mapped status. Returns "pending" on empty input.
+	Unknown event types are silently skipped.
+	"""
+	status = "pending"
+	for event in events:
+		mapped = EVENT_TO_STATUS.get(event.event_type)
+		if mapped is not None:
+			status = mapped
+	return status
 
 
 class Database:
@@ -1071,11 +1089,33 @@ class Database:
 			RETURNING *""",
 			(worker_id, now, now),
 		).fetchone()
-		self.conn.commit()
 		if row is None:
+			self.conn.commit()
 			logger.debug("No claimable work unit for worker %s", worker_id)
 			return None
 		unit = self._row_to_work_unit(row)
+
+		# Emit "claimed" event atomically with the claim
+		if unit.epoch_id:
+			mission_id = ""
+			ep_row = self.conn.execute(
+				"SELECT mission_id FROM epochs WHERE id=?", (unit.epoch_id,),
+			).fetchone()
+			if ep_row:
+				mission_id = ep_row["mission_id"]
+			from mission_control.constants import UNIT_EVENT_CLAIMED
+			self.conn.execute(
+				"""INSERT INTO unit_events
+				(id, mission_id, epoch_id, work_unit_id, event_type,
+				 timestamp, score_after, details, input_tokens, output_tokens)
+				VALUES (?, ?, ?, ?, ?, ?, 0.0, '', 0, 0)""",
+				(
+					UnitEvent().id, mission_id, unit.epoch_id,
+					unit.id, UNIT_EVENT_CLAIMED, now,
+				),
+			)
+
+		self.conn.commit()
 		logger.info("Worker %s claimed work_unit %s", worker_id, unit.id)
 		return unit
 
@@ -1977,6 +2017,37 @@ class Database:
 			(epoch_id,),
 		).fetchall()
 		return [self._row_to_unit_event(r) for r in rows]
+
+	_REPLAY_COLUMNS = {"unit": "work_unit_id", "epoch": "epoch_id", "mission": "mission_id"}
+
+	def replay_events(self, entity_type: str, entity_id: str) -> list[UnitEvent]:
+		"""Replay events for a given entity in chronological order.
+
+		Args:
+			entity_type: One of "unit", "epoch", or "mission".
+			entity_id: The ID of the entity to replay events for.
+
+		Returns:
+			List of UnitEvent objects ordered by timestamp ASC.
+
+		Raises:
+			ValueError: If entity_type is not one of the valid types.
+		"""
+		column = self._REPLAY_COLUMNS.get(entity_type)
+		if column is None:
+			raise ValueError(
+				f"Invalid entity_type '{entity_type}', must be one of: {', '.join(self._REPLAY_COLUMNS)}"
+			)
+		rows = self.conn.execute(
+			f"SELECT * FROM unit_events WHERE {column}=? ORDER BY timestamp ASC",
+			(entity_id,),
+		).fetchall()
+		return [self._row_to_unit_event(r) for r in rows]
+
+	def derive_unit_status_from_db(self, unit_id: str) -> str:
+		"""Convenience: replay events for a unit and derive its status."""
+		events = self.replay_events("unit", unit_id)
+		return derive_unit_status(events)
 
 	def get_token_usage_by_epoch(self, mission_id: str) -> list[dict[str, object]]:
 		"""Aggregate token usage per epoch for charting."""

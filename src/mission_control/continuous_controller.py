@@ -15,6 +15,15 @@ from typing import Any
 from mission_control.backends import ContainerBackend, LocalBackend, SSHBackend, WorkerBackend
 from mission_control.backlog_manager import BacklogManager
 from mission_control.config import ContinuousConfig, MissionConfig, claude_subprocess_env
+from mission_control.constants import (
+	UNIT_EVENT_DISPATCHED,
+	UNIT_EVENT_EXPERIMENT_COMPLETED,
+	UNIT_EVENT_MERGE_FAILED,
+	UNIT_EVENT_MERGED,
+	UNIT_EVENT_REJECTED,
+	UNIT_EVENT_RESEARCH_COMPLETED,
+	UNIT_EVENT_RETRY_QUEUED,
+)
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
 from mission_control.diff_reviewer import DiffReviewer
@@ -912,7 +921,7 @@ class ContinuousController:
 				mission_id=mission_ref.id,
 				epoch_id=epoch.id,
 				work_unit_id=unit.id,
-				event_type="dispatched",
+				event_type=UNIT_EVENT_DISPATCHED,
 				stream_details={"title": unit.title, "files": unit.files_hint, "deferred": True},
 			)
 			self._total_dispatched += 1
@@ -1227,7 +1236,7 @@ class ContinuousController:
 					mission_id=mission.id,
 					epoch_id=epoch.id,
 					work_unit_id=unit.id,
-					event_type="dispatched",
+					event_type=UNIT_EVENT_DISPATCHED,
 					stream_details={"title": unit.title, "files": unit.files_hint},
 				)
 
@@ -1318,7 +1327,7 @@ class ContinuousController:
 					mission_id=mission.id,
 					epoch_id=epoch.id,
 					work_unit_id=unit.id,
-					event_type="research_completed",
+					event_type=UNIT_EVENT_RESEARCH_COMPLETED,
 				)
 
 				if handoff and self._planner:
@@ -1403,7 +1412,7 @@ class ContinuousController:
 					mission_id=mission.id,
 					epoch_id=epoch.id,
 					work_unit_id=unit.id,
-					event_type="experiment_completed",
+					event_type=UNIT_EVENT_EXPERIMENT_COMPLETED,
 				)
 
 				if handoff and self._planner:
@@ -1459,7 +1468,7 @@ class ContinuousController:
 							mission_id=mission.id,
 							epoch_id=epoch.id,
 							work_unit_id=unit.id,
-							event_type="merged",
+							event_type=UNIT_EVENT_MERGED,
 							input_tokens=unit.input_tokens,
 							output_tokens=unit.output_tokens,
 							cost_usd=unit.cost_usd,
@@ -1513,7 +1522,7 @@ class ContinuousController:
 							mission_id=mission.id,
 							epoch_id=epoch.id,
 							work_unit_id=unit.id,
-							event_type="merge_failed",
+							event_type=UNIT_EVENT_MERGE_FAILED,
 							details=json.dumps(_fail_details),
 							stream_details=_fail_details,
 						)
@@ -1541,7 +1550,7 @@ class ContinuousController:
 								mission_id=mission.id,
 								epoch_id=epoch.id,
 								work_unit_id=unit.id,
-								event_type="rejected",
+								event_type=UNIT_EVENT_REJECTED,
 								details=merge_result.failure_output[-2000:],
 								stream_details={"failure_output": merge_result.failure_output[-2000:]},
 							)
@@ -1565,7 +1574,7 @@ class ContinuousController:
 						mission_id=mission.id,
 						epoch_id=epoch.id,
 						work_unit_id=unit.id,
-						event_type="merge_failed",
+						event_type=UNIT_EVENT_MERGE_FAILED,
 						details=json.dumps(_exc_details),
 						stream_details=_exc_details,
 					)
@@ -1932,7 +1941,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			mission_id=mission.id,
 			epoch_id=epoch.id,
 			work_unit_id=unit.id,
-			event_type="retry_queued",
+			event_type=UNIT_EVENT_RETRY_QUEUED,
 			details=json.dumps(_retry_details),
 			stream_details=_retry_details,
 		)
