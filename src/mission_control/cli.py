@@ -338,6 +338,12 @@ def _build_cleanup_objective(config: MissionConfig) -> str:
 	)
 
 
+def _generate_dashboard_token() -> str:
+	"""Generate a random auth token for the dashboard."""
+	import secrets
+	return secrets.token_urlsafe(32)
+
+
 def _start_dashboard_background(
 	db_path: Path, port: int,
 ) -> tuple[object, object]:
@@ -356,6 +362,8 @@ def _start_dashboard_background(
 		db = Database(db_path)
 		db.close()
 
+	auth_token = _generate_dashboard_token()
+
 	# We need the server ref to signal shutdown, but it's created in the thread.
 	# Use a list as a mutable container to pass it back.
 	server_ref: list[uvicorn.Server | None] = [None]
@@ -364,7 +372,7 @@ def _start_dashboard_background(
 	def _run_dashboard() -> None:
 		from mission_control.dashboard.live import LiveDashboard
 
-		dashboard = LiveDashboard(str(db_path))
+		dashboard = LiveDashboard(str(db_path), auth_token=auth_token)
 		config = uvicorn.Config(
 			dashboard.app, host="127.0.0.1", port=port, log_level="warning",
 		)
@@ -377,7 +385,7 @@ def _start_dashboard_background(
 	thread.start()
 	ready.wait(timeout=5)
 
-	url = f"http://127.0.0.1:{port}"
+	url = f"http://127.0.0.1:{port}?token={auth_token}"
 	print(f"Live dashboard: {url}")
 
 	# Give the server a moment to bind, then open browser
@@ -785,8 +793,10 @@ def cmd_live(args: argparse.Namespace) -> int:
 		print("No existing database -- creating empty one")
 		Database(db_path)
 
-	dashboard = LiveDashboard(db_path)
-	print(f"Starting live dashboard at http://{args.host}:{args.port}")
+	auth_token = _generate_dashboard_token()
+	dashboard = LiveDashboard(db_path, auth_token=auth_token)
+	url = f"http://{args.host}:{args.port}?token={auth_token}"
+	print(f"Starting live dashboard at {url}")
 	uvicorn.run(dashboard.app, host=args.host, port=args.port, log_level="warning")
 	return 0
 

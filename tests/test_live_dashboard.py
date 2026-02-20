@@ -976,3 +976,46 @@ class TestBacklogMapping:
 		assert "unit_backlog_map" in snapshot
 		assert "wu-linked" in snapshot["unit_backlog_map"]
 		assert "bl1" in snapshot["unit_backlog_map"]["wu-linked"]
+
+
+class TestCORSMiddleware:
+	def test_cors_allows_localhost(self) -> None:
+		"""CORS preflight from localhost should be allowed."""
+		import tempfile
+		from pathlib import Path
+
+		with tempfile.TemporaryDirectory() as tmp:
+			db_path = str(Path(tmp) / "test.db")
+			Database(db_path).close()
+			dashboard = LiveDashboard(db_path, auth_token="tok")
+			client = TestClient(dashboard.app)
+			resp = client.options(
+				"/api/mission",
+				headers={
+					"Origin": "http://127.0.0.1",
+					"Access-Control-Request-Method": "GET",
+				},
+			)
+			assert resp.status_code == 200
+			assert "127.0.0.1" in resp.headers.get("access-control-allow-origin", "")
+
+	def test_cors_blocks_external_origin(self) -> None:
+		"""CORS preflight from an external origin should be rejected."""
+		import tempfile
+		from pathlib import Path
+
+		with tempfile.TemporaryDirectory() as tmp:
+			db_path = str(Path(tmp) / "test.db")
+			Database(db_path).close()
+			dashboard = LiveDashboard(db_path, auth_token="tok")
+			client = TestClient(dashboard.app)
+			resp = client.options(
+				"/api/mission",
+				headers={
+					"Origin": "http://evil.example.com",
+					"Access-Control-Request-Method": "GET",
+				},
+			)
+			# FastAPI CORS middleware returns 400 for disallowed origins
+			assert "access-control-allow-origin" not in resp.headers or \
+				"evil.example.com" not in resp.headers.get("access-control-allow-origin", "")

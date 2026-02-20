@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
@@ -109,6 +110,12 @@ class LiveDashboard:
 			self.db.close()
 
 		self.app = FastAPI(title="Mission Control Live", lifespan=_lifespan)
+		self.app.add_middleware(
+			CORSMiddleware,
+			allow_origins=["http://127.0.0.1", "http://localhost"],
+			allow_methods=["GET", "POST", "PATCH", "DELETE"],
+			allow_headers=["Authorization", "Content-Type"],
+		)
 		self._setup_routes()
 
 	def _current_mission(self) -> Any | None:

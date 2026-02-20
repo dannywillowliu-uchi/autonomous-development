@@ -1422,9 +1422,20 @@ let unitTitles = {}; // unit_id -> title cache for event log
 let expandedCards = new Set();
 let pendingConfirmAction = null;
 
+// Extract auth token from URL query param
+const _urlParams = new URLSearchParams(location.search);
+const _authToken = _urlParams.get("token") || "";
+
+function _authHeaders() {
+	const h = { "Content-Type": "application/json" };
+	if (_authToken) h["Authorization"] = `Bearer ${_authToken}`;
+	return h;
+}
+
 function connect() {
 	const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-	ws = new WebSocket(`${protocol}//${location.host}/ws`);
+	const tokenParam = _authToken ? `?token=${_authToken}` : "";
+	ws = new WebSocket(`${protocol}//${location.host}/ws${tokenParam}`);
 
 	ws.onopen = () => {
 		document.getElementById("ws-status").textContent = "Connected";
@@ -1878,7 +1889,7 @@ async function sendSignal(type, payload = {}) {
 	try {
 		await fetch("/api/signal", {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: _authHeaders(),
 			body: JSON.stringify({ signal_type: type, payload }),
 		});
 	} catch (e) {
@@ -2147,7 +2158,7 @@ function submitRating(el) {
 	const score = parseInt(el.dataset.score, 10);
 	fetch("/api/rating", {
 		method: "POST",
-		headers: {"Content-Type": "application/json"},
+		headers: _authHeaders(),
 		body: JSON.stringify({mission_id: missionId, rating: score}),
 	})
 	.then(r => r.json())
@@ -2349,7 +2360,7 @@ function submitBacklogItem() {
 
 	fetch(url, {
 		method: method,
-		headers: { "Content-Type": "application/json" },
+		headers: _authHeaders(),
 		body: JSON.stringify(payload),
 	})
 	.then(r => r.json())
@@ -2365,7 +2376,7 @@ function submitBacklogItem() {
 }
 
 function deferBacklogItem(id) {
-	fetch(`/api/backlog/${id}/defer`, { method: "POST" })
+	fetch(`/api/backlog/${id}/defer`, { method: "POST", headers: _authHeaders() })
 		.then(r => r.json())
 		.then(data => {
 			if (data.status === "ok") showToast("Item deferred", "info");
@@ -2383,7 +2394,7 @@ function pinBacklogItem(id) {
 	}
 	fetch(`/api/backlog/${id}/pin`, {
 		method: "POST",
-		headers: { "Content-Type": "application/json" },
+		headers: _authHeaders(),
 		body: JSON.stringify({ score: num }),
 	})
 	.then(r => r.json())
@@ -2395,7 +2406,7 @@ function pinBacklogItem(id) {
 
 function deleteBacklogItem(id) {
 	showConfirm("Delete Backlog Item", "This will mark the item as rejected. Continue?", function() {
-		fetch(`/api/backlog/${id}`, { method: "DELETE" })
+		fetch(`/api/backlog/${id}`, { method: "DELETE", headers: _authHeaders() })
 			.then(r => r.json())
 			.then(data => {
 				if (data.status === "ok") showToast("Item deleted", "info");
