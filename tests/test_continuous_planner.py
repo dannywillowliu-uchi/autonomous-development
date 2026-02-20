@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock
 
 from mission_control.config import ContinuousConfig, MissionConfig, PlannerConfig, TargetConfig
@@ -30,8 +29,8 @@ class TestIngestHandoff:
 		planner = ContinuousPlanner(config, db)
 
 		h = Handoff(
-			discoveries=json.dumps(["Found auth module", "Tests need fixtures"]),
-			concerns=json.dumps(["Rate limiting missing"]),
+			discoveries=["Found auth module", "Tests need fixtures"],
+			concerns=["Rate limiting missing"],
 		)
 		planner.ingest_handoff(h)
 
@@ -39,12 +38,12 @@ class TestIngestHandoff:
 		assert "Found auth module" in planner._discoveries
 		assert len(planner._concerns) == 1
 
-	def test_handles_malformed_json(self) -> None:
+	def test_handles_empty_lists(self) -> None:
 		config = _config()
 		db = Database(":memory:")
 		planner = ContinuousPlanner(config, db)
 
-		h = Handoff(discoveries="not json", concerns="")
+		h = Handoff(discoveries=[], concerns=[])
 		planner.ingest_handoff(h)
 
 		assert len(planner._discoveries) == 0

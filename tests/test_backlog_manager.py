@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import patch
 
 from mission_control.backlog_manager import BacklogManager
@@ -116,7 +115,7 @@ class TestUpdateBacklogOnCompletion:
 		handoff = Handoff(
 			id="h1", work_unit_id="wu1", round_id="", epoch_id="ep1",
 			status="failed", summary="Import error",
-			concerns=json.dumps(["Could not import module X"]),
+			concerns=["Could not import module X"],
 		)
 
 		mgr = BacklogManager(db, config)
@@ -180,8 +179,8 @@ class TestUpdateBacklogFromCompletion:
 		handoff = Handoff(
 			id="h1", work_unit_id="wu1", round_id="", epoch_id="ep1",
 			status="failed",
-			discoveries=json.dumps(["Found pattern X"]),
-			concerns=json.dumps(["Watch out for Y"]),
+			discoveries=["Found pattern X"],
+			concerns=["Watch out for Y"],
 		)
 		unit = WorkUnit(
 			id="wu1", plan_id="p1", title="Add authentication module",

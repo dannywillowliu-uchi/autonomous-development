@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
 from mission_control.config import MissionConfig
@@ -36,19 +35,9 @@ class ContinuousPlanner:
 	def ingest_handoff(self, handoff: Handoff) -> None:
 		"""Accumulate discoveries and concerns from worker feedback."""
 		if handoff.discoveries:
-			try:
-				disc_list = json.loads(handoff.discoveries)
-				if isinstance(disc_list, list):
-					self._discoveries.extend(disc_list)
-			except (json.JSONDecodeError, TypeError):
-				pass
+			self._discoveries.extend(handoff.discoveries)
 		if handoff.concerns:
-			try:
-				conc_list = json.loads(handoff.concerns)
-				if isinstance(conc_list, list):
-					self._concerns.extend(conc_list)
-			except (json.JSONDecodeError, TypeError):
-				pass
+			self._concerns.extend(handoff.concerns)
 
 	def set_backlog_items(self, items: list[BacklogItem]) -> None:
 		"""Store backlog items as context for planning prompts."""

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
 from mission_control.config import MissionConfig
@@ -73,10 +72,7 @@ class BacklogManager:
 		failure_reasons: list[str] = []
 		for h in handoffs:
 			if h.status != "completed":
-				try:
-					concerns = json.loads(h.concerns) if h.concerns else []
-				except (json.JSONDecodeError, TypeError):
-					concerns = []
+				concerns = h.concerns
 				if concerns:
 					failure_reasons.append(concerns[-1][:200])
 				elif h.summary:
@@ -148,17 +144,11 @@ class BacklogManager:
 		failure_reason = ""
 		context_additions: list[str] = []
 		if handoff:
-			try:
-				concerns = json.loads(handoff.concerns) if handoff.concerns else []
-			except (json.JSONDecodeError, TypeError):
-				concerns = []
+			concerns = handoff.concerns
 			if concerns:
 				failure_reason = "; ".join(str(c)[:200] for c in concerns[:3])
 
-			try:
-				discoveries = json.loads(handoff.discoveries) if handoff.discoveries else []
-			except (json.JSONDecodeError, TypeError):
-				discoveries = []
+			discoveries = handoff.discoveries
 			if discoveries:
 				context_additions.extend(str(d)[:200] for d in discoveries[:3])
 			if concerns:

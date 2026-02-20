@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -35,19 +34,13 @@ def build_planner_context(db: Database, mission_id: str) -> str:
 		if h.summary:
 			lines.append(f"Summary: {h.summary}")
 
-		try:
-			discoveries = json.loads(h.discoveries) if h.discoveries else []
-		except (json.JSONDecodeError, TypeError):
-			discoveries = []
+		discoveries = h.discoveries
 		if discoveries:
 			lines.append("Discoveries:")
 			for d in discoveries[:5]:
 				lines.append(f"  - {d}")
 
-		try:
-			concerns = json.loads(h.concerns) if h.concerns else []
-		except (json.JSONDecodeError, TypeError):
-			concerns = []
+		concerns = h.concerns
 		if concerns:
 			lines.append("Concerns:")
 			for c in concerns[:5]:
@@ -180,10 +173,7 @@ def update_mission_state(
 	all_files: set[str] = set()
 
 	for h in reversed(handoffs):  # oldest first
-		try:
-			files = json.loads(h.files_changed) if h.files_changed else []
-		except (json.JSONDecodeError, TypeError):
-			files = []
+		files = h.files_changed
 		file_str = ", ".join(files[:5]) if files else ""
 		for f in files:
 			all_files.add(f)
@@ -204,10 +194,7 @@ def update_mission_state(
 				+ (f" (files: {file_str})" if file_str else ""),
 			)
 		else:
-			try:
-				concerns = json.loads(h.concerns) if h.concerns else []
-			except (json.JSONDecodeError, TypeError):
-				concerns = []
+			concerns = h.concerns
 			detail = concerns[-1][:100] if concerns else "unknown"
 			ts_part = f" ({timestamp})" if timestamp else ""
 			failed.append(f"- [ ] {h.work_unit_id[:8]}{ts_part} -- {detail}")

@@ -358,7 +358,7 @@ def _tool_get_round_details(registry: ProjectRegistry, args: dict) -> dict:
 				"work_unit_id": h.work_unit_id,
 				"status": h.status,
 				"summary": h.summary[:200] if h.summary else "",
-				"discoveries_count": len(json.loads(h.discoveries)) if h.discoveries else 0,
+				"discoveries_count": len(h.discoveries),
 			}
 			for h in handoffs
 		]

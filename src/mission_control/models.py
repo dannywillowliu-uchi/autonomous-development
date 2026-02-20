@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MCResultSchema(BaseModel, extra="ignore"):
@@ -252,19 +252,18 @@ class PlanNode:
 	children_ids: str = ""  # comma-separated child PlanNode IDs
 
 
-@dataclass
-class Handoff:
+class Handoff(BaseModel):
 	"""Structured output from a worker after executing a work unit."""
 
-	id: str = field(default_factory=_new_id)
+	id: str = Field(default_factory=_new_id)
 	work_unit_id: str = ""
 	round_id: str = ""
 	status: str = ""  # completed/failed/blocked
-	commits: str = ""  # JSON array of commit hashes
+	commits: list[str] = Field(default_factory=list)
 	summary: str = ""
-	discoveries: str = ""  # JSON array of discovery strings
-	concerns: str = ""  # JSON array of concern strings
-	files_changed: str = ""  # JSON array of file paths
+	discoveries: list[str] = Field(default_factory=list)
+	concerns: list[str] = Field(default_factory=list)
+	files_changed: list[str] = Field(default_factory=list)
 	epoch_id: str | None = None  # continuous mode epoch
 
 

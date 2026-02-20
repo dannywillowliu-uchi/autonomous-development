@@ -51,7 +51,7 @@ def _seed_unit_and_handoff(
 		epoch_id=epoch.id,
 		status=handoff_status,
 		summary=f"did {unit_id}",
-		files_changed=json.dumps(files or []),
+		files_changed=files or [],
 	)
 	db.insert_handoff(handoff)
 	return unit, handoff

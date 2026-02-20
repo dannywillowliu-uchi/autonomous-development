@@ -409,7 +409,7 @@ class TestProcessCompletions:
 		handoff = Handoff(
 			work_unit_id="wu1", round_id="", epoch_id="ep1",
 			status="completed", summary="Found useful info",
-			discoveries='["pattern X exists"]',
+			discoveries=["pattern X exists"],
 		)
 
 		completion = WorkerCompletion(

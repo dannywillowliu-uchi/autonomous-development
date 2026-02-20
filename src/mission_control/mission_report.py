@@ -42,12 +42,7 @@ def generate_mission_report(
 	handoffs = db.get_recent_handoffs(mission.id, limit=10_000)
 	all_files: set[str] = set()
 	for h in handoffs:
-		try:
-			files = json.loads(h.files_changed) if h.files_changed else []
-		except (json.JSONDecodeError, TypeError):
-			files = []
-		if isinstance(files, list):
-			all_files.update(f for f in files if isinstance(f, str))
+		all_files.update(h.files_changed)
 
 	# Collect quality data
 	reviews = db.get_unit_reviews_for_mission(mission.id)

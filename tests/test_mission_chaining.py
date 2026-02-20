@@ -104,11 +104,13 @@ class TestChainLoopInCLI:
 		config.target.objective = "Do something"
 		return config_path, config
 
+	@patch("mission_control.cli._start_dashboard_background", return_value=(None, None))
 	@patch("mission_control.continuous_controller.ContinuousController")
 	@patch("mission_control.cli.load_config")
 	@patch("mission_control.cli.Database")
 	def test_no_chain_runs_once(
-		self, mock_db_cls: MagicMock, mock_load: MagicMock, mock_ctrl_cls: MagicMock, tmp_path: Path,
+		self, mock_db_cls: MagicMock, mock_load: MagicMock, mock_ctrl_cls: MagicMock,
+		_mock_dash: MagicMock, tmp_path: Path,
 	) -> None:
 		_, config = self._make_config(tmp_path)
 		mock_load.return_value = config
@@ -128,11 +130,13 @@ class TestChainLoopInCLI:
 
 		assert ret == 0
 
+	@patch("mission_control.cli._start_dashboard_background", return_value=(None, None))
 	@patch("mission_control.continuous_controller.ContinuousController")
 	@patch("mission_control.cli.load_config")
 	@patch("mission_control.cli.Database")
 	def test_chain_runs_multiple(
-		self, mock_db_cls: MagicMock, mock_load: MagicMock, mock_ctrl_cls: MagicMock, tmp_path: Path,
+		self, mock_db_cls: MagicMock, mock_load: MagicMock, mock_ctrl_cls: MagicMock,
+		_mock_dash: MagicMock, tmp_path: Path,
 	) -> None:
 		_, config = self._make_config(tmp_path)
 		mock_load.return_value = config
@@ -169,11 +173,13 @@ class TestChainLoopInCLI:
 		# Objective should have been updated to the chained one
 		assert config.target.objective == "Continue X"
 
+	@patch("mission_control.cli._start_dashboard_background", return_value=(None, None))
 	@patch("mission_control.continuous_controller.ContinuousController")
 	@patch("mission_control.cli.load_config")
 	@patch("mission_control.cli.Database")
 	def test_chain_respects_max_depth(
-		self, mock_db_cls: MagicMock, mock_load: MagicMock, mock_ctrl_cls: MagicMock, tmp_path: Path,
+		self, mock_db_cls: MagicMock, mock_load: MagicMock, mock_ctrl_cls: MagicMock,
+		_mock_dash: MagicMock, tmp_path: Path,
 	) -> None:
 		_, config = self._make_config(tmp_path)
 		mock_load.return_value = config
@@ -205,11 +211,13 @@ class TestChainLoopInCLI:
 		assert call_count[0] == 2
 		assert ret == 1  # objective_met=False -> return 1
 
+	@patch("mission_control.cli._start_dashboard_background", return_value=(None, None))
 	@patch("mission_control.continuous_controller.ContinuousController")
 	@patch("mission_control.cli.load_config")
 	@patch("mission_control.cli.Database")
 	def test_chain_stops_on_empty_next_objective(
-		self, mock_db_cls: MagicMock, mock_load: MagicMock, mock_ctrl_cls: MagicMock, tmp_path: Path,
+		self, mock_db_cls: MagicMock, mock_load: MagicMock, mock_ctrl_cls: MagicMock,
+		_mock_dash: MagicMock, tmp_path: Path,
 	) -> None:
 		_, config = self._make_config(tmp_path)
 		mock_load.return_value = config

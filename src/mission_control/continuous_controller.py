@@ -1380,13 +1380,10 @@ class ContinuousController:
 				approach_count = 2
 				if handoff:
 					try:
-						mc_data = json.loads(handoff.discoveries) if handoff.discoveries else []
-						# Check for comparison_report in the raw MC_RESULT via summary or discoveries
-						if isinstance(mc_data, list):
-							for item in mc_data:
-								if isinstance(item, str) and "approach" in item.lower():
-									comparison_report = item
-									break
+						for item in handoff.discoveries:
+							if isinstance(item, str) and "approach" in item.lower():
+								comparison_report = item
+								break
 					except (json.JSONDecodeError, TypeError):
 						pass
 					# Also check the handoff summary for report data
@@ -1529,14 +1526,9 @@ class ContinuousController:
 
 						# Append merge failure to handoff concerns
 						if handoff:
-							try:
-								concerns = json.loads(handoff.concerns or "[]")
-							except (json.JSONDecodeError, TypeError):
-								concerns = []
-							concerns.append(
+							handoff.concerns.append(
 								f"Merge failed: {merge_result.failure_output[-500:]}",
 							)
-							handoff.concerns = json.dumps(concerns)
 
 						failure_reason = merge_result.failure_output[-1000:]
 
@@ -2212,19 +2204,11 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 					round_id="",
 					epoch_id=epoch.id,
 					status=unit_status,
-					commits=json.dumps(
-						commits if isinstance(commits, list) else [],
-					),
+					commits=commits if isinstance(commits, list) else [],
 					summary=unit.output_summary,
-					discoveries=json.dumps(
-						disc if isinstance(disc, list) else [],
-					),
-					concerns=json.dumps(
-						conc if isinstance(conc, list) else [],
-					),
-					files_changed=json.dumps(
-						fc if isinstance(fc, list) else [],
-					),
+					discoveries=disc if isinstance(disc, list) else [],
+					concerns=conc if isinstance(conc, list) else [],
+					files_changed=fc if isinstance(fc, list) else [],
 				)
 				await self.db.locked_call("insert_handoff", handoff)
 				unit.handoff_id = handoff.id

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import sqlite3
@@ -1659,9 +1660,12 @@ class Database:
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				handoff.id, handoff.work_unit_id, handoff.round_id,
-				handoff.epoch_id, handoff.status, handoff.commits,
-				handoff.summary, handoff.discoveries, handoff.concerns,
-				handoff.files_changed,
+				handoff.epoch_id, handoff.status,
+				json.dumps(handoff.commits),
+				handoff.summary,
+				json.dumps(handoff.discoveries),
+				json.dumps(handoff.concerns),
+				json.dumps(handoff.files_changed),
 			),
 		)
 		self.conn.commit()
@@ -1680,6 +1684,19 @@ class Database:
 		return [self._row_to_handoff(r) for r in rows]
 
 	@staticmethod
+	def _parse_json_list(value: str | None) -> list[str]:
+		"""Parse a JSON string to a list, handling backward compat with malformed data."""
+		if not value:
+			return []
+		try:
+			parsed = json.loads(value)
+			if isinstance(parsed, list):
+				return [str(item) for item in parsed]
+		except (json.JSONDecodeError, TypeError):
+			pass
+		return []
+
+	@staticmethod
 	def _row_to_handoff(row: sqlite3.Row) -> Handoff:
 		keys = row.keys()
 		return Handoff(
@@ -1687,11 +1704,11 @@ class Database:
 			work_unit_id=row["work_unit_id"],
 			round_id=row["round_id"],
 			status=row["status"],
-			commits=row["commits"],
+			commits=Database._parse_json_list(row["commits"]),
 			summary=row["summary"],
-			discoveries=row["discoveries"],
-			concerns=row["concerns"],
-			files_changed=row["files_changed"],
+			discoveries=Database._parse_json_list(row["discoveries"]),
+			concerns=Database._parse_json_list(row["concerns"]),
+			files_changed=Database._parse_json_list(row["files_changed"]),
 			epoch_id=row["epoch_id"] if "epoch_id" in keys else None,
 		)
 

@@ -148,6 +148,7 @@ class _FakeResult:
 	proposed_by_strategist: bool = False
 
 
+@patch("mission_control.cli._start_dashboard_background", return_value=(None, None))
 class TestMissionChainLoop:
 	"""Tests that the chaining loop in cmd_mission respects max depth and next_objective."""
 
@@ -176,7 +177,7 @@ class TestMissionChainLoop:
 	@patch("mission_control.cli.Database")
 	@patch("mission_control.cli.load_config")
 	def test_chain_runs_multiple_missions(
-		self, mock_load_config: MagicMock, mock_db_cls: MagicMock,
+		self, mock_load_config: MagicMock, mock_db_cls: MagicMock, _mock_dashboard: MagicMock,
 	) -> None:
 		"""Chain 2 missions then stop (next_objective empty on 2nd)."""
 		config = MagicMock()
@@ -203,7 +204,7 @@ class TestMissionChainLoop:
 	@patch("mission_control.cli.Database")
 	@patch("mission_control.cli.load_config")
 	def test_chain_respects_max_depth(
-		self, mock_load_config: MagicMock, mock_db_cls: MagicMock,
+		self, mock_load_config: MagicMock, mock_db_cls: MagicMock, _mock_dashboard: MagicMock,
 	) -> None:
 		"""Even if next_objective keeps being set, stop at max_chain_depth."""
 		config = MagicMock()
@@ -228,7 +229,7 @@ class TestMissionChainLoop:
 	@patch("mission_control.cli.Database")
 	@patch("mission_control.cli.load_config")
 	def test_no_chain_runs_once(
-		self, mock_load_config: MagicMock, mock_db_cls: MagicMock,
+		self, mock_load_config: MagicMock, mock_db_cls: MagicMock, _mock_dashboard: MagicMock,
 	) -> None:
 		"""Without --chain, only one mission runs even if next_objective is set."""
 		config = MagicMock()
@@ -250,7 +251,7 @@ class TestMissionChainLoop:
 	@patch("mission_control.cli.Database")
 	@patch("mission_control.cli.load_config")
 	def test_chain_updates_objective_between_missions(
-		self, mock_load_config: MagicMock, mock_db_cls: MagicMock,
+		self, mock_load_config: MagicMock, mock_db_cls: MagicMock, _mock_dashboard: MagicMock,
 	) -> None:
 		"""Verify config.target.objective is updated to next_objective between chains."""
 		config = MagicMock()
@@ -292,7 +293,7 @@ class TestMissionChainLoop:
 	@patch("mission_control.cli.Database")
 	@patch("mission_control.cli.load_config")
 	def test_chain_returns_failure_from_last_mission(
-		self, mock_load_config: MagicMock, mock_db_cls: MagicMock,
+		self, mock_load_config: MagicMock, mock_db_cls: MagicMock, _mock_dashboard: MagicMock,
 	) -> None:
 		"""Return code reflects the last mission result."""
 		config = MagicMock()

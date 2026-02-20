@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -247,7 +246,7 @@ class TestControllerExperimentCompletion:
 			epoch_id="ep-1",
 			status="completed",
 			summary="Redis is 2x faster",
-			discoveries=json.dumps(["Redis approach is faster with lower latency"]),
+			discoveries=["Redis approach is faster with lower latency"],
 		)
 		db_runtime.insert_handoff(handoff)
 
@@ -302,7 +301,7 @@ class TestControllerExperimentCompletion:
 			epoch_id="ep-2",
 			status="completed",
 			summary="MessagePack is 3x faster for binary data",
-			discoveries=json.dumps(["approach A: JSON - 100ms avg", "approach B: msgpack - 33ms avg"]),
+			discoveries=["approach A: JSON - 100ms avg", "approach B: msgpack - 33ms avg"],
 		)
 		db_runtime.insert_handoff(handoff)
 

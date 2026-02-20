@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 
@@ -133,11 +132,11 @@ def _build_handoff(mc_result: dict[str, object], work_unit_id: str, round_id: st
 		work_unit_id=work_unit_id,
 		round_id=round_id,
 		status=str(validated.get("status", "completed")),
-		commits=json.dumps(commits) if isinstance(commits, list) else "[]",
+		commits=commits if isinstance(commits, list) else [],
 		summary=str(validated.get("summary", "")),
-		discoveries=json.dumps(discoveries) if isinstance(discoveries, list) else "[]",
-		concerns=json.dumps(concerns) if isinstance(concerns, list) else "[]",
-		files_changed=json.dumps(files_changed) if isinstance(files_changed, list) else "[]",
+		discoveries=discoveries if isinstance(discoveries, list) else [],
+		concerns=concerns if isinstance(concerns, list) else [],
+		files_changed=files_changed if isinstance(files_changed, list) else [],
 	)
 
 

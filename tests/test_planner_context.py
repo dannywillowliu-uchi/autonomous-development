@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from mission_control.config import MissionConfig
@@ -68,8 +67,8 @@ class TestBuildPlannerContext:
 		handoff = Handoff(
 			id="h1", work_unit_id="wu1", round_id="", epoch_id="ep1",
 			status="completed", summary="Done",
-			discoveries=json.dumps(["Found pattern X"]),
-			concerns=json.dumps(["Watch out for Y"]),
+			discoveries=["Found pattern X"],
+			concerns=["Watch out for Y"],
 		)
 		db.insert_handoff(handoff)
 
@@ -174,7 +173,7 @@ class TestUpdateMissionState:
 		handoff = Handoff(
 			id="h1", work_unit_id="wu1", round_id="", epoch_id="ep1",
 			status="completed", summary="Done with it",
-			files_changed=json.dumps(["src/main.py"]),
+			files_changed=["src/main.py"],
 		)
 		db.insert_handoff(handoff)
 
@@ -199,7 +198,7 @@ class TestUpdateMissionState:
 		handoff = Handoff(
 			id="h1", work_unit_id="wu1", round_id="", epoch_id="ep1",
 			status="failed", summary="Broke",
-			concerns=json.dumps(["Something went wrong"]),
+			concerns=["Something went wrong"],
 		)
 		db.insert_handoff(handoff)
 
@@ -244,7 +243,7 @@ class TestUpdateMissionState:
 		handoff = Handoff(
 			id="h1", work_unit_id="wu1", round_id="", epoch_id="ep1",
 			status="completed", summary="Done",
-			files_changed=json.dumps(["src/a.py", "src/b.py"]),
+			files_changed=["src/a.py", "src/b.py"],
 		)
 		db.insert_handoff(handoff)
 

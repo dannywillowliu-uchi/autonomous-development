@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -245,7 +244,7 @@ class TestStatusTransitionsOnFailure:
 
 		handoff = Handoff(
 			work_unit_id="u1", status="failed",
-			concerns=json.dumps(["OOM at test_large_dataset"]),
+			concerns=["OOM at test_large_dataset"],
 			summary="Failed",
 		)
 
@@ -274,8 +273,8 @@ class TestPartialCompletionContextCarryForward:
 
 		handoff = Handoff(
 			work_unit_id="u1", status="completed",
-			discoveries=json.dumps(["Found circular import in db.py"]),
-			concerns=json.dumps([]),
+			discoveries=["Found circular import in db.py"],
+			concerns=[],
 		)
 
 		# attempt < max_attempts AND not merged -> partial

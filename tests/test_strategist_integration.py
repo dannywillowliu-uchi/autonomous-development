@@ -77,12 +77,14 @@ model = "sonnet"
 """)
 		return config_file
 
+	@patch("mission_control.cli._start_dashboard_background", return_value=(None, None))
 	@patch("mission_control.cli.input", return_value="y")
 	@patch("mission_control.cli.asyncio.run")
 	def test_strategist_approved_sets_objective(
 		self,
 		mock_run: MagicMock,
 		mock_input: MagicMock,
+		_mock_dash: MagicMock,
 		tmp_path: Path,
 		mock_strategist_module: MagicMock,
 	) -> None:
@@ -105,12 +107,14 @@ model = "sonnet"
 		assert result == 0
 		mock_input.assert_called_once()
 
+	@patch("mission_control.cli._start_dashboard_background", return_value=(None, None))
 	@patch("mission_control.cli.input", return_value="n")
 	@patch("mission_control.cli.asyncio.run")
 	def test_strategist_rejected_exits_zero(
 		self,
 		mock_run: MagicMock,
 		mock_input: MagicMock,
+		_mock_dash: MagicMock,
 		tmp_path: Path,
 		mock_strategist_module: MagicMock,
 	) -> None:
@@ -129,10 +133,12 @@ model = "sonnet"
 
 		assert result == 0
 
+	@patch("mission_control.cli._start_dashboard_background", return_value=(None, None))
 	@patch("mission_control.cli.asyncio.run")
 	def test_strategist_auto_approve_skips_prompt(
 		self,
 		mock_run: MagicMock,
+		_mock_dash: MagicMock,
 		tmp_path: Path,
 		mock_strategist_module: MagicMock,
 	) -> None:

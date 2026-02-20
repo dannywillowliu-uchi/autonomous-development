@@ -9,8 +9,6 @@ Covers:
 
 from __future__ import annotations
 
-import json
-
 from mission_control.config import MissionConfig
 from mission_control.continuous_controller import ContinuousController
 from mission_control.db import Database
@@ -50,8 +48,8 @@ def _insert_unit_with_handoff(
 	handoff = Handoff(
 		work_unit_id=unit_id, epoch_id=epoch_id,
 		status=handoff_status, summary=summary,
-		files_changed=json.dumps(files_changed or []),
-		concerns=json.dumps(concerns or []),
+		files_changed=files_changed or [],
+		concerns=concerns or [],
 	)
 	db.insert_handoff(handoff)
 
