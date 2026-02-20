@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mission_control.backends import LocalBackend, SSHBackend, WorkerBackend
+from mission_control.backends import ContainerBackend, LocalBackend, SSHBackend, WorkerBackend
 from mission_control.backlog_manager import BacklogManager
 from mission_control.config import ContinuousConfig, MissionConfig, claude_subprocess_env
 from mission_control.continuous_planner import ContinuousPlanner
@@ -688,6 +688,24 @@ class ContinuousController:
 		# Backend
 		if self.config.backend.type == "ssh":
 			self._backend = SSHBackend(self.config.backend.ssh_hosts)
+		elif self.config.backend.type == "container":
+			pool_dir = (
+				self.config.scheduler.parallel.pool_dir
+				or str(Path(source_repo).parent / ".mc-pool")
+			)
+			num_workers = self.config.scheduler.parallel.num_workers
+			backend = ContainerBackend(
+				source_repo=source_repo,
+				pool_dir=pool_dir,
+				container_config=self.config.backend.container,
+				max_clones=num_workers + 1,
+				base_branch=self.config.target.branch,
+				max_output_mb=self.config.backend.max_output_mb,
+			)
+			await backend.initialize(
+				warm_count=self.config.scheduler.parallel.warm_clones,
+			)
+			self._backend = backend
 		else:
 			pool_dir = (
 				self.config.scheduler.parallel.pool_dir
@@ -707,7 +725,7 @@ class ContinuousController:
 
 		# Green branch manager
 		self._green_branch = GreenBranchManager(self.config, self.db)
-		if isinstance(self._backend, LocalBackend):
+		if isinstance(self._backend, (LocalBackend, ContainerBackend)):
 			gb_workspace = await self._backend.provision_workspace(
 				"green-branch-mgr", source_repo, self.config.target.branch,
 			)

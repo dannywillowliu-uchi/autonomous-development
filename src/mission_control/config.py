@@ -185,12 +185,29 @@ class PricingConfig:
 
 
 @dataclass
+class ContainerConfig:
+	"""Docker container backend settings."""
+
+	image: str = "mission-control-worker:latest"
+	docker_executable: str = "docker"
+	workspace_mount: str = "/workspace"
+	claude_config_dir: str = ""  # host path, fallback to CLAUDE_CONFIG_DIR env
+	extra_volumes: list[str] = field(default_factory=list)
+	cap_drop: list[str] = field(default_factory=lambda: ["ALL"])
+	security_opt: list[str] = field(default_factory=lambda: ["no-new-privileges:true"])
+	network: str = "bridge"
+	run_as_user: str = "10000:10000"
+	startup_timeout: int = 60
+
+
+@dataclass
 class BackendConfig:
 	"""Worker backend settings."""
 
 	type: str = "local"  # local/ssh/container
 	max_output_mb: int = 50  # max stdout size per worker in MB
 	ssh_hosts: list[SSHHostConfig] = field(default_factory=list)
+	container: ContainerConfig = field(default_factory=ContainerConfig)
 
 
 @dataclass
@@ -278,6 +295,13 @@ class ToolSynthesisConfig:
 
 
 @dataclass
+class SecurityConfig:
+	"""Security settings for worker subprocess isolation."""
+
+	extra_env_keys: list[str] = field(default_factory=list)
+
+
+@dataclass
 class MissionConfig:
 	"""Top-level mission-control configuration."""
 
@@ -298,6 +322,7 @@ class MissionConfig:
 	models: ModelsConfig = field(default_factory=ModelsConfig)
 	specialist: SpecialistConfig = field(default_factory=SpecialistConfig)
 	tool_synthesis: ToolSynthesisConfig = field(default_factory=ToolSynthesisConfig)
+	security: SecurityConfig = field(default_factory=SecurityConfig)
 
 
 def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
@@ -490,6 +515,19 @@ def _build_pricing(data: dict[str, Any]) -> PricingConfig:
 	return pc
 
 
+def _build_container(data: dict[str, Any]) -> ContainerConfig:
+	cc = ContainerConfig()
+	for key in ("image", "docker_executable", "workspace_mount", "claude_config_dir", "network", "run_as_user"):
+		if key in data:
+			setattr(cc, key, str(data[key]))
+	for key in ("extra_volumes", "cap_drop", "security_opt"):
+		if key in data:
+			setattr(cc, key, [str(v) for v in data[key]])
+	if "startup_timeout" in data:
+		cc.startup_timeout = int(data["startup_timeout"])
+	return cc
+
+
 def _build_backend(data: dict[str, Any]) -> BackendConfig:
 	bc = BackendConfig()
 	if "type" in data:
@@ -508,6 +546,8 @@ def _build_backend(data: dict[str, Any]) -> BackendConfig:
 			if "max_workers" in h:
 				host.max_workers = int(h["max_workers"])
 			bc.ssh_hosts.append(host)
+	if "container" in data:
+		bc.container = _build_container(data["container"])
 	return bc
 
 
@@ -582,6 +622,13 @@ def _build_tool_synthesis(data: dict[str, Any]) -> ToolSynthesisConfig:
 	return tc
 
 
+def _build_security(data: dict[str, Any]) -> SecurityConfig:
+	sc = SecurityConfig()
+	if "extra_env_keys" in data:
+		sc.extra_env_keys = [str(k) for k in data["extra_env_keys"]]
+	return sc
+
+
 def _build_deploy(data: dict[str, Any]) -> DeployConfig:
 	dc = DeployConfig()
 	if "enabled" in data:
@@ -600,16 +647,50 @@ def _build_deploy(data: dict[str, Any]) -> DeployConfig:
 	return dc
 
 
-_STRIP_ENV_KEYS = {"ANTHROPIC_API_KEY", "CLAUDECODE"}
+_ENV_ALLOWLIST = {
+	# System essentials
+	"HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE",
+	"TERM", "TERM_PROGRAM", "TMPDIR", "TMP", "TEMP", "XDG_RUNTIME_DIR",
+	"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
+	# Required for subprocess execution
+	"PATH", "PWD", "OLDPWD", "SHLVL",
+	# Claude Code auth (OAuth/Max -- NOT raw API keys)
+	"CLAUDE_CONFIG_DIR",
+	# Python / Node toolchain
+	"VIRTUAL_ENV", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE",
+	"NODE_PATH", "NPM_CONFIG_PREFIX",
+	# Git (needed for worker commits)
+	"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+	"GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+	# Encoding
+	"PYTHONIOENCODING", "PYTHONUTF8",
+}
+
+# Keys that must NEVER reach workers, even if added to extra_env_keys
+_ENV_DENYLIST = {
+	"ANTHROPIC_API_KEY", "CLAUDECODE",
+	"AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+	"GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN",
+	"NPM_TOKEN", "PYPI_TOKEN",
+	"DATABASE_URL", "REDIS_URL",
+	"TELEGRAM_BOT_TOKEN",
+}
+
+# Module-level extra keys, populated by load_config from [security] section
+_extra_env_keys: set[str] = set()
 
 
 def claude_subprocess_env() -> dict[str, str]:
-	"""Build a clean environment for claude subprocess calls.
+	"""Build a restricted environment for claude subprocess calls.
 
-	Strips ANTHROPIC_API_KEY (forces OAuth/Max auth instead of stale API key)
-	and CLAUDECODE (prevents 'nested session' detection that blocks spawning).
+	Uses an allowlist approach: only safe system vars plus any explicitly
+	configured extras are passed through. Secrets and API keys are stripped.
 	"""
-	return {k: v for k, v in os.environ.items() if k not in _STRIP_ENV_KEYS}
+	allowed = _ENV_ALLOWLIST | _extra_env_keys
+	return {
+		k: v for k, v in os.environ.items()
+		if k in allowed and k not in _ENV_DENYLIST
+	}
 
 
 def load_config(path: str | Path) -> MissionConfig:
@@ -667,6 +748,11 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.specialist = _build_specialist(data["specialist"])
 	if "tool_synthesis" in data:
 		mc.tool_synthesis = _build_tool_synthesis(data["tool_synthesis"])
+	if "security" in data:
+		mc.security = _build_security(data["security"])
+	# Populate module-level extra env keys for claude_subprocess_env()
+	global _extra_env_keys
+	_extra_env_keys = set(mc.security.extra_env_keys) - _ENV_DENYLIST
 	# Allow env vars as fallback for Telegram credentials
 	tg = mc.notifications.telegram
 	if not tg.bot_token:
@@ -715,7 +801,20 @@ def validate_config(config: MissionConfig) -> list[tuple[str, str]]:
 	if notifications_enabled and tg.bot_token and not _TELEGRAM_TOKEN_RE.match(tg.bot_token):
 		issues.append(("error", "telegram bot_token format invalid (expected digits:alphanumeric)"))
 
-	# 5. Suspicious values
+	# 5. Container backend checks
+	if config.backend.type == "container":
+		cc = config.backend.container
+		if not cc.image:
+			issues.append(("error", "backend.container.image must not be empty"))
+		docker_exe = shutil.which(cc.docker_executable)
+		if docker_exe is None:
+			issues.append(("error", f"docker executable not found on PATH: {cc.docker_executable}"))
+		if cc.claude_config_dir:
+			ccd = Path(os.path.expanduser(cc.claude_config_dir))
+			if not ccd.exists():
+				issues.append(("error", f"backend.container.claude_config_dir does not exist: {ccd}"))
+
+	# 6. Suspicious values
 	if config.scheduler.session_timeout < 60:
 		issues.append(("warning", f"session_timeout is very low: {config.scheduler.session_timeout}s"))
 	if config.scheduler.parallel.num_workers > 8:

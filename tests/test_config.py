@@ -7,7 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from mission_control.config import ContinuousConfig, MissionConfig, ModelsConfig, load_config, validate_config
+from mission_control.config import (
+	_ENV_DENYLIST,
+	ContainerConfig,
+	ContinuousConfig,
+	MissionConfig,
+	ModelsConfig,
+	SecurityConfig,
+	claude_subprocess_env,
+	load_config,
+	validate_config,
+)
 
 
 @pytest.fixture()
@@ -332,3 +342,197 @@ def test_continuous_failure_fields_defaults_when_omitted(minimal_config: Path) -
 	cfg = load_config(minimal_config)
 	assert cfg.continuous.max_consecutive_failures == 3
 	assert cfg.continuous.failure_backoff_seconds == 60
+
+
+# -- Security config tests --
+
+
+def test_security_defaults() -> None:
+	"""SecurityConfig defaults to empty extra_env_keys."""
+	sc = SecurityConfig()
+	assert sc.extra_env_keys == []
+
+
+def test_security_parsed(tmp_path: Path) -> None:
+	"""[security] extra_env_keys are parsed from TOML."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[security]
+extra_env_keys = ["CUSTOM_VAR", "MY_PROJECT_KEY"]
+""")
+	cfg = load_config(toml)
+	assert cfg.security.extra_env_keys == ["CUSTOM_VAR", "MY_PROJECT_KEY"]
+
+
+def test_claude_subprocess_env_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""Only allowlisted env vars pass through to workers."""
+	import mission_control.config as config_mod
+
+	monkeypatch.setattr(config_mod, "_extra_env_keys", set())
+	monkeypatch.setenv("HOME", "/home/test")
+	monkeypatch.setenv("PATH", "/usr/bin")
+	monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "supersecret")
+	monkeypatch.setenv("GITHUB_TOKEN", "ghp_abc123")
+	monkeypatch.setenv("RANDOM_UNKNOWN_VAR", "should_not_pass")
+
+	env = claude_subprocess_env()
+	assert env.get("HOME") == "/home/test"
+	assert env.get("PATH") == "/usr/bin"
+	assert "AWS_SECRET_ACCESS_KEY" not in env
+	assert "GITHUB_TOKEN" not in env
+	assert "RANDOM_UNKNOWN_VAR" not in env
+
+
+def test_claude_subprocess_env_denylist_blocks_extra_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""Denylist overrides extra_env_keys -- secrets can never be added."""
+	import mission_control.config as config_mod
+
+	monkeypatch.setattr(config_mod, "_extra_env_keys", {"AWS_SECRET_ACCESS_KEY", "MY_SAFE_VAR"})
+	monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "supersecret")
+	monkeypatch.setenv("MY_SAFE_VAR", "allowed_value")
+
+	env = claude_subprocess_env()
+	assert "AWS_SECRET_ACCESS_KEY" not in env
+	assert env.get("MY_SAFE_VAR") == "allowed_value"
+
+
+def test_claude_subprocess_env_extra_keys_passed(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""Extra env keys from config are included in worker env."""
+	import mission_control.config as config_mod
+
+	monkeypatch.setattr(config_mod, "_extra_env_keys", {"CUSTOM_PROJECT_VAR"})
+	monkeypatch.setenv("CUSTOM_PROJECT_VAR", "my_value")
+
+	env = claude_subprocess_env()
+	assert env.get("CUSTOM_PROJECT_VAR") == "my_value"
+
+
+def test_claude_subprocess_env_anthropic_key_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""ANTHROPIC_API_KEY is always blocked."""
+	import mission_control.config as config_mod
+
+	monkeypatch.setattr(config_mod, "_extra_env_keys", set())
+	monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+
+	env = claude_subprocess_env()
+	assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_env_denylist_coverage() -> None:
+	"""Denylist covers common secret env var names."""
+	expected_blocked = {
+		"ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN",
+		"TELEGRAM_BOT_TOKEN", "DATABASE_URL",
+	}
+	assert expected_blocked.issubset(_ENV_DENYLIST)
+
+
+# -- Container config tests --
+
+
+def test_container_defaults() -> None:
+	"""ContainerConfig defaults are sensible."""
+	cc = ContainerConfig()
+	assert cc.image == "mission-control-worker:latest"
+	assert cc.docker_executable == "docker"
+	assert cc.workspace_mount == "/workspace"
+	assert cc.claude_config_dir == ""
+	assert cc.extra_volumes == []
+	assert cc.cap_drop == ["ALL"]
+	assert cc.security_opt == ["no-new-privileges:true"]
+	assert cc.network == "bridge"
+	assert cc.run_as_user == "10000:10000"
+	assert cc.startup_timeout == 60
+
+
+def test_container_parsed(tmp_path: Path) -> None:
+	"""[backend.container] values are parsed correctly from TOML."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[backend]
+type = "container"
+
+[backend.container]
+image = "my-worker:v2"
+docker_executable = "podman"
+workspace_mount = "/work"
+claude_config_dir = "~/.config/claude"
+extra_volumes = ["/data:/data:ro"]
+cap_drop = ["NET_RAW", "SYS_PTRACE"]
+security_opt = ["no-new-privileges:true", "seccomp=default"]
+network = "none"
+run_as_user = "1000:1000"
+startup_timeout = 120
+""")
+	cfg = load_config(toml)
+	assert cfg.backend.type == "container"
+	cc = cfg.backend.container
+	assert cc.image == "my-worker:v2"
+	assert cc.docker_executable == "podman"
+	assert cc.workspace_mount == "/work"
+	assert cc.claude_config_dir == "~/.config/claude"
+	assert cc.extra_volumes == ["/data:/data:ro"]
+	assert cc.cap_drop == ["NET_RAW", "SYS_PTRACE"]
+	assert cc.security_opt == ["no-new-privileges:true", "seccomp=default"]
+	assert cc.network == "none"
+	assert cc.run_as_user == "1000:1000"
+	assert cc.startup_timeout == 120
+
+
+def test_container_partial(tmp_path: Path) -> None:
+	"""Partial [backend.container] fills only specified fields."""
+	toml = tmp_path / "mission-control.toml"
+	toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[backend]
+type = "container"
+
+[backend.container]
+image = "custom:latest"
+""")
+	cfg = load_config(toml)
+	cc = cfg.backend.container
+	assert cc.image == "custom:latest"
+	assert cc.docker_executable == "docker"
+	assert cc.cap_drop == ["ALL"]
+
+
+def test_validate_docker_missing(tmp_path: Path) -> None:
+	"""validate_config reports error when docker executable not found."""
+	cfg = _valid_config(tmp_path)
+	cfg.backend.type = "container"
+	cfg.backend.container.docker_executable = "totally_nonexistent_docker_xyz"
+	issues = validate_config(cfg)
+	errors = [msg for lvl, msg in issues if lvl == "error"]
+	assert any("docker executable not found" in e for e in errors)
+
+
+def test_validate_container_empty_image(tmp_path: Path) -> None:
+	"""validate_config reports error when container image is empty."""
+	cfg = _valid_config(tmp_path)
+	cfg.backend.type = "container"
+	cfg.backend.container.image = ""
+	issues = validate_config(cfg)
+	errors = [msg for lvl, msg in issues if lvl == "error"]
+	assert any("image must not be empty" in e for e in errors)
+
+
+def test_validate_container_claude_config_dir_missing(tmp_path: Path) -> None:
+	"""validate_config reports error when claude_config_dir doesn't exist."""
+	cfg = _valid_config(tmp_path)
+	cfg.backend.type = "container"
+	cfg.backend.container.claude_config_dir = str(tmp_path / "nonexistent_dir")
+	issues = validate_config(cfg)
+	errors = [msg for lvl, msg in issues if lvl == "error"]
+	assert any("claude_config_dir does not exist" in e for e in errors)

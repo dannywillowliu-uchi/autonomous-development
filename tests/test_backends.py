@@ -11,9 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mission_control.backends.base import WorkerHandle
+from mission_control.backends.container import ContainerBackend
 from mission_control.backends.local import _MB, LocalBackend
 from mission_control.backends.ssh import SSHBackend
-from mission_control.config import SSHHostConfig
+from mission_control.config import ContainerConfig, SSHHostConfig
 
 # ---------------------------------------------------------------------------
 # WorkerHandle dataclass
@@ -1026,3 +1027,295 @@ class TestSSHBackend:
 		assert backend._stdout_bufs == {}
 		assert backend._stdout_collected == set()
 		assert backend._worker_count == {"host-a": 0, "host-b": 0}
+
+
+# ---------------------------------------------------------------------------
+# ContainerBackend
+# ---------------------------------------------------------------------------
+
+class TestContainerBackend:
+	@pytest.fixture()
+	def container_config(self) -> ContainerConfig:
+		return ContainerConfig(
+			image="mission-control-worker:latest",
+			claude_config_dir="/home/user/.config/claude",
+		)
+
+	@pytest.fixture()
+	def backend(self, container_config: ContainerConfig) -> ContainerBackend:
+		"""ContainerBackend with a mocked WorkspacePool."""
+		with patch("mission_control.backends.container.WorkspacePool") as mock_pool_cls:
+			mock_pool_instance = MagicMock()
+			mock_pool_cls.return_value = mock_pool_instance
+			mock_pool_instance.acquire = AsyncMock()
+			mock_pool_instance.release = AsyncMock()
+			mock_pool_instance.cleanup = AsyncMock()
+			mock_pool_instance.initialize = AsyncMock()
+			b = ContainerBackend(
+				source_repo="/repo",
+				pool_dir="/pool",
+				container_config=container_config,
+				max_clones=5,
+				base_branch="main",
+			)
+		return b
+
+	def test_init_creates_pool(self) -> None:
+		"""Constructor instantiates a WorkspacePool with correct args."""
+		cc = ContainerConfig()
+		with patch("mission_control.backends.container.WorkspacePool") as mock_pool_cls:
+			ContainerBackend(
+				source_repo="/repo",
+				pool_dir="/pool",
+				container_config=cc,
+				max_clones=8,
+				base_branch="develop",
+			)
+			mock_pool_cls.assert_called_once_with(
+				source_repo="/repo",
+				pool_dir="/pool",
+				max_clones=8,
+				base_branch="develop",
+			)
+
+	def test_build_docker_command_volumes(self, backend: ContainerBackend) -> None:
+		"""docker run command includes workspace and claude config mounts."""
+		cmd = backend._build_docker_command("w1", "/host/workspace", ["claude", "--task", "fix"])
+
+		assert "-v" in cmd
+		# Workspace mount
+		assert "/host/workspace:/workspace" in cmd
+		# Claude config mount (read-only)
+		assert "/home/user/.config/claude:/home/mcworker/.config/claude:ro" in cmd
+		# Image and command at the end
+		assert cmd[-3] == "claude"
+		assert cmd[-1] == "fix"
+
+	def test_build_docker_command_caps_and_security(self, backend: ContainerBackend) -> None:
+		"""docker run command drops capabilities and sets security options."""
+		cmd = backend._build_docker_command("w1", "/host/ws", ["echo"])
+
+		# --cap-drop ALL
+		cap_idx = cmd.index("--cap-drop")
+		assert cmd[cap_idx + 1] == "ALL"
+
+		# --security-opt no-new-privileges:true
+		sec_idx = cmd.index("--security-opt")
+		assert cmd[sec_idx + 1] == "no-new-privileges:true"
+
+		# --user
+		user_idx = cmd.index("--user")
+		assert cmd[user_idx + 1] == "10000:10000"
+
+	def test_build_docker_command_env_vars(self, backend: ContainerBackend, monkeypatch: pytest.MonkeyPatch) -> None:
+		"""docker run passes allowlisted env vars, not secrets."""
+		import mission_control.config as config_mod
+
+		monkeypatch.setattr(config_mod, "_extra_env_keys", set())
+		monkeypatch.setenv("HOME", "/home/test")
+		monkeypatch.setenv("PATH", "/usr/bin")
+		monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+
+		cmd = backend._build_docker_command("w1", "/host/ws", ["echo"])
+		cmd_str = " ".join(cmd)
+
+		# HOME and PATH should be passed
+		assert "HOME=/home/test" in cmd_str or "HOME=/home/mcworker" in cmd_str
+		# ANTHROPIC_API_KEY must NOT be passed
+		assert "sk-secret" not in cmd_str
+
+	def test_build_docker_command_skips_claude_config_when_empty(self) -> None:
+		"""No claude config volume when claude_config_dir is empty and env unset."""
+		cc = ContainerConfig(claude_config_dir="")
+		with patch("mission_control.backends.container.WorkspacePool"):
+			b = ContainerBackend(
+				source_repo="/repo", pool_dir="/pool",
+				container_config=cc,
+			)
+		with patch.dict("os.environ", {}, clear=True):
+			import os
+			os.environ.pop("CLAUDE_CONFIG_DIR", None)
+			cmd = b._build_docker_command("w1", "/host/ws", ["echo"])
+
+		# Should not contain the mcworker config mount
+		assert "/home/mcworker/.config/claude:ro" not in " ".join(cmd)
+
+	@patch("mission_control.backends.container.asyncio.create_subprocess_exec")
+	async def test_spawn_builds_docker_command(
+		self, mock_exec: AsyncMock, backend: ContainerBackend,
+	) -> None:
+		"""spawn launches docker run and returns handle with host workspace path."""
+		mock_proc = AsyncMock()
+		mock_proc.pid = 8888
+		mock_exec.return_value = mock_proc
+
+		handle = await backend.spawn("w1", "/host/workspace", ["claude", "--task", "fix"], 120)
+
+		assert handle.worker_id == "w1"
+		assert handle.pid == 8888
+		assert handle.workspace_path == "/host/workspace"
+
+		# Verify docker run was called
+		call_args = mock_exec.call_args[0]
+		assert call_args[0] == "docker"
+		assert call_args[1] == "run"
+		assert "--rm" in call_args
+
+	@patch("mission_control.backends.container.asyncio.create_subprocess_exec")
+	async def test_spawn_returns_host_workspace_path(
+		self, mock_exec: AsyncMock, backend: ContainerBackend,
+	) -> None:
+		"""spawn returns the HOST workspace path, not the container mount path."""
+		mock_proc = AsyncMock()
+		mock_proc.pid = 7777
+		mock_exec.return_value = mock_proc
+
+		handle = await backend.spawn("w1", "/host/pool/clone-1", ["cmd"], 60)
+
+		# Must be host path, not /workspace
+		assert handle.workspace_path == "/host/pool/clone-1"
+		assert handle.workspace_path != "/workspace"
+
+	async def test_check_status_running(self, backend: ContainerBackend) -> None:
+		mock_proc = MagicMock()
+		mock_proc.returncode = None
+		backend._processes["w1"] = mock_proc
+		handle = WorkerHandle(worker_id="w1")
+		assert await backend.check_status(handle) == "running"
+
+	async def test_check_status_completed(self, backend: ContainerBackend) -> None:
+		mock_proc = MagicMock()
+		mock_proc.returncode = 0
+		backend._processes["w1"] = mock_proc
+		handle = WorkerHandle(worker_id="w1")
+		assert await backend.check_status(handle) == "completed"
+
+	async def test_check_status_failed(self, backend: ContainerBackend) -> None:
+		mock_proc = MagicMock()
+		mock_proc.returncode = 1
+		backend._processes["w1"] = mock_proc
+		handle = WorkerHandle(worker_id="w1")
+		assert await backend.check_status(handle) == "failed"
+
+	async def test_check_status_unknown(self, backend: ContainerBackend) -> None:
+		handle = WorkerHandle(worker_id="unknown")
+		assert await backend.check_status(handle) == "failed"
+
+	async def test_get_output_finished_process(self, backend: ContainerBackend) -> None:
+		mock_proc = MagicMock()
+		mock_proc.returncode = 0
+		mock_stdout = AsyncMock()
+		mock_stdout.read = AsyncMock(return_value=b"container output\n")
+		mock_proc.stdout = mock_stdout
+		backend._processes["w1"] = mock_proc
+
+		handle = WorkerHandle(worker_id="w1")
+		output = await backend.get_output(handle)
+		assert output == "container output\n"
+
+	async def test_get_output_unknown_worker(self, backend: ContainerBackend) -> None:
+		handle = WorkerHandle(worker_id="unknown")
+		assert await backend.get_output(handle) == ""
+
+	@patch("mission_control.backends.container.asyncio.create_subprocess_exec")
+	async def test_kill_stops_container(
+		self, mock_exec: AsyncMock, backend: ContainerBackend,
+	) -> None:
+		"""kill terminates docker process and calls docker stop as fallback."""
+		mock_proc = MagicMock()
+		mock_proc.returncode = None
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+		backend._processes["w1"] = mock_proc
+		backend._container_names["w1"] = "mc-worker-w1"
+
+		mock_stop_proc = AsyncMock()
+		mock_stop_proc.communicate = AsyncMock(return_value=(b"", None))
+		mock_exec.return_value = mock_stop_proc
+
+		handle = WorkerHandle(worker_id="w1")
+		await backend.kill(handle)
+
+		mock_proc.kill.assert_called_once()
+		mock_proc.wait.assert_awaited_once()
+		# docker stop should be called as fallback
+		mock_exec.assert_awaited_once()
+		call_args = mock_exec.call_args[0]
+		assert "stop" in call_args
+		assert "mc-worker-w1" in call_args
+
+	async def test_kill_already_finished(self, backend: ContainerBackend) -> None:
+		"""kill is a no-op for process that already finished."""
+		mock_proc = MagicMock()
+		mock_proc.returncode = 0
+		mock_proc.kill = MagicMock()
+		backend._processes["w1"] = mock_proc
+
+		handle = WorkerHandle(worker_id="w1")
+		await backend.kill(handle)
+		mock_proc.kill.assert_not_called()
+
+	async def test_release_workspace(self, backend: ContainerBackend) -> None:
+		"""release_workspace delegates to pool.release."""
+		await backend.release_workspace("/pool/clone-1")
+		backend._pool.release.assert_awaited_once_with(Path("/pool/clone-1"))
+
+	async def test_cleanup(self, backend: ContainerBackend) -> None:
+		"""cleanup kills all running processes and clears state."""
+		running = MagicMock()
+		running.returncode = None
+		running.kill = MagicMock()
+		running.wait = AsyncMock()
+
+		finished = MagicMock()
+		finished.returncode = 0
+
+		backend._processes["w1"] = running
+		backend._processes["w2"] = finished
+		backend._container_names["w1"] = "mc-worker-w1"
+		backend._stdout_bufs["w1"] = b"data"
+
+		await backend.cleanup()
+
+		running.kill.assert_called_once()
+		running.wait.assert_awaited_once()
+		assert backend._processes == {}
+		assert backend._container_names == {}
+		assert backend._stdout_bufs == {}
+		backend._pool.cleanup.assert_awaited_once()
+
+	async def test_initialize_delegates_to_pool(self, backend: ContainerBackend) -> None:
+		"""initialize delegates to pool.initialize."""
+		await backend.initialize(warm_count=3)
+		backend._pool.initialize.assert_awaited_once_with(warm_count=3)
+
+	def test_build_docker_command_extra_volumes(self) -> None:
+		"""Extra volumes are passed through to docker run."""
+		cc = ContainerConfig(
+			claude_config_dir="",
+			extra_volumes=["/data:/data:ro", "/logs:/logs"],
+		)
+		with patch("mission_control.backends.container.WorkspacePool"):
+			b = ContainerBackend(
+				source_repo="/repo", pool_dir="/pool",
+				container_config=cc,
+			)
+		with patch.dict("os.environ", {}, clear=True):
+			import os
+			os.environ.pop("CLAUDE_CONFIG_DIR", None)
+			cmd = b._build_docker_command("w1", "/host/ws", ["echo"])
+
+		cmd_str = " ".join(cmd)
+		assert "/data:/data:ro" in cmd_str
+		assert "/logs:/logs" in cmd_str
+
+	def test_build_docker_command_network(self, backend: ContainerBackend) -> None:
+		"""docker run includes --network flag."""
+		cmd = backend._build_docker_command("w1", "/host/ws", ["echo"])
+		net_idx = cmd.index("--network")
+		assert cmd[net_idx + 1] == "bridge"
+
+	def test_build_docker_command_container_name(self, backend: ContainerBackend) -> None:
+		"""Container name follows mc-worker-{id} pattern."""
+		backend._build_docker_command("abc123", "/host/ws", ["echo"])
+		assert backend._container_names["abc123"] == "mc-worker-abc123"
