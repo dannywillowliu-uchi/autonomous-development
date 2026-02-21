@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator, Sequence
 
+from mission_control.causal import CausalSignal
 from mission_control.constants import EVENT_TO_STATUS
 from mission_control.models import (
 	BacklogItem,
@@ -484,6 +485,33 @@ CREATE TABLE IF NOT EXISTS context_items (
 CREATE INDEX IF NOT EXISTS idx_context_items_round ON context_items(round_id);
 CREATE INDEX IF NOT EXISTS idx_context_items_type ON context_items(item_type);
 CREATE INDEX IF NOT EXISTS idx_context_items_mission ON context_items(mission_id);
+
+CREATE TABLE IF NOT EXISTS causal_signals (
+	id TEXT PRIMARY KEY,
+	work_unit_id TEXT NOT NULL,
+	mission_id TEXT NOT NULL,
+	epoch_id TEXT NOT NULL DEFAULT '',
+	timestamp TEXT NOT NULL,
+	specialist TEXT NOT NULL DEFAULT '',
+	model TEXT NOT NULL DEFAULT '',
+	file_count INTEGER NOT NULL DEFAULT 0,
+	has_dependencies INTEGER NOT NULL DEFAULT 0,
+	attempt INTEGER NOT NULL DEFAULT 0,
+	unit_type TEXT NOT NULL DEFAULT 'implementation',
+	epoch_size INTEGER NOT NULL DEFAULT 0,
+	concurrent_units INTEGER NOT NULL DEFAULT 0,
+	has_overlap INTEGER NOT NULL DEFAULT 0,
+	outcome TEXT NOT NULL DEFAULT '',
+	failure_stage TEXT NOT NULL DEFAULT '',
+	FOREIGN KEY (work_unit_id) REFERENCES work_units(id),
+	FOREIGN KEY (mission_id) REFERENCES missions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_causal_signals_mission ON causal_signals(mission_id);
+CREATE INDEX IF NOT EXISTS idx_causal_signals_outcome ON causal_signals(outcome);
+CREATE INDEX IF NOT EXISTS idx_causal_signals_specialist ON causal_signals(specialist);
+CREATE INDEX IF NOT EXISTS idx_causal_signals_model ON causal_signals(model);
+CREATE INDEX IF NOT EXISTS idx_causal_signals_file_count ON causal_signals(file_count);
 """
 
 
@@ -2708,4 +2736,93 @@ class Database:
 			confidence=row["confidence"],
 			scope_level=row["scope_level"] if "scope_level" in keys else "",
 			created_at=row["created_at"],
+		)
+
+	# -- Causal Signals --
+
+	def insert_causal_signal(self, signal: CausalSignal) -> None:
+		self.conn.execute(
+			"""INSERT INTO causal_signals
+			(id, work_unit_id, mission_id, epoch_id, timestamp,
+			 specialist, model, file_count, has_dependencies, attempt,
+			 unit_type, epoch_size, concurrent_units, has_overlap,
+			 outcome, failure_stage)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				signal.id, signal.work_unit_id, signal.mission_id,
+				signal.epoch_id, signal.timestamp,
+				signal.specialist, signal.model, signal.file_count,
+				int(signal.has_dependencies), signal.attempt,
+				signal.unit_type, signal.epoch_size, signal.concurrent_units,
+				int(signal.has_overlap), signal.outcome, signal.failure_stage,
+			),
+		)
+		self.conn.commit()
+
+	def count_causal_outcomes(
+		self, decision_type: str, decision_value: str,
+	) -> dict[str, int]:
+		"""Count merged/failed outcomes for a given decision dimension.
+
+		decision_type must be a valid column name (validated for SQL safety).
+		Returns {"merged": N, "failed": M}.
+		"""
+		self._validate_identifier(decision_type)
+		rows = self.conn.execute(
+			f"SELECT outcome, COUNT(*) as cnt FROM causal_signals "  # noqa: S608
+			f"WHERE {decision_type} = ? GROUP BY outcome",
+			(decision_value,),
+		).fetchall()
+		return {row["outcome"]: row["cnt"] for row in rows}
+
+	def count_causal_outcomes_bucketed(
+		self, bucket_value: str,
+	) -> dict[str, int]:
+		"""Count outcomes for file_count buckets (e.g. '1', '2-3', '4-5', '6+')."""
+		bucket_ranges = {
+			"1": (0, 1),
+			"2-3": (2, 3),
+			"4-5": (4, 5),
+			"6+": (6, 9999),
+		}
+		bounds = bucket_ranges.get(bucket_value)
+		if bounds is None:
+			return {}
+		low, high = bounds
+		rows = self.conn.execute(
+			"SELECT outcome, COUNT(*) as cnt FROM causal_signals "
+			"WHERE file_count >= ? AND file_count <= ? GROUP BY outcome",
+			(low, high),
+		).fetchall()
+		return {row["outcome"]: row["cnt"] for row in rows}
+
+	def get_causal_signals_for_mission(
+		self, mission_id: str, limit: int = 100,
+	) -> list[CausalSignal]:
+		rows = self.conn.execute(
+			"SELECT * FROM causal_signals WHERE mission_id=? "
+			"ORDER BY timestamp DESC LIMIT ?",
+			(mission_id, limit),
+		).fetchall()
+		return [self._row_to_causal_signal(r) for r in rows]
+
+	@staticmethod
+	def _row_to_causal_signal(row: sqlite3.Row) -> CausalSignal:
+		return CausalSignal(
+			id=row["id"],
+			work_unit_id=row["work_unit_id"],
+			mission_id=row["mission_id"],
+			epoch_id=row["epoch_id"],
+			timestamp=row["timestamp"],
+			specialist=row["specialist"],
+			model=row["model"],
+			file_count=row["file_count"],
+			has_dependencies=bool(row["has_dependencies"]),
+			attempt=row["attempt"],
+			unit_type=row["unit_type"],
+			epoch_size=row["epoch_size"],
+			concurrent_units=row["concurrent_units"],
+			has_overlap=bool(row["has_overlap"]),
+			outcome=row["outcome"],
+			failure_stage=row["failure_stage"],
 		)
