@@ -196,6 +196,7 @@ class TestControllerExperimentCompletion:
 	def _make_controller(self, db: Database) -> MagicMock:
 		"""Create a minimal mock controller with the experiment completion logic."""
 		from mission_control.continuous_controller import ContinuousController
+		from mission_control.degradation import DegradationManager
 
 		config = MagicMock()
 		config.target.resolved_path = Path("/tmp/fake")
@@ -214,6 +215,7 @@ class TestControllerExperimentCompletion:
 		controller._completed_unit_ids = set()
 		controller._state_changelog = []
 		controller._backlog_item_ids = []
+		controller._degradation = DegradationManager()
 		return controller
 
 	def test_experiment_unit_skips_merge(self, db_runtime: Database) -> None:

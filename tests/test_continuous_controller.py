@@ -2105,41 +2105,44 @@ class TestInFlightCount:
 class TestDbErrorBudget:
 	def test_initial_state(self, config: MissionConfig, db: Database) -> None:
 		ctrl = ContinuousController(config, db)
-		assert ctrl._db_error_count == 0
-		assert ctrl._db_degraded is False
+		assert ctrl._degradation._db_error_count == 0
+		assert ctrl._degradation.is_db_degraded is False
 
 	def test_record_db_error_increments_count(self, config: MissionConfig, db: Database) -> None:
 		ctrl = ContinuousController(config, db)
 		ctrl._record_db_error()
-		assert ctrl._db_error_count == 1
-		assert ctrl._db_degraded is False
+		assert ctrl._degradation._db_error_count == 1
+		assert ctrl._degradation.is_db_degraded is False
 
 	def test_degraded_mode_after_threshold(self, config: MissionConfig, db: Database) -> None:
-		"""After _DB_ERROR_THRESHOLD consecutive errors, degraded mode activates."""
+		"""After db_error_threshold consecutive errors, degraded mode activates."""
 		ctrl = ContinuousController(config, db)
-		for _ in range(ContinuousController._DB_ERROR_THRESHOLD):
+		threshold = config.degradation.db_error_threshold
+		for _ in range(threshold):
 			ctrl._record_db_error()
 
-		assert ctrl._db_error_count == ContinuousController._DB_ERROR_THRESHOLD
-		assert ctrl._db_degraded is True
+		assert ctrl._degradation._db_error_count == threshold
+		assert ctrl._degradation.is_db_degraded is True
 
-	def test_success_resets_error_count_and_degraded(self, config: MissionConfig, db: Database) -> None:
-		"""A successful DB write resets both counter and degraded flag."""
+	def test_success_recovers_from_degraded(self, config: MissionConfig, db: Database) -> None:
+		"""Consecutive DB successes recover from degraded mode."""
 		ctrl = ContinuousController(config, db)
-		for _ in range(ContinuousController._DB_ERROR_THRESHOLD):
+		threshold = config.degradation.db_error_threshold
+		for _ in range(threshold):
 			ctrl._record_db_error()
-		assert ctrl._db_degraded is True
+		assert ctrl._degradation.is_db_degraded is True
 
-		ctrl._record_db_success()
-		assert ctrl._db_error_count == 0
-		assert ctrl._db_degraded is False
+		recovery = config.degradation.recovery_success_threshold
+		for _ in range(recovery):
+			ctrl._record_db_success()
+		assert ctrl._degradation.is_db_degraded is False
 
 	def test_success_noop_when_no_errors(self, config: MissionConfig, db: Database) -> None:
 		"""_record_db_success with no prior errors is a no-op."""
 		ctrl = ContinuousController(config, db)
 		ctrl._record_db_success()
-		assert ctrl._db_error_count == 0
-		assert ctrl._db_degraded is False
+		assert ctrl._degradation._db_error_count == 0
+		assert ctrl._degradation.is_db_degraded is False
 
 	def test_log_unit_event_skips_db_in_degraded_mode(self, config: MissionConfig, db: Database) -> None:
 		"""In degraded mode, _log_unit_event skips DB insert but still emits to stream."""
@@ -2152,7 +2155,10 @@ class TestDbErrorBudget:
 		db.insert_work_unit(unit)
 
 		ctrl = ContinuousController(config, db)
-		ctrl._db_degraded = True
+		# Force degraded via repeated errors
+		threshold = config.degradation.db_error_threshold
+		for _ in range(threshold):
+			ctrl._record_db_error()
 		mock_stream = MagicMock()
 		ctrl._event_stream = mock_stream
 
@@ -2172,7 +2178,7 @@ class TestDbErrorBudget:
 	def test_log_unit_event_tracks_errors(self, config: MissionConfig, db: Database) -> None:
 		"""DB insert failure in _log_unit_event should increment error count."""
 		ctrl = ContinuousController(config, db)
-		assert ctrl._db_error_count == 0
+		assert ctrl._degradation._db_error_count == 0
 
 		with patch.object(db, "insert_unit_event", side_effect=Exception("db error")):
 			ctrl._log_unit_event(
@@ -2182,10 +2188,10 @@ class TestDbErrorBudget:
 				event_type="merged",
 			)
 
-		assert ctrl._db_error_count == 1
+		assert ctrl._degradation._db_error_count == 1
 
 	def test_log_unit_event_resets_on_success(self, config: MissionConfig, db: Database) -> None:
-		"""Successful DB insert in _log_unit_event should reset error count."""
+		"""Successful DB insert in _log_unit_event should decrement error count."""
 		db.insert_mission(Mission(id="m1", objective="test"))
 		epoch = Epoch(id="ep1", mission_id="m1", number=1)
 		db.insert_epoch(epoch)
@@ -2195,7 +2201,9 @@ class TestDbErrorBudget:
 		db.insert_work_unit(unit)
 
 		ctrl = ContinuousController(config, db)
-		ctrl._db_error_count = 3  # some prior errors
+		# Set some prior errors via the degradation manager
+		for _ in range(3):
+			ctrl._record_db_error()
 
 		ctrl._log_unit_event(
 			mission_id="m1",
@@ -2204,7 +2212,7 @@ class TestDbErrorBudget:
 			event_type="dispatched",
 		)
 
-		assert ctrl._db_error_count == 0
+		assert ctrl._degradation._db_error_count == 2  # decremented by 1
 
 	def test_db_errors_on_result(self, config: MissionConfig, db: Database) -> None:
 		"""ContinuousMissionResult should have db_errors field."""
@@ -2220,9 +2228,10 @@ class TestDbErrorBudget:
 		ctrl = ContinuousController(config, db)
 
 		# Enter degraded mode
-		for _ in range(ContinuousController._DB_ERROR_THRESHOLD):
+		threshold = config.degradation.db_error_threshold
+		for _ in range(threshold):
 			ctrl._record_db_error()
-		assert ctrl._db_degraded is True
+		assert ctrl._degradation.is_db_degraded is True
 
 		# _log_unit_event (non-critical) should skip
 		with patch.object(db, "insert_unit_event") as mock_insert:
@@ -2234,16 +2243,16 @@ class TestDbErrorBudget:
 			)
 		mock_insert.assert_not_called()
 
-		# update_mission (critical) should still be attempted in _process_completions
-		# Verify by checking that a successful DB write exits degraded mode
+		# Verify recovery after consecutive successes
 		mission = Mission(id="m1", objective="test")
 		try:
 			db.update_mission(mission)
-			ctrl._record_db_success()
+			recovery = config.degradation.recovery_success_threshold
+			for _ in range(recovery):
+				ctrl._record_db_success()
 		except Exception:
 			ctrl._record_db_error()
-		assert ctrl._db_degraded is False
-		assert ctrl._db_error_count == 0
+		assert ctrl._degradation.is_db_degraded is False
 
 
 class TestInFlightOverlapCheck:

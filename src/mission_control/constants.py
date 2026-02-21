@@ -15,6 +15,7 @@ UNIT_EVENT_REJECTED = "rejected"
 UNIT_EVENT_RETRY_QUEUED = "retry_queued"
 UNIT_EVENT_RESEARCH_COMPLETED = "research_completed"
 UNIT_EVENT_EXPERIMENT_COMPLETED = "experiment_completed"
+UNIT_EVENT_DEGRADATION_TRANSITION = "degradation_transition"
 
 UNIT_EVENT_TYPES: frozenset[str] = frozenset({
 	UNIT_EVENT_DISPATCHED,

@@ -148,6 +148,7 @@ def update_mission_state(
 	mission: Mission,
 	config: MissionConfig,
 	state_changelog: list[str] | None = None,
+	degradation_status: dict | None = None,
 ) -> None:
 	"""Write MISSION_STATE.md in the target repo as a living checklist.
 
@@ -250,6 +251,20 @@ def update_mission_state(
 			lines.append("")
 	except Exception:
 		pass
+
+	if degradation_status:
+		lines.append("## System Health")
+		lines.append(f"Degradation level: {degradation_status.get('level', 'FULL_CAPACITY')}")
+		db_errs = degradation_status.get("db_errors", 0)
+		if db_errs:
+			lines.append(f"DB errors: {db_errs}")
+		cr = degradation_status.get("conflict_rate", 0.0)
+		if cr > 0:
+			lines.append(f"Merge conflict rate: {cr:.0%}")
+		vf = degradation_status.get("verification_failures", 0)
+		if vf:
+			lines.append(f"Verification failures: {vf}")
+		lines.append("")
 
 	lines.extend([
 		"## Remaining",

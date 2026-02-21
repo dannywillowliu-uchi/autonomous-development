@@ -536,6 +536,21 @@ class Database:
 		self._migrate_context_items_mission_columns()
 		self._migrate_acceptance_criteria_columns()
 		self._migrate_specialist_column()
+		self._migrate_degradation_level_column()
+
+	def _migrate_degradation_level_column(self) -> None:
+		"""Add degradation_level column to missions table (idempotent)."""
+		try:
+			self.conn.execute(
+				"ALTER TABLE missions ADD COLUMN degradation_level TEXT NOT NULL DEFAULT 'FULL_CAPACITY'",
+			)
+			logger.debug("Migration: added column missions.degradation_level")
+		except sqlite3.OperationalError as exc:
+			if "duplicate column name" in str(exc):
+				pass
+			else:
+				logger.warning("Migration failed for missions.degradation_level: %s", exc)
+				raise
 
 	def _migrate_specialist_column(self) -> None:
 		"""Add specialist column to work_units table (idempotent)."""

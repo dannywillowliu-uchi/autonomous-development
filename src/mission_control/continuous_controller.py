@@ -17,6 +17,7 @@ from mission_control.backlog_manager import BacklogManager
 from mission_control.circuit_breaker import CircuitBreakerManager
 from mission_control.config import ContinuousConfig, MissionConfig, claude_subprocess_env
 from mission_control.constants import (
+	UNIT_EVENT_DEGRADATION_TRANSITION,
 	UNIT_EVENT_DISPATCHED,
 	UNIT_EVENT_EXPERIMENT_COMPLETED,
 	UNIT_EVENT_MERGE_FAILED,
@@ -27,6 +28,7 @@ from mission_control.constants import (
 )
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
+from mission_control.degradation import DegradationManager, DegradationTransition
 from mission_control.diff_reviewer import DiffReviewer
 from mission_control.ema import ExponentialMovingAverage
 from mission_control.event_stream import EventStream
@@ -107,6 +109,7 @@ class ContinuousMissionResult:
 	db_errors: int = 0
 	units_failed_unrecovered: int = 0
 	sync_failures: int = 0
+	degradation_level: str = "FULL_CAPACITY"
 
 
 class ContinuousController:
@@ -146,8 +149,6 @@ class ContinuousController:
 		self._deferred_units: list[tuple[WorkUnit, Epoch, Mission]] = []
 		self._merged_files: set[str] = set()  # files covered by merged units
 		self._completed_unit_ids: set[str] = set()  # units that completed/merged successfully
-		self._db_error_count: int = 0
-		self._db_degraded: bool = False
 		self._last_reconcile_count: int = 0
 		self.ambition_score: float = 0.0
 		self.proposed_by_strategist: bool = False
@@ -161,6 +162,10 @@ class ContinuousController:
 		self._circuit_breakers: CircuitBreakerManager = CircuitBreakerManager(
 			max_failures=cont.circuit_breaker_max_failures,
 			cooldown_seconds=float(cont.circuit_breaker_cooldown_seconds),
+		)
+		self._degradation: DegradationManager = DegradationManager(
+			config=config.degradation,
+			on_transition=self._on_degradation_transition,
 		)
 		self._tracer: MissionTracer = MissionTracer(config.tracing)
 		budget = config.scheduler.budget
@@ -179,27 +184,33 @@ class ContinuousController:
 		if exc is not None:
 			logger.error("Fire-and-forget task failed: %s", exc, exc_info=exc)
 
-	_DB_ERROR_THRESHOLD: int = 5
-
 	def _record_db_error(self) -> None:
-		"""Track a DB error and enter degraded mode if threshold exceeded."""
-		count = getattr(self, "_db_error_count", 0) + 1
-		self._db_error_count = count
-		if count >= self._DB_ERROR_THRESHOLD and not getattr(self, "_db_degraded", False):
-			self._db_degraded = True
-			logger.warning(
-				"DB error budget exhausted (%d errors) -- entering degraded mode, "
-				"skipping non-critical DB writes",
-				self._db_error_count,
-			)
+		"""Track a DB error via degradation manager."""
+		self._degradation.record_db_error()
 
 	def _record_db_success(self) -> None:
-		"""Reset DB error counter on successful write."""
-		if getattr(self, "_db_error_count", 0) > 0:
-			if self._db_degraded:
-				logger.info("DB write succeeded -- exiting degraded mode")
-			self._db_error_count = 0
-			self._db_degraded = False
+		"""Record a DB success via degradation manager."""
+		self._degradation.record_db_success()
+
+	def _on_degradation_transition(self, transition: DegradationTransition) -> None:
+		"""Emit event and persist degradation level on transition."""
+		if self._event_stream:
+			self._event_stream.emit(
+				UNIT_EVENT_DEGRADATION_TRANSITION,
+				details={
+					"from": transition.from_level.name,
+					"to": transition.to_level.name,
+					"trigger": transition.trigger,
+				},
+			)
+		try:
+			self.db.conn.execute(
+				"UPDATE missions SET degradation_level = ? WHERE status = 'running'",
+				(transition.to_level.name,),
+			)
+			self.db.conn.commit()
+		except Exception as exc:
+			logger.debug("Failed to persist degradation level: %s", exc)
 
 	def _log_unit_event(
 		self,
@@ -215,7 +226,7 @@ class ContinuousController:
 		cost_usd: float = 0.0,
 	) -> None:
 		"""Insert a UnitEvent into the DB and emit to the JSONL event stream."""
-		if not getattr(self, "_db_degraded", False):
+		if not self._degradation.is_db_degraded:
 			try:
 				self.db.insert_unit_event(UnitEvent(
 					mission_id=mission_id,
@@ -492,7 +503,8 @@ class ContinuousController:
 			result.total_units_merged = self._total_merged
 			result.total_units_failed = self._total_failed
 			result.units_failed_unrecovered = self._total_failed
-			result.db_errors = self._db_error_count
+			result.db_errors = self._degradation.get_status_dict()["db_errors"]
+			result.degradation_level = self._degradation.level_name
 
 			if self._backlog_manager.backlog_item_ids:
 				result.backlog_item_ids = list(self._backlog_manager.backlog_item_ids)
@@ -969,6 +981,12 @@ class ContinuousController:
 		epoch_map: dict[str, Epoch] = {}
 
 		while self.running:
+			# READ_ONLY guard: skip dispatch, wait for in-flight to drain
+			if self._degradation.is_read_only:
+				self._degradation.check_in_flight_drained(self._in_flight_count)
+				await asyncio.sleep(1)
+				continue
+
 			# Try to dispatch previously deferred units before planning new ones
 			await self._dispatch_deferred(mission, epoch_map, semaphore)
 
@@ -1289,8 +1307,12 @@ class ContinuousController:
 			if cooldown > 0:
 				await asyncio.sleep(cooldown)
 
-			# Adaptive cooldown: increase sleep when costs approach budget
+			# Degradation: check budget fraction for worker reduction
 			budget_limit = self.config.scheduler.budget.max_per_run_usd
+			if budget_limit > 0 and mission.total_cost_usd > 0:
+				self._degradation.check_budget_fraction(mission.total_cost_usd, budget_limit)
+
+			# Adaptive cooldown: increase sleep when costs approach budget
 			if budget_limit > 0 and mission.total_cost_usd > 0:
 				budget_fraction = mission.total_cost_usd / budget_limit
 				if budget_fraction > 0.8:
@@ -1366,7 +1388,10 @@ class ContinuousController:
 				)
 
 				try:
-					update_mission_state(self.db, mission, self.config, self._state_changelog)
+					update_mission_state(
+						self.db, mission, self.config, self._state_changelog,
+						degradation_status=self._degradation.get_status_dict(),
+					)
 				except Exception as exc:
 					logger.warning("Failed to update MISSION_STATE.md: %s", exc)
 
@@ -1448,7 +1473,10 @@ class ContinuousController:
 				)
 
 				try:
-					update_mission_state(self.db, mission, self.config, self._state_changelog)
+					update_mission_state(
+						self.db, mission, self.config, self._state_changelog,
+						degradation_status=self._degradation.get_status_dict(),
+					)
 				except Exception as exc:
 					logger.warning("Failed to update MISSION_STATE.md: %s", exc)
 
@@ -1470,6 +1498,7 @@ class ContinuousController:
 						workspace, unit.branch_name,
 					)
 					merged = merge_result.merged
+					self._degradation.record_merge_attempt(conflict=not merged)
 
 					if merged:
 						logger.info(
@@ -1643,7 +1672,10 @@ class ContinuousController:
 
 			# Update MISSION_STATE.md in target repo
 			try:
-				update_mission_state(self.db, mission, self.config, self._state_changelog)
+				update_mission_state(
+					self.db, mission, self.config, self._state_changelog,
+					degradation_status=self._degradation.get_status_dict(),
+				)
 			except Exception as exc:
 				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
 
@@ -2041,7 +2073,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		if worker is not None:
 			worker.status = "dead"
 			worker.units_failed += 1
-			if not self._db_degraded:
+			if not self._degradation.is_db_degraded:
 				try:
 					await self.db.locked_call("update_worker", worker)
 					self._record_db_success()
@@ -2217,7 +2249,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 					worker.last_heartbeat = _now_iso()
 					excerpt = (output_so_far or "")[-500:]
 					worker.backend_metadata = json.dumps({"output_excerpt": excerpt})
-					if not self._db_degraded:
+					if not self._degradation.is_db_degraded:
 						try:
 							await self.db.locked_call("update_worker", worker)
 							self._record_db_success()
@@ -2299,7 +2331,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				worker.current_unit_id = None
 				worker.pid = None
 				worker.total_cost_usd += unit.cost_usd
-				if not self._db_degraded:
+				if not self._degradation.is_db_degraded:
 					try:
 						await self.db.locked_call("update_worker", worker)
 						self._record_db_success()
@@ -2328,7 +2360,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				worker.status = "idle"
 				worker.current_unit_id = None
 				worker.pid = None
-				if not self._db_degraded:
+				if not self._degradation.is_db_degraded:
 					try:
 						await self.db.locked_call("update_worker", worker)
 						self._record_db_success()
@@ -2377,6 +2409,10 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		budget_limit = self.config.scheduler.budget.max_per_run_usd
 		if budget_limit > 0 and self._ema.would_exceed_budget(mission.total_cost_usd, budget_limit):
 			return "ema_budget_exceeded"
+
+		# Degradation safe stop
+		if self._degradation.should_stop:
+			return "degradation_safe_stop"
 
 		return ""
 
@@ -2548,7 +2584,10 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		return build_planner_context(self.db, mission_id)
 
 	def _update_mission_state(self, mission: Mission) -> None:
-		update_mission_state(self.db, mission, self.config, self._state_changelog)
+		update_mission_state(
+			self.db, mission, self.config, self._state_changelog,
+			degradation_status=self._degradation.get_status_dict(),
+		)
 
 	def stop(self) -> None:
 		self.running = False
