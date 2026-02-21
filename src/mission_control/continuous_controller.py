@@ -53,6 +53,7 @@ from mission_control.planner_context import build_planner_context, update_missio
 from mission_control.session import parse_mc_result
 from mission_control.strategist import Strategist
 from mission_control.token_parser import compute_token_cost, parse_stream_json
+from mission_control.tracing import MissionTracer
 from mission_control.worker import load_specialist_template, render_mission_worker_prompt
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,7 @@ class ContinuousController:
 			max_failures=cont.circuit_breaker_max_failures,
 			cooldown_seconds=float(cont.circuit_breaker_cooldown_seconds),
 		)
+		self._tracer: MissionTracer = MissionTracer(config.tracing)
 		budget = config.scheduler.budget
 		self._ema: ExponentialMovingAverage = ExponentialMovingAverage(
 			alpha=budget.ema_alpha,
@@ -318,6 +320,8 @@ class ContinuousController:
 
 		try:
 			await self._init_components()
+			self._mission_span_ctx = self._tracer.start_mission_span(mission.id)
+			self._mission_span = self._mission_span_ctx.__enter__()
 
 			# Load backlog items as objective if discovery is enabled
 			if self.config.discovery.enabled:
@@ -568,6 +572,13 @@ class ContinuousController:
 			# Post-mission re-discovery
 			if self.config.discovery.enabled and result.objective_met:
 				await self._run_post_mission_discovery(mission.id)
+
+			# Close the mission span
+			if hasattr(self, "_mission_span_ctx") and self._mission_span_ctx:
+				try:
+					self._mission_span_ctx.__exit__(None, None, None)
+				except Exception:
+					pass
 
 		return result
 
