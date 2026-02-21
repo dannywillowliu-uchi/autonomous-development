@@ -715,61 +715,167 @@ body {
 	font-size: 14px;
 }
 
-/* Mission objective banner */
-.objective-banner {
-	background: linear-gradient(135deg, rgba(88, 166, 255, 0.12), rgba(188, 140, 255, 0.08));
+/* Mission Statement section */
+.mission-statement {
+	background: linear-gradient(135deg, rgba(88, 166, 255, 0.12), rgba(188, 140, 255, 0.10));
 	border-bottom: 1px solid var(--border);
-	padding: 10px 20px;
-	display: flex;
-	align-items: flex-start;
-	gap: 10px;
-	max-height: 40px;
-	overflow: hidden;
-	transition: max-height 0.2s ease;
-	cursor: pointer;
-}
-
-.objective-banner.expanded {
-	max-height: 200px;
+	padding: 12px 20px;
+	max-height: 280px;
 	overflow-y: auto;
 }
 
-.objective-banner .objective-label {
+.mission-statement.inactive {
+	background: rgba(48, 54, 61, 0.3);
+	padding: 10px 20px;
+	max-height: none;
+	overflow: visible;
+}
+
+.mission-statement-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 6px;
+}
+
+.mission-statement-label {
 	font-size: 11px;
 	font-weight: 700;
 	text-transform: uppercase;
 	letter-spacing: 0.5px;
 	color: var(--blue);
-	flex-shrink: 0;
-	padding-top: 1px;
 }
 
-.objective-banner .objective-text {
+.mission-statement.inactive .mission-statement-label {
+	color: var(--text-muted);
+}
+
+.ambition-dots {
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	font-size: 11px;
+	color: var(--text-muted);
+}
+
+.ambition-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--border);
+}
+
+.ambition-dot.filled {
+	background: var(--yellow);
+}
+
+.ambition-value {
+	margin-left: 4px;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.mission-objective-text {
 	font-size: 13px;
 	color: var(--text);
-	line-height: 1.4;
-	min-width: 0;
+	line-height: 1.5;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 4.5em;
+	overflow-y: auto;
+}
+
+.mission-statement.inactive .mission-objective-text {
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.mission-epoch-divider {
+	border: none;
+	border-top: 1px solid rgba(48, 54, 61, 0.6);
+	margin: 8px 0;
+}
+
+.mission-epoch-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 6px;
+}
+
+.mission-epoch-title {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.3px;
+}
+
+.mission-epoch-progress {
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+.mission-epoch-progress .progress-count {
+	color: var(--green);
+	font-weight: 600;
+}
+
+.mission-unit-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.mission-unit-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 3px 0;
+	font-size: 12px;
+	cursor: pointer;
+	border-radius: 3px;
+}
+
+.mission-unit-item:hover {
+	background: rgba(255, 255, 255, 0.04);
+}
+
+.mission-unit-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+
+.mission-unit-dot.completed { background: var(--green); }
+.mission-unit-dot.running { background: var(--yellow); }
+.mission-unit-dot.claimed { background: var(--yellow); }
+.mission-unit-dot.failed { background: var(--red); }
+.mission-unit-dot.pending { background: var(--text-muted); }
+
+.mission-unit-title {
+	flex: 1;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	color: var(--text);
 }
 
-.objective-banner.expanded .objective-text {
-	white-space: pre-wrap;
-	word-break: break-word;
+.mission-unit-status {
+	flex-shrink: 0;
+	font-size: 11px;
+	font-weight: 500;
 }
 
-.objective-banner.inactive {
-	background: rgba(48, 54, 61, 0.3);
-}
+.mission-unit-status.completed { color: var(--green); }
+.mission-unit-status.running { color: var(--yellow); }
+.mission-unit-status.claimed { color: var(--yellow); }
+.mission-unit-status.failed { color: var(--red); }
+.mission-unit-status.pending { color: var(--text-muted); }
 
-.objective-banner.inactive .objective-label {
-	color: var(--text-muted);
-}
-
-.objective-banner.inactive .objective-text {
-	color: var(--text-muted);
-	font-style: italic;
+@media (max-width: 768px) {
+	.ambition-dots { display: none; }
 }
 
 /* Enhanced worker card timestamps */
@@ -1247,10 +1353,14 @@ body {
 <body>
 
 <div class="layout">
-	<!-- Mission objective banner -->
-	<div class="objective-banner inactive" id="objective-banner" onclick="this.classList.toggle('expanded')"
-		<span class="objective-label">Objective</span>
-		<span class="objective-text" id="objective-text">No active mission</span>
+	<!-- Mission Statement -->
+	<div class="mission-statement inactive" id="mission-statement">
+		<div class="mission-statement-header">
+			<span class="mission-statement-label">Mission Statement</span>
+			<div class="ambition-dots" id="ambition-dots"></div>
+		</div>
+		<div class="mission-objective-text" id="mission-objective-text">No active mission</div>
+		<div id="mission-epoch-section"></div>
 	</div>
 
 	<!-- Header -->
@@ -1475,6 +1585,7 @@ function updateAll(snapshot) {
 		}
 	}
 	unitBacklogMap = snapshot.unit_backlog_map || {};
+	updateMissionStatement(snapshot.mission, snapshot.summary, snapshot.current_epoch_units);
 	updateHeader(snapshot.mission, snapshot.summary);
 	updatePlanTree(snapshot.plan_tree);
 	updateWorkerCards(snapshot.units, snapshot.unit_reviews || {});
@@ -1483,40 +1594,93 @@ function updateAll(snapshot) {
 	updateBacklog(snapshot.backlog, snapshot.active_backlog_ids);
 }
 
+function updateMissionStatement(mission, summary, currentEpochUnits) {
+	const section = document.getElementById("mission-statement");
+	const objText = document.getElementById("mission-objective-text");
+	const ambitionEl = document.getElementById("ambition-dots");
+	const epochSection = document.getElementById("mission-epoch-section");
+
+	if (!mission || !mission.objective) {
+		section.className = "mission-statement inactive";
+		objText.textContent = "No active mission";
+		ambitionEl.innerHTML = "";
+		epochSection.innerHTML = "";
+		return;
+	}
+
+	section.className = "mission-statement";
+	objText.textContent = mission.objective;
+
+	// Render ambition dots (1-10 scale)
+	const ambition = mission.ambition_score || 0;
+	if (ambition > 0) {
+		let dotsHtml = '<span style="margin-right:2px">Ambition:</span>';
+		for (let i = 1; i <= 10; i++) {
+			dotsHtml += `<span class="ambition-dot${i <= ambition ? " filled" : ""}"></span>`;
+		}
+		dotsHtml += `<span class="ambition-value">${ambition}</span>`;
+		ambitionEl.innerHTML = dotsHtml;
+	} else {
+		ambitionEl.innerHTML = "";
+	}
+
+	// Render current epoch units
+	const units = currentEpochUnits || [];
+	if (units.length === 0) {
+		epochSection.innerHTML = "";
+		return;
+	}
+
+	const epochNum = summary ? (summary.current_epoch || 0) : 0;
+	const completed = units.filter(u => u.status === "completed").length;
+	const total = units.length;
+
+	let html = '<hr class="mission-epoch-divider">';
+	html += '<div class="mission-epoch-header">';
+	html += `<span class="mission-epoch-title">Current Epoch (${epochNum})</span>`;
+	html += `<span class="mission-epoch-progress"><span class="progress-count">${completed}</span> of ${total} complete</span>`;
+	html += '</div>';
+	html += '<ul class="mission-unit-list">';
+
+	const statusLabels = {
+		completed: "completed",
+		running: "running",
+		claimed: "running",
+		failed: "failed",
+		pending: "pending",
+	};
+
+	for (const unit of units) {
+		const dotClass = unit.status || "pending";
+		const label = statusLabels[unit.status] || unit.status;
+		html += `<li class="mission-unit-item" onclick="scrollToCard('${escapeHtml(unit.id)}')" title="${escapeHtml(unit.files_hint || "")}">`;
+		html += `<span class="mission-unit-dot ${dotClass}"></span>`;
+		html += `<span class="mission-unit-title">${escapeHtml(unit.title)}</span>`;
+		html += `<span class="mission-unit-status ${dotClass}">${label}</span>`;
+		html += '</li>';
+	}
+
+	html += '</ul>';
+	epochSection.innerHTML = html;
+}
+
 function updateHeader(mission, summary) {
 	const badge = document.getElementById("mission-status");
 	const elapsed = document.getElementById("elapsed");
 	const cost = document.getElementById("cost");
 	const epochEl = document.getElementById("epoch-num");
-	const banner = document.getElementById("objective-banner");
-	const objText = document.getElementById("objective-text");
 
 	updateControlStates(mission);
-
-	const isExpanded = banner.classList.contains("expanded");
 
 	if (!mission) {
 		badge.textContent = "NO MISSION";
 		badge.className = "status-badge no-mission";
-		banner.className = "objective-banner inactive" + (isExpanded ? " expanded" : "");
-		objText.textContent = "No active mission";
 		return;
 	}
 
 	const status = isPaused ? "paused" : mission.status;
 	badge.textContent = status.toUpperCase();
 	badge.className = `status-badge ${status}`;
-
-	// Update objective banner
-	if (mission.objective) {
-		banner.className = "objective-banner" + (isExpanded ? " expanded" : "");
-		objText.textContent = mission.objective;
-		objText.title = mission.objective;
-	} else {
-		banner.className = "objective-banner inactive" + (isExpanded ? " expanded" : "");
-		objText.textContent = "No objective set";
-		objText.title = "";
-	}
 
 	cost.textContent = `$${(mission.total_cost_usd || 0).toFixed(2)}`;
 
