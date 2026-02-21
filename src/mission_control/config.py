@@ -341,6 +341,21 @@ class HITLConfig:
 
 
 @dataclass
+class DegradationConfig:
+	"""Tiered degradation settings."""
+
+	budget_fraction_threshold: float = 0.8
+	conflict_rate_threshold: float = 0.5
+	reduced_worker_fraction: float = 0.5
+	db_error_threshold: int = 5
+	rate_limit_window_seconds: float = 60.0
+	rate_limit_threshold: int = 3
+	verification_failure_threshold: int = 3
+	safe_stop_timeout_seconds: float = 300.0
+	recovery_success_threshold: int = 3
+
+
+@dataclass
 class ZFCConfig:
 	"""ZFC migration settings -- LLM-backed replacements for hardcoded heuristics."""
 
@@ -384,6 +399,7 @@ class MissionConfig:
 	tracing: TracingConfig = field(default_factory=TracingConfig)
 	hitl: HITLConfig = field(default_factory=HITLConfig)
 	zfc: ZFCConfig = field(default_factory=ZFCConfig)
+	degradation: DegradationConfig = field(default_factory=DegradationConfig)
 
 
 def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
@@ -771,6 +787,25 @@ def _build_zfc(data: dict[str, Any]) -> ZFCConfig:
 	return zc
 
 
+def _build_degradation(data: dict[str, Any]) -> DegradationConfig:
+	dc = DegradationConfig()
+	float_keys = (
+		"budget_fraction_threshold", "conflict_rate_threshold", "reduced_worker_fraction",
+		"rate_limit_window_seconds", "safe_stop_timeout_seconds",
+	)
+	for key in float_keys:
+		if key in data:
+			setattr(dc, key, float(data[key]))
+	int_keys = (
+		"db_error_threshold", "rate_limit_threshold",
+		"verification_failure_threshold", "recovery_success_threshold",
+	)
+	for key in int_keys:
+		if key in data:
+			setattr(dc, key, int(data[key]))
+	return dc
+
+
 def _build_deploy(data: dict[str, Any]) -> DeployConfig:
 	dc = DeployConfig()
 	if "enabled" in data:
@@ -898,6 +933,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.hitl = _build_hitl(data["hitl"])
 	if "zfc" in data:
 		mc.zfc = _build_zfc(data["zfc"])
+	if "degradation" in data:
+		mc.degradation = _build_degradation(data["degradation"])
 	# Populate module-level extra env keys for claude_subprocess_env()
 	global _extra_env_keys
 	_extra_env_keys = set(mc.security.extra_env_keys) - _ENV_DENYLIST
