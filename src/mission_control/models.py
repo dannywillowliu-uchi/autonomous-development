@@ -242,7 +242,8 @@ class PlanNode:
 
 	id: str = field(default_factory=_new_id)
 	plan_id: str = ""
-	parent_id: str | None = None
+	parent_id: str | None = None  # first parent (backward compat)
+	parent_ids: str = ""  # comma-separated parent IDs for DAG support
 	depth: int = 0
 	scope: str = ""  # what this node is responsible for
 	strategy: str = ""  # subdivide/leaves -- what the planner decided

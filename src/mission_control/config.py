@@ -134,6 +134,9 @@ class ContinuousConfig:
 	max_objective_checks: int = 2  # max verification attempts before accepting
 	cleanup_enabled: bool = True  # run periodic cleanup missions
 	cleanup_interval: int = 3  # run cleanup mission every N missions
+	circuit_breaker_enabled: bool = True
+	circuit_breaker_max_failures: int = 3
+	circuit_breaker_cooldown_seconds: int = 120
 
 
 @dataclass
@@ -460,6 +463,12 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 		cc.cleanup_enabled = bool(data["cleanup_enabled"])
 	if "cleanup_interval" in data:
 		cc.cleanup_interval = int(data["cleanup_interval"])
+	if "circuit_breaker_enabled" in data:
+		cc.circuit_breaker_enabled = bool(data["circuit_breaker_enabled"])
+	if "circuit_breaker_max_failures" in data:
+		cc.circuit_breaker_max_failures = int(data["circuit_breaker_max_failures"])
+	if "circuit_breaker_cooldown_seconds" in data:
+		cc.circuit_breaker_cooldown_seconds = int(data["circuit_breaker_cooldown_seconds"])
 	return cc
 
 

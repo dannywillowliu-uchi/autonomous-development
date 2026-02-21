@@ -13,6 +13,7 @@ from mission_control.config import MissionConfig, claude_subprocess_env
 from mission_control.db import Database
 from mission_control.json_utils import extract_json_from_text
 from mission_control.models import Plan, PlanNode, WorkUnit
+from mission_control.overlap import resolve_file_overlaps
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +157,7 @@ class RecursivePlanner:
 				child = PlanNode(
 					plan_id=plan.id,
 					parent_id=node.id,
+					parent_ids=node.id,
 					depth=node.depth + 1,
 					scope=child_data.get("scope", ""),
 					node_type="branch",
@@ -166,6 +168,14 @@ class RecursivePlanner:
 
 			node.children_ids = ",".join(child_ids)
 			node._subdivided_children = child_nodes  # type: ignore[attr-defined]
+
+			# Cross-branch overlap resolution: collect all leaf units across
+			# children and inject depends_on edges for shared files
+			all_leaves: list[WorkUnit] = []
+			for child in child_nodes:
+				all_leaves.extend(self._collect_work_units(child))
+			if len(all_leaves) > 1:
+				resolve_file_overlaps(all_leaves)
 		else:
 			node.strategy = "leaves"
 			node.node_type = "branch"
@@ -184,6 +194,7 @@ class RecursivePlanner:
 				leaf = PlanNode(
 					plan_id=plan.id,
 					parent_id=node.id,
+					parent_ids=node.id,
 					depth=node.depth + 1,
 					scope=wu.title,
 					strategy="leaves",
@@ -396,6 +407,19 @@ IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must cont
 		)
 		node.work_unit_id = wu.id
 		node._forced_unit = wu  # type: ignore[attr-defined]
+
+	def _collect_work_units(self, node: PlanNode) -> list[WorkUnit]:
+		"""Recursively collect WorkUnit objects from the in-memory tree."""
+		units: list[WorkUnit] = []
+		if hasattr(node, "_forced_unit"):
+			units.append(node._forced_unit)
+		if hasattr(node, "_child_leaves"):
+			for _, wu in node._child_leaves:
+				units.append(wu)
+		if hasattr(node, "_subdivided_children"):
+			for child in node._subdivided_children:
+				units.extend(self._collect_work_units(child))
+		return units
 
 	def _iter_leaves(self, node: PlanNode, _seen: dict[str, Any]) -> list[PlanNode]:
 		"""Recursively collect leaf nodes from the in-memory tree."""
