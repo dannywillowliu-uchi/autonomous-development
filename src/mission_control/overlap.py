@@ -116,6 +116,57 @@ def _parse_depends_on(dep_str: str) -> set[str]:
 	return {d.strip() for d in dep_str.split(",") if d.strip()}
 
 
+def topological_layers(units: list[WorkUnit]) -> list[list[WorkUnit]]:
+	"""Group work units into parallelizable layers via topological sort.
+
+	Each inner list contains units that can execute concurrently (all
+	dependencies satisfied by prior layers). Uses Kahn's algorithm.
+
+	Edge cases:
+	  - No dependencies: single layer with all units
+	  - All serial: one unit per layer
+	  - Orphan deps (IDs not in `units`): silently ignored
+	  - Empty input: returns []
+	  - Cycles (shouldn't happen after _break_cycles): forced into final layer
+	"""
+	if not units:
+		return []
+
+	unit_map: dict[str, WorkUnit] = {u.id: u for u in units}
+	unit_ids = set(unit_map.keys())
+
+	# Build in-degree and adjacency (dependency -> dependents)
+	in_degree: dict[str, int] = {uid: 0 for uid in unit_ids}
+	adjacency: dict[str, list[str]] = {uid: [] for uid in unit_ids}
+
+	for u in units:
+		for dep_id in _parse_depends_on(u.depends_on):
+			if dep_id in unit_ids:
+				adjacency[dep_id].append(u.id)
+				in_degree[u.id] += 1
+
+	layers: list[list[WorkUnit]] = []
+	remaining = dict(in_degree)
+
+	while remaining:
+		# Collect nodes with no unresolved dependencies
+		layer_ids = [uid for uid, deg in remaining.items() if deg == 0]
+		if not layer_ids:
+			# Cycle remnant -- force remaining into one layer
+			layer_ids = list(remaining.keys())
+
+		layers.append([unit_map[uid] for uid in layer_ids])
+
+		# Remove this layer and update in-degrees
+		for uid in layer_ids:
+			del remaining[uid]
+			for neighbor in adjacency.get(uid, []):
+				if neighbor in remaining:
+					remaining[neighbor] -= 1
+
+	return layers
+
+
 def _break_cycles(units: list[WorkUnit]) -> None:
 	"""Detect and break circular dependencies using topological sort.
 

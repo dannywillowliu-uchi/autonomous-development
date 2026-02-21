@@ -14,6 +14,7 @@ from typing import Any
 
 from mission_control.backends import ContainerBackend, LocalBackend, SSHBackend, WorkerBackend
 from mission_control.backlog_manager import BacklogManager
+from mission_control.circuit_breaker import CircuitBreakerManager
 from mission_control.config import ContinuousConfig, MissionConfig, claude_subprocess_env
 from mission_control.constants import (
 	UNIT_EVENT_DISPATCHED,
@@ -47,7 +48,7 @@ from mission_control.models import (
 	_now_iso,
 )
 from mission_control.notifier import TelegramNotifier
-from mission_control.overlap import _parse_files_hint
+from mission_control.overlap import _parse_files_hint, topological_layers
 from mission_control.planner_context import build_planner_context, update_mission_state
 from mission_control.session import parse_mc_result
 from mission_control.strategist import Strategist
@@ -155,6 +156,11 @@ class ContinuousController:
 		self._is_cleanup_mission: bool = config.target.objective.startswith("[CLEANUP]")
 		self._diff_reviewer: DiffReviewer = DiffReviewer(config)
 		self._backlog_manager: BacklogManager = BacklogManager(db, config)
+		cont = config.continuous
+		self._circuit_breakers: CircuitBreakerManager = CircuitBreakerManager(
+			max_failures=cont.circuit_breaker_max_failures,
+			cooldown_seconds=float(cont.circuit_breaker_cooldown_seconds),
+		)
 		budget = config.scheduler.budget
 		self._ema: ExponentialMovingAverage = ExponentialMovingAverage(
 			alpha=budget.ema_alpha,
@@ -253,27 +259,9 @@ class ContinuousController:
 			if not units:
 				print("Planner returned no units.")
 				return result
-			# Build dependency graph for parallelism estimate
-			unit_ids = {u.id for u in units}
-			dep_graph: dict[str, list[str]] = {}
-			for u in units:
-				raw_deps = [d.strip() for d in u.depends_on.split(",") if d.strip()] if u.depends_on else []
-				deps = [d for d in raw_deps if d in unit_ids]
-				dep_graph[u.id] = deps
 			# Compute parallelism levels via topological layering
-			remaining = dict(dep_graph)
-			levels: list[list[str]] = []
-			while remaining:
-				layer = [uid for uid, deps in remaining.items() if not deps]
-				if not layer:
-					layer = list(remaining.keys())[:1]
-				levels.append(layer)
-				for uid in layer:
-					del remaining[uid]
-				for deps in remaining.values():
-					for uid in layer:
-						if uid in deps:
-							deps.remove(uid)
+			unit_ids = {u.id for u in units}
+			levels = topological_layers(units)
 			print(f"\nDry-run plan: {len(units)} units")
 			print(f"{'#':<4} {'Title':<50} {'Priority':>8} {'Files'}")
 			print("-" * 90)
@@ -286,7 +274,7 @@ class ContinuousController:
 					if valid_deps:
 						deps_str = f" [depends: {', '.join(valid_deps)}]"
 				print(f"{i:<4} {u.title[:48]:<50} {u.priority:>8} {files}{deps_str}")
-			print(f"\nEstimated parallelism: {len(levels)} level(s), max {max(len(lv) for lv in levels)} concurrent")
+			print(f"\nEstimated parallelism: {len(levels)} layer(s), max {max(len(lv) for lv in levels)} concurrent")
 			if self._backend:
 				await self._backend.cleanup()
 			return result
@@ -1180,12 +1168,27 @@ class ContinuousController:
 
 			epoch_map[epoch.id] = epoch
 
+			# Compute topological layers for observability
+			layers = topological_layers(units)
+			if layers:
+				max_concurrent = max(len(lv) for lv in layers)
+				logger.info(
+					"Plan has %d layer(s), max %d concurrent units in layer 0",
+					len(layers), max_concurrent,
+				)
+
 			# Track this round for all-fail detection
 			self._round_tracker[epoch.id] = _RoundTracker(
 				unit_ids={u.id for u in units},
 				completed_ids=set(),
 				failed_ids=set(),
 			)
+
+			# Build unit->layer index mapping for event metadata
+			unit_layer_map: dict[str, int] = {}
+			for layer_idx, layer_units in enumerate(layers):
+				for lu in layer_units:
+					unit_layer_map[lu.id] = layer_idx
 
 			# Dispatch each unit
 			for unit in units:
@@ -1231,13 +1234,17 @@ class ContinuousController:
 					semaphore.release()
 					continue
 
-				# Log dispatch event
+				# Log dispatch event with layer index metadata
 				self._log_unit_event(
 					mission_id=mission.id,
 					epoch_id=epoch.id,
 					work_unit_id=unit.id,
 					event_type=UNIT_EVENT_DISPATCHED,
-					stream_details={"title": unit.title, "files": unit.files_hint},
+					stream_details={
+						"title": unit.title,
+						"files": unit.files_hint,
+						"layer": unit_layer_map.get(unit.id, 0),
+					},
 				)
 
 				self._total_dispatched += 1
@@ -1635,6 +1642,13 @@ class ContinuousController:
 			# Track round outcomes for all-fail detection
 			self._record_round_outcome(unit, epoch, merged)
 
+			# Circuit breaker: record success/failure per workspace
+			if self.config.continuous.circuit_breaker_enabled and workspace:
+				if merged:
+					self._circuit_breakers.record_success(workspace)
+				else:
+					self._circuit_breakers.record_failure(workspace)
+
 			# Reconciler sweep: verify combined green state after new merges
 			if merged and self._total_merged > self._last_reconcile_count:
 				try:
@@ -1695,6 +1709,20 @@ class ContinuousController:
 				)
 		else:
 			self._consecutive_all_fail_rounds = 0
+
+		# Circuit breaker stall: if all workspaces are open, stop mission
+		if (
+			self.config.continuous.circuit_breaker_enabled
+			and self._circuit_breakers.all_open()
+			and not self._all_fail_stop_reason
+		):
+			open_workspaces = self._circuit_breakers.get_open_workspaces()
+			logger.error(
+				"Stopping mission: all %d workspace circuit breakers are open: %s",
+				len(open_workspaces),
+				{ws: f"{count} failures" for ws, count in open_workspaces.items()},
+			)
+			self._all_fail_stop_reason = "all_circuit_breakers_open"
 
 		# Clean up resolved round
 		del round_tracker[epoch.id]
@@ -2031,6 +2059,19 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			except RuntimeError as e:
 				logger.error("Failed to provision workspace: %s", e)
 				await self._fail_unit(unit, None, epoch, str(e), "")
+				return
+
+			# Circuit breaker check: skip degraded workspaces
+			if self.config.continuous.circuit_breaker_enabled and not self._circuit_breakers.can_dispatch(workspace):
+				logger.warning(
+					"Circuit breaker open for workspace %s, failing unit %s",
+					workspace, unit.id[:12],
+				)
+				try:
+					await self._backend.release_workspace(workspace)
+				except Exception:
+					pass
+				await self._fail_unit(unit, None, epoch, "circuit breaker open", "")
 				return
 
 			branch_name = f"mc/unit-{unit.id}"
