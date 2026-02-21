@@ -413,11 +413,19 @@ class LiveDashboard:
 		# Build unit->backlog mapping
 		unit_backlog_map = self._build_unit_backlog_mapping(units, backlog_items)
 
+		plan_tree = self._build_plan_tree(mission.id)
+
+		# Extract current (last) epoch's units for the mission statement section
+		current_epoch_units: list[dict[str, Any]] = []
+		if plan_tree:
+			last_epoch = plan_tree[-1]
+			current_epoch_units = last_epoch.get("children", [])
+
 		return {
 			"mission": _serialize_mission(mission),
 			"units": [_serialize_unit(u) for u in units],
 			"events": [_serialize_event(e) for e in events],
-			"plan_tree": self._build_plan_tree(mission.id),
+			"plan_tree": plan_tree,
 			"workers": [_serialize_worker(w) for w in workers],
 			"summary": self._build_summary(mission),
 			"history": self._build_history(),
@@ -426,6 +434,7 @@ class LiveDashboard:
 			"backlog": backlog_serialized,
 			"active_backlog_ids": active_backlog_ids,
 			"unit_backlog_map": unit_backlog_map,
+			"current_epoch_units": current_epoch_units,
 		}
 
 	def _build_plan_tree(self, mission_id: str) -> list[dict[str, Any]]:
@@ -581,6 +590,8 @@ def _serialize_mission(m: Any) -> dict[str, Any]:
 		"finished_at": m.finished_at,
 		"total_cost_usd": m.total_cost_usd,
 		"stopped_reason": m.stopped_reason,
+		"ambition_score": getattr(m, "ambition_score", 0),
+		"proposed_by_strategist": getattr(m, "proposed_by_strategist", False),
 	}
 
 
