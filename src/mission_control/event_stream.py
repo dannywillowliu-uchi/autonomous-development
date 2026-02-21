@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any
 
+from mission_control.tracing import get_current_trace_context
+
 
 class EventStream:
 	"""Append-only JSONL writer for mission events.
@@ -39,9 +41,14 @@ class EventStream:
 		input_tokens: int = 0,
 		output_tokens: int = 0,
 		cost_usd: float = 0.0,
+		trace_id: str = "",
+		span_id: str = "",
 	) -> None:
 		if self._file is None:
 			return
+		# Auto-extract trace context from OTEL if not explicitly provided
+		if not trace_id:
+			trace_id, span_id = get_current_trace_context()
 		record: dict[str, Any] = {
 			"timestamp": datetime.now(timezone.utc).isoformat(),
 			"event_type": event_type,
@@ -53,6 +60,8 @@ class EventStream:
 			"input_tokens": input_tokens,
 			"output_tokens": output_tokens,
 			"cost_usd": cost_usd,
+			"trace_id": trace_id,
+			"span_id": span_id,
 		}
 		self._file.write(json.dumps(record, separators=(",", ":")) + "\n")
 		self._file.flush()
