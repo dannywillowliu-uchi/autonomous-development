@@ -14,6 +14,7 @@ from typing import Any
 
 from mission_control.backends import ContainerBackend, LocalBackend, SSHBackend, WorkerBackend
 from mission_control.backlog_manager import BacklogManager
+from mission_control.causal import CausalAttributor, CausalSignal
 from mission_control.circuit_breaker import CircuitBreakerManager
 from mission_control.config import ContinuousConfig, MissionConfig, claude_subprocess_env
 from mission_control.constants import (
@@ -167,6 +168,7 @@ class ContinuousController:
 			config=config.degradation,
 			on_transition=self._on_degradation_transition,
 		)
+		self._causal_attributor: CausalAttributor = CausalAttributor(db)
 		self._tracer: MissionTracer = MissionTracer(config.tracing)
 		budget = config.scheduler.budget
 		self._ema: ExponentialMovingAverage = ExponentialMovingAverage(
@@ -1040,6 +1042,14 @@ class ContinuousController:
 			# Gather locked files for the planner
 			locked_files = self._get_locked_files()
 
+			# Compute causal risk table for planner
+			try:
+				causal_risks = self._compute_planner_risks()
+				if self._planner and causal_risks:
+					self._planner._inner._causal_risks = causal_risks
+			except Exception:
+				pass
+
 			# Get next batch of units from the planner
 			try:
 				plan, units, epoch = await self._planner.get_next_units(
@@ -1367,6 +1377,11 @@ class ContinuousController:
 					except Exception as exc:
 						logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
 					self._record_round_outcome(unit, epoch, merged=False)
+					try:
+						signal = self._build_causal_signal(unit, epoch, mission, merged=False)
+						self._causal_attributor.record(signal)
+					except Exception:
+						pass
 					continue
 				logger.info("Research unit %s completed -- skipping merge", unit.id)
 				self._total_merged += 1
@@ -1403,6 +1418,11 @@ class ContinuousController:
 				except Exception as exc:
 					logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
 				self._record_round_outcome(unit, epoch, merged=True)
+				try:
+					signal = self._build_causal_signal(unit, epoch, mission, merged=True)
+					self._causal_attributor.record(signal)
+				except Exception:
+					pass
 				continue
 
 			# Experiment units: skip merge, store comparison report
@@ -1420,6 +1440,11 @@ class ContinuousController:
 					except Exception as exc:
 						logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
 					self._record_round_outcome(unit, epoch, merged=False)
+					try:
+						signal = self._build_causal_signal(unit, epoch, mission, merged=False)
+						self._causal_attributor.record(signal)
+					except Exception:
+						pass
 					continue
 				logger.info("Experiment unit %s completed -- skipping merge", unit.id)
 				self._total_merged += 1
@@ -1488,6 +1513,11 @@ class ContinuousController:
 				except Exception as exc:
 					logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
 				self._record_round_outcome(unit, epoch, merged=True)
+				try:
+					signal = self._build_causal_signal(unit, epoch, mission, merged=True)
+					self._causal_attributor.record(signal)
+				except Exception:
+					pass
 				continue
 
 			# Merge if the unit completed with commits
@@ -1700,6 +1730,13 @@ class ContinuousController:
 				else:
 					self._circuit_breakers.record_failure(workspace)
 
+			# Causal attribution: record signal for this unit outcome
+			try:
+				signal = self._build_causal_signal(unit, epoch, mission, merged)
+				self._causal_attributor.record(signal)
+			except Exception as exc:
+				logger.debug("Failed to record causal signal: %s", exc)
+
 			# Reconciler sweep: verify combined green state after new merges
 			if merged and self._total_merged > self._last_reconcile_count:
 				try:
@@ -1777,6 +1814,56 @@ class ContinuousController:
 
 		# Clean up resolved round
 		del round_tracker[epoch.id]
+
+	def _build_causal_signal(
+		self,
+		unit: WorkUnit,
+		epoch: Epoch,
+		mission: Mission,
+		merged: bool,
+	) -> CausalSignal:
+		"""Build a CausalSignal from a completed unit's attributes."""
+		file_count = len(unit.files_hint.split(",")) if unit.files_hint else 0
+		models_cfg = getattr(self.config, "models", None)
+		model = getattr(models_cfg, "worker_model", None) or self.config.scheduler.model
+		return CausalSignal(
+			work_unit_id=unit.id,
+			mission_id=mission.id,
+			epoch_id=epoch.id,
+			specialist=unit.specialist,
+			model=model,
+			file_count=file_count,
+			has_dependencies=bool(unit.depends_on),
+			attempt=unit.attempt,
+			unit_type=unit.unit_type,
+			epoch_size=self._total_dispatched,
+			concurrent_units=self._in_flight_count,
+			has_overlap=False,
+			outcome="merged" if merged else "failed",
+			failure_stage="" if merged else "execution",
+		)
+
+	def _compute_planner_risks(self) -> str:
+		"""Compute a causal risk summary table for planner injection."""
+		risk_dims = [
+			("specialist", ["test-writer", "refactorer", "debugger", ""]),
+			("unit_type", ["implementation", "research", "experiment"]),
+		]
+		risk_lines: list[str] = []
+		for dim_type, values in risk_dims:
+			for val in values:
+				p = self._causal_attributor.p_failure(dim_type, val)
+				if p is not None and p > 0.15:
+					label = val or "(general)"
+					risk_lines.append(f"- {dim_type}={label}: {p:.0%} failure rate")
+		# File count buckets
+		for bucket in ["1", "2-3", "4-5", "6+"]:
+			p = self._causal_attributor.p_failure("file_count", bucket)
+			if p is not None and p > 0.15:
+				risk_lines.append(f"- file_count={bucket}: {p:.0%} failure rate")
+		if not risk_lines:
+			return ""
+		return "## Causal Risk Factors\n" + "\n".join(risk_lines)
 
 	async def _verify_objective(
 		self,
@@ -2135,6 +2222,25 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			from mission_control.memory import load_context_for_mission_worker
 			context = load_context_for_mission_worker(unit, self.config)
 			experience_context = get_worker_context(self.db, unit)
+
+			# Append per-unit causal risk factors
+			try:
+				models_cfg = getattr(self.config, "models", None)
+				worker_model = (
+					getattr(models_cfg, "worker_model", None) or self.config.scheduler.model
+				)
+				risks = self._causal_attributor.top_risk_factors(
+					unit, model=worker_model,
+					epoch_size=self._total_dispatched,
+					concurrent_units=self._in_flight_count,
+				)
+				risk_section = CausalAttributor.format_risk_section(risks)
+				if risk_section:
+					experience_context = (
+						(experience_context or "") + "\n\n" + risk_section
+					).strip()
+			except Exception:
+				pass
 
 			# Read MISSION_STATE.md from target repo
 			mission_state = ""

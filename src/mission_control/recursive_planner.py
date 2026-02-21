@@ -277,6 +277,12 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 				+ "\n".join(lines) + "\n"
 			)
 
+		causal_section = ""
+		if node.depth == 0:
+			causal_text = getattr(self, "_causal_risks", "")
+			if causal_text:
+				causal_section = f"\n{causal_text}\n"
+
 		prompt = f"""You are a recursive planner decomposing work for parallel execution.
 
 ## Objective
@@ -289,7 +295,7 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 
 ## Prior Discoveries
 {discoveries_text}
-{feedback_section}{locked_section}
+{feedback_section}{locked_section}{causal_section}
 ## Heuristics
 - SUBDIVIDE when: scope spans multiple unrelated subsystems, >5 files across different directories
 - PRODUCE LEAVES when: scope is focused, 1-3 concrete tasks can handle it

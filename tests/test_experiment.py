@@ -195,6 +195,7 @@ class TestControllerExperimentCompletion:
 
 	def _make_controller(self, db: Database) -> MagicMock:
 		"""Create a minimal mock controller with the experiment completion logic."""
+		from mission_control.causal import CausalAttributor
 		from mission_control.continuous_controller import ContinuousController
 		from mission_control.degradation import DegradationManager
 
@@ -216,6 +217,7 @@ class TestControllerExperimentCompletion:
 		controller._state_changelog = []
 		controller._backlog_item_ids = []
 		controller._degradation = DegradationManager()
+		controller._causal_attributor = CausalAttributor(db)
 		return controller
 
 	def test_experiment_unit_skips_merge(self, db_runtime: Database) -> None:
