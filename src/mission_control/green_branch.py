@@ -63,6 +63,7 @@ class UnitMergeResult:
 	changed_files: list[str] = field(default_factory=list)
 	sync_ok: bool = True
 	verification_report: VerificationReport | None = None
+	hitl_decision: str = ""
 
 
 class GreenBranchManager:
@@ -73,6 +74,11 @@ class GreenBranchManager:
 		self.db = db
 		self.workspace: str = ""
 		self._merge_lock = asyncio.Lock()
+		self._hitl_gate: object | None = None  # ApprovalGate, lazily typed to avoid circular import
+
+	def configure_hitl(self, gate: object) -> None:
+		"""Set the HITL approval gate for push and large merge checks."""
+		self._hitl_gate = gate
 
 	async def initialize(self, workspace: str) -> None:
 		"""Create mc/working and mc/green branches if they don't exist.
@@ -253,6 +259,46 @@ class GreenBranchManager:
 
 				logger.info("Merged %s directly into %s", branch_name, gb.green_branch)
 
+				hitl_decision = ""
+
+				# Gate A: Large merge HITL check
+				large_gate = self.config.hitl.large_merge_gate
+				if large_gate.enabled and self._hitl_gate is not None:
+					# Compute lines changed
+					_, stat_output = await self._run_git(
+						"diff", "--stat", "HEAD~1", "HEAD",
+					)
+					lines_changed = self._count_diff_lines(stat_output)
+					files_count = len(changed_files)
+
+					if (
+						lines_changed >= large_gate.large_merge_threshold_lines
+						or files_count >= large_gate.large_merge_threshold_files
+					):
+						from mission_control.hitl import ApprovalRequest
+						req = ApprovalRequest(
+							gate_type="large_merge",
+							timeout_seconds=large_gate.timeout_seconds,
+							timeout_action=large_gate.timeout_action,
+							context={
+								"branch": branch_name,
+								"lines_changed": lines_changed,
+								"files_changed": files_count,
+								"changed_files": changed_files[:20],
+							},
+						)
+						approved = await self._hitl_gate.request_approval(req)
+						if not approved:
+							hitl_decision = "large_merge_denied"
+							logger.info("HITL denied large merge for %s -- reverting", branch_name)
+							await self._run_git("reset", "--hard", "HEAD~1")
+							return UnitMergeResult(
+								failure_stage="hitl_large_merge_denied",
+								failure_output=f"HITL denied: {lines_changed} lines, {files_count} files",
+								hitl_decision=hitl_decision,
+							)
+						hitl_decision = "large_merge_approved"
+
 				# Commit MISSION_STATE.md into mc/green if it exists
 				state_path = Path(self.config.target.resolved_path) / "MISSION_STATE.md"
 				if state_path.exists():
@@ -266,13 +312,35 @@ class GreenBranchManager:
 
 				# Auto-push if configured
 				if gb.auto_push:
-					push_ok = await self.push_green_to_main()
-					# Deploy after push if configured
-					deploy = self.config.deploy
-					if push_ok and deploy.enabled and deploy.on_auto_push:
-						deploy_ok, deploy_out = await self.run_deploy()
-						if not deploy_ok:
-							logger.warning("Post-push deploy failed: %s", deploy_out[:200])
+					# Gate B: Push HITL check
+					push_gate = self.config.hitl.push_gate
+					push_approved = True
+					if push_gate.enabled and self._hitl_gate is not None:
+						from mission_control.hitl import ApprovalRequest
+						req = ApprovalRequest(
+							gate_type="push",
+							timeout_seconds=push_gate.timeout_seconds,
+							timeout_action=push_gate.timeout_action,
+							context={
+								"branch": branch_name,
+								"push_branch": gb.push_branch,
+								"merge_commit": merge_commit_hash,
+								"files_changed": len(changed_files),
+							},
+						)
+						push_approved = await self._hitl_gate.request_approval(req)
+						if not push_approved:
+							hitl_decision = hitl_decision or "push_denied"
+							logger.info("HITL denied push for %s -- merge stays, push skipped", branch_name)
+
+					if push_approved:
+						push_ok = await self.push_green_to_main()
+						# Deploy after push if configured
+						deploy = self.config.deploy
+						if push_ok and deploy.enabled and deploy.on_auto_push:
+							deploy_ok, deploy_out = await self.run_deploy()
+							if not deploy_ok:
+								logger.warning("Post-push deploy failed: %s", deploy_out[:200])
 
 				return UnitMergeResult(
 					merged=True,
@@ -282,6 +350,7 @@ class GreenBranchManager:
 					changed_files=changed_files,
 					sync_ok=sync_ok,
 					verification_report=report,
+					hitl_decision=hitl_decision,
 				)
 			finally:
 				# Clean up remote, temp branch, and rebase branch
@@ -289,6 +358,69 @@ class GreenBranchManager:
 				await self._run_git("branch", "-D", temp_branch)
 				await self._run_git("branch", "-D", rebase_branch)
 				await self._run_git("remote", "remove", remote_name)
+
+	async def _zfc_generate_fixup_strategies(self, failure_output: str, n: int) -> list[str] | None:
+		"""Generate N fixup strategies via LLM. Returns list of strategy strings or None."""
+		from mission_control.config import claude_subprocess_env
+
+		prompt = (
+			f"You are a code fixup strategist. Given a test/verification failure, "
+			f"generate exactly {n} distinct strategies to fix the issue.\n\n"
+			f"## Failure Output\n{failure_output[:2000]}\n\n"
+			f"Each strategy should be a short instruction paragraph.\n\n"
+			f"You MUST end your response with:\n"
+			f'FIXUP_STRATEGIES:{{"strategies": ["strategy1", "strategy2", ...]}}'
+		)
+
+		zfc = self.config.zfc
+		model = zfc.model or self.config.scheduler.model
+		timeout = zfc.llm_timeout
+
+		try:
+			proc = await asyncio.create_subprocess_exec(
+				"claude", "--print", "--output-format", "text",
+				"--model", model,
+				"--max-turns", "1",
+				"-p", prompt,
+				cwd=self.workspace,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				env=claude_subprocess_env(),
+			)
+			stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+			output = stdout.decode() if stdout else ""
+		except asyncio.TimeoutError:
+			logger.warning("ZFC fixup strategy generation timed out after %ds", timeout)
+			try:
+				proc.kill()
+				await proc.wait()
+			except ProcessLookupError:
+				pass
+			return None
+		except (FileNotFoundError, OSError) as exc:
+			logger.warning("ZFC fixup strategy generation failed: %s", exc)
+			return None
+
+		if proc.returncode != 0:
+			return None
+
+		marker = "FIXUP_STRATEGIES:"
+		idx = output.rfind(marker)
+		if idx == -1:
+			logger.warning("No FIXUP_STRATEGIES marker in ZFC output")
+			return None
+
+		from mission_control.json_utils import extract_json_from_text
+		remainder = output[idx + len(marker):]
+		data = extract_json_from_text(remainder)
+		if not isinstance(data, dict):
+			return None
+
+		strategies = data.get("strategies")
+		if not isinstance(strategies, list) or not strategies:
+			return None
+
+		return [str(s) for s in strategies[:n]]
 
 	async def run_fixup(self, failure_output: str) -> FixupResult:
 		"""Run N fixup candidates in parallel and select the best one.
@@ -299,10 +431,15 @@ class GreenBranchManager:
 		"""
 		gb = self.config.green_branch
 		n = gb.fixup_candidates
-		prompts = FIXUP_PROMPTS[:n]
-		# Pad with the first prompt if N > len(FIXUP_PROMPTS)
-		while len(prompts) < n:
-			prompts.append(FIXUP_PROMPTS[0])
+
+		# ZFC: try LLM-generated fixup strategies
+		prompts = None
+		if self.config.zfc.zfc_fixup_prompts:
+			prompts = await self._zfc_generate_fixup_strategies(failure_output, n)
+		if prompts is None:
+			prompts = list(FIXUP_PROMPTS[:n])
+			while len(prompts) < n:
+				prompts.append(FIXUP_PROMPTS[0])
 
 		green_ref = gb.green_branch
 

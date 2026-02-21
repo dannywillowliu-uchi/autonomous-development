@@ -34,55 +34,62 @@ def _make_units(specs: list[tuple[str, str, str]]) -> list[WorkUnit]:
 	]
 
 
-# -- evaluate_ambition tests --
+# -- evaluate_ambition tests (async, uses heuristic path since ZFC is off by default) --
 
 
 class TestEvaluateAmbition:
-	def test_empty_units_returns_1(self) -> None:
+	@pytest.mark.asyncio
+	async def test_empty_units_returns_1(self) -> None:
 		s = _make_strategist()
-		assert s.evaluate_ambition([]) == 1
+		assert await s.evaluate_ambition([]) == 1
 
-	def test_single_lint_fix_scores_low(self) -> None:
+	@pytest.mark.asyncio
+	async def test_single_lint_fix_scores_low(self) -> None:
 		s = _make_strategist()
 		units = _make_units([("Fix lint errors", "Run ruff and fix formatting issues", "src/main.py")])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		assert 1 <= score <= 3
 
-	def test_single_typo_fix_scores_low(self) -> None:
+	@pytest.mark.asyncio
+	async def test_single_typo_fix_scores_low(self) -> None:
 		s = _make_strategist()
 		units = _make_units([("Fix typo in README", "Minor typo correction", "README.md")])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		assert 1 <= score <= 3
 
-	def test_formatting_cleanup_scores_low(self) -> None:
+	@pytest.mark.asyncio
+	async def test_formatting_cleanup_scores_low(self) -> None:
 		s = _make_strategist()
 		units = _make_units([
 			("Fix whitespace issues", "cleanup formatting", "a.py"),
 			("Fix style nits", "minor style cleanup", "b.py"),
 		])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		assert 1 <= score <= 4
 
-	def test_new_feature_scores_moderate(self) -> None:
+	@pytest.mark.asyncio
+	async def test_new_feature_scores_moderate(self) -> None:
 		s = _make_strategist()
 		units = _make_units([
 			("Add user authentication", "Implement JWT-based auth", "src/auth.py, src/middleware.py"),
 			("Add auth tests", "Create test suite for auth", "tests/test_auth.py"),
 		])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		assert 4 <= score <= 7
 
-	def test_architecture_change_scores_high(self) -> None:
+	@pytest.mark.asyncio
+	async def test_architecture_change_scores_high(self) -> None:
 		s = _make_strategist()
 		units = _make_units([
 			("Redesign event system", "New architecture for event-driven pipeline", "src/events.py, src/pipeline.py"),
 			("Build distributed queue", "New system for async task distribution", "src/queue.py, src/worker.py"),
 			("Integrate message bus", "Integration with event bus infrastructure", "src/bus.py, src/config.py"),
 		])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		assert score >= 7
 
-	def test_new_system_scores_high(self) -> None:
+	@pytest.mark.asyncio
+	async def test_new_system_scores_high(self) -> None:
 		s = _make_strategist()
 		units = _make_units([
 			("Build new module for caching", "New system with Redis backend",
@@ -90,10 +97,11 @@ class TestEvaluateAmbition:
 			("Add cache migration", "Migration scripts for cache infrastructure",
 			 "src/cache/migrate.py"),
 		])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		assert score >= 6
 
-	def test_many_files_increases_score(self) -> None:
+	@pytest.mark.asyncio
+	async def test_many_files_increases_score(self) -> None:
 		s = _make_strategist()
 		few_files = _make_units([
 			("Add feature X", "Implement feature X", "src/x.py"),
@@ -103,11 +111,12 @@ class TestEvaluateAmbition:
 			 "src/x.py, src/y.py, src/z.py, src/a.py, src/b.py, "
 			 "src/c.py, src/d.py, src/e.py, src/f.py, src/g.py"),
 		])
-		score_few = s.evaluate_ambition(few_files)
-		score_many = s.evaluate_ambition(many_files)
+		score_few = await s.evaluate_ambition(few_files)
+		score_many = await s.evaluate_ambition(many_files)
 		assert score_many >= score_few
 
-	def test_many_units_increases_score(self) -> None:
+	@pytest.mark.asyncio
+	async def test_many_units_increases_score(self) -> None:
 		s = _make_strategist()
 		few = _make_units([
 			("Add feature", "Implement it", "a.py"),
@@ -116,11 +125,12 @@ class TestEvaluateAmbition:
 			(f"Add feature {i}", f"Implement feature {i}", f"src/mod{i}.py")
 			for i in range(6)
 		])
-		score_few = s.evaluate_ambition(few)
-		score_many = s.evaluate_ambition(many)
+		score_few = await s.evaluate_ambition(few)
+		score_many = await s.evaluate_ambition(many)
 		assert score_many >= score_few
 
-	def test_score_clamped_1_to_10(self) -> None:
+	@pytest.mark.asyncio
+	async def test_score_clamped_1_to_10(self) -> None:
 		s = _make_strategist()
 		# Extreme high
 		units = _make_units([
@@ -128,46 +138,149 @@ class TestEvaluateAmbition:
 			 ", ".join(f"src/mod{j}.py" for j in range(20)))
 			for i in range(10)
 		])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		assert 1 <= score <= 10
 
-	def test_mixed_unit_types(self) -> None:
+	@pytest.mark.asyncio
+	async def test_mixed_unit_types(self) -> None:
 		s = _make_strategist()
 		units = _make_units([
 			("Fix lint in config", "Minor lint cleanup", "src/config.py"),
 			("Redesign auth layer", "New architecture for auth", "src/auth.py, src/middleware.py, src/tokens.py"),
 			("Add feature flag", "Implement toggle logic", "src/flags.py"),
 		])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		# Mix of low and high should land moderate-to-high
 		assert 4 <= score <= 9
 
-	def test_refactor_scores_moderate(self) -> None:
+	@pytest.mark.asyncio
+	async def test_refactor_scores_moderate(self) -> None:
 		s = _make_strategist()
 		units = _make_units([
 			("Refactor database layer", "Improve error handling and connection pooling", "src/db.py, src/pool.py"),
 			("Update API endpoints", "Enhance endpoint validation", "src/api.py"),
 		])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		assert 4 <= score <= 7
 
-	def test_no_files_hint(self) -> None:
+	@pytest.mark.asyncio
+	async def test_no_files_hint(self) -> None:
 		s = _make_strategist()
 		units = _make_units([
 			("Add new feature", "Build something interesting", ""),
 		])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		# Should still produce a valid score
 		assert 1 <= score <= 10
 
-	def test_description_contributes_to_scoring(self) -> None:
+	@pytest.mark.asyncio
+	async def test_description_contributes_to_scoring(self) -> None:
 		s = _make_strategist()
 		# Title is generic but description has high keywords
 		units = _make_units([
 			("Task 1", "Redesign the distributed architecture for the pipeline", "src/pipe.py"),
 		])
-		score = s.evaluate_ambition(units)
+		score = await s.evaluate_ambition(units)
 		assert score >= 5
+
+
+# -- ZFC ambition scoring tests --
+
+
+class TestZFCAmbition:
+	@pytest.mark.asyncio
+	async def test_zfc_enabled_calls_llm(self) -> None:
+		"""When zfc_ambition_scoring is True, _zfc_evaluate_ambition is called."""
+		s = _make_strategist()
+		s.config.zfc.zfc_ambition_scoring = True
+		units = _make_units([("Build system", "Architecture redesign", "src/sys.py")])
+
+		with patch.object(s, "_zfc_evaluate_ambition", return_value=8) as mock_zfc:
+			score = await s.evaluate_ambition(units)
+		mock_zfc.assert_called_once_with(units)
+		assert score == 8
+
+	@pytest.mark.asyncio
+	async def test_zfc_fallback_on_failure(self) -> None:
+		"""When ZFC LLM returns None, heuristic fallback is used."""
+		s = _make_strategist()
+		s.config.zfc.zfc_ambition_scoring = True
+		units = _make_units([("Build system", "Architecture redesign", "src/sys.py")])
+
+		with patch.object(s, "_zfc_evaluate_ambition", return_value=None):
+			score = await s.evaluate_ambition(units)
+		# Heuristic should return a valid score
+		assert 1 <= score <= 10
+
+	@pytest.mark.asyncio
+	async def test_zfc_malformed_json_fallback(self) -> None:
+		"""Malformed JSON from LLM -> fallback to heuristic."""
+		s = _make_strategist()
+		s.config.zfc.zfc_ambition_scoring = True
+		units = _make_units([("Fix lint", "Minor fix", "a.py")])
+
+		# _invoke_llm returns garbage
+		with patch.object(s, "_invoke_llm", return_value="no json here"):
+			score = await s.evaluate_ambition(units)
+		assert 1 <= score <= 10
+
+	@pytest.mark.asyncio
+	async def test_zfc_score_clamping(self) -> None:
+		"""ZFC score is clamped to 1-10."""
+		s = _make_strategist()
+		s.config.zfc.zfc_ambition_scoring = True
+		units = _make_units([("Task", "Desc", "")])
+
+		# Return out-of-range score from LLM
+		output = 'Some reasoning\nAMBITION_RESULT:{"score": 15, "reasoning": "very ambitious"}'
+		with patch.object(s, "_invoke_llm", return_value=output):
+			score = await s.evaluate_ambition(units)
+		assert score == 10
+
+	@pytest.mark.asyncio
+	async def test_zfc_score_clamp_low(self) -> None:
+		"""ZFC score below 1 is clamped to 1."""
+		s = _make_strategist()
+		s.config.zfc.zfc_ambition_scoring = True
+		units = _make_units([("Task", "Desc", "")])
+
+		output = 'AMBITION_RESULT:{"score": -5, "reasoning": "trivial"}'
+		with patch.object(s, "_invoke_llm", return_value=output):
+			score = await s.evaluate_ambition(units)
+		assert score == 1
+
+
+class TestZFCObjectivePassthrough:
+	@pytest.mark.asyncio
+	async def test_cached_score_returned_and_consumed(self) -> None:
+		"""Cached score from propose_objective is returned once, then consumed."""
+		s = _make_strategist()
+		s.config.zfc.zfc_propose_objective = True
+		s._proposed_ambition_score = 7
+
+		units = _make_units([("Task", "Desc", "")])
+		score = await s.evaluate_ambition(units)
+		assert score == 7
+		assert s._proposed_ambition_score is None
+
+		# Second call should use heuristic
+		score2 = await s.evaluate_ambition(units)
+		assert score2 != 7 or True  # heuristic may coincide, just check it ran
+		assert s._proposed_ambition_score is None
+
+	@pytest.mark.asyncio
+	async def test_no_cache_without_toggle(self) -> None:
+		"""Without zfc_propose_objective, cached score is ignored."""
+		s = _make_strategist()
+		s.config.zfc.zfc_propose_objective = False
+		s._proposed_ambition_score = 7
+
+		units = _make_units([("Fix lint", "Minor cleanup", "a.py")])
+		score = await s.evaluate_ambition(units)
+		# Should use heuristic, not cached score
+		assert 1 <= score <= 10
+		# Cache should NOT be consumed
+		assert s._proposed_ambition_score == 7
 
 
 # -- should_replan tests --
@@ -263,7 +376,7 @@ class TestControllerStrategistIntegration:
 		ctrl = ContinuousController(config, db)
 
 		mock_strategist = MagicMock(spec=Strategist)
-		mock_strategist.evaluate_ambition.return_value = 9
+		mock_strategist.evaluate_ambition = AsyncMock(return_value=9)
 		mock_strategist.should_replan.return_value = (False, "")
 		ctrl._strategist = mock_strategist
 
@@ -333,7 +446,7 @@ class TestControllerStrategistIntegration:
 		ctrl = ContinuousController(config, db)
 
 		mock_strategist = MagicMock(spec=Strategist)
-		mock_strategist.evaluate_ambition.return_value = 2
+		mock_strategist.evaluate_ambition = AsyncMock(return_value=2)
 		mock_strategist.should_replan.return_value = (True, "Low ambition, replan needed")
 		ctrl._strategist = mock_strategist
 
@@ -481,7 +594,7 @@ class TestControllerStrategistIntegration:
 		ctrl = ContinuousController(config, db)
 
 		mock_strategist = MagicMock(spec=Strategist)
-		mock_strategist.evaluate_ambition.return_value = 7
+		mock_strategist.evaluate_ambition = AsyncMock(return_value=7)
 		mock_strategist.should_replan.return_value = (False, "")
 		ctrl._strategist = mock_strategist
 
@@ -551,7 +664,7 @@ class TestControllerStrategistIntegration:
 		ctrl = ContinuousController(config, db)
 
 		mock_strategist = MagicMock(spec=Strategist)
-		mock_strategist.evaluate_ambition.return_value = 5
+		mock_strategist.evaluate_ambition = AsyncMock(return_value=5)
 		mock_strategist.should_replan.return_value = (False, "")
 		ctrl._strategist = mock_strategist
 

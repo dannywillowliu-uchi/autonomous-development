@@ -789,6 +789,14 @@ class ContinuousController:
 		if tg.bot_token and tg.chat_id:
 			self._notifier = TelegramNotifier(tg.bot_token, tg.chat_id)
 
+		# HITL approval gate (optional)
+		hitl = self.config.hitl
+		if hitl.push_gate.enabled or hitl.large_merge_gate.enabled:
+			from mission_control.hitl import ApprovalGate
+			gate = ApprovalGate(self.config, self._notifier)
+			if self._green_branch:
+				self._green_branch.configure_hitl(gate)
+
 		# Heartbeat monitor
 		hb = self.config.heartbeat
 		self._heartbeat = Heartbeat(
@@ -1105,7 +1113,7 @@ class ContinuousController:
 
 			# Score ambition of planned work -- enforce minimum
 			if self._strategist:
-				ambition = self._strategist.evaluate_ambition(units)
+				ambition = await self._strategist.evaluate_ambition(units)
 			else:
 				ambition = self._score_ambition(units)
 			self.ambition_score = ambition
@@ -1145,7 +1153,7 @@ class ContinuousController:
 					break
 
 				if self._strategist:
-					ambition = self._strategist.evaluate_ambition(units)
+					ambition = await self._strategist.evaluate_ambition(units)
 				else:
 					ambition = self._score_ambition(units)
 				self.ambition_score = ambition

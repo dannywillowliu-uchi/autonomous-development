@@ -84,6 +84,7 @@ class Strategist:
 	def __init__(self, config: MissionConfig, db: Database) -> None:
 		self.config = config
 		self.db = db
+		self._proposed_ambition_score: int | None = None
 
 	def _read_backlog(self) -> str:
 		backlog_path = self.config.target.resolved_path / "BACKLOG.md"
@@ -176,8 +177,8 @@ class Strategist:
 
 		return objective, rationale, ambition_score
 
-	def evaluate_ambition(self, planned_units: list[WorkUnit]) -> int:
-		"""Score planned work on a 1-10 scale based on heuristics.
+	def _heuristic_evaluate_ambition(self, planned_units: list[WorkUnit]) -> int:
+		"""Score planned work on a 1-10 scale based on keyword heuristics.
 
 		1-3 = busywork (lint fixes, minor refactors)
 		4-6 = moderate (new features, meaningful improvements)
@@ -271,6 +272,78 @@ class Strategist:
 		raw = type_score + file_mod + count_mod
 		return max(1, min(10, round(raw)))
 
+	async def _zfc_evaluate_ambition(self, planned_units: list[WorkUnit]) -> int | None:
+		"""Score ambition via LLM. Returns int 1-10 or None on failure."""
+		unit_summaries = "\n".join(
+			f"- {u.title}: {u.description[:120]} (files: {u.files_hint or 'n/a'})"
+			for u in planned_units
+		)
+		prompt = f"""Score the ambition level of these planned work units on a 1-10 scale.
+
+## Rubric
+1-3 = busywork (lint fixes, typo corrections, minor formatting)
+4-6 = moderate (new features, meaningful improvements, bug fixes)
+7-10 = ambitious (architecture changes, new systems, multi-file refactors)
+
+## Work Units
+{unit_summaries}
+
+You MUST end your response with:
+AMBITION_RESULT:{{"score": N, "reasoning": "brief explanation"}}
+"""
+		zfc = self.config.zfc
+		output = await self._invoke_llm(
+			prompt, "zfc-ambition",
+			raise_on_failure=False,
+			budget_override=zfc.llm_budget_usd,
+			timeout_override=zfc.llm_timeout,
+		)
+		if not output:
+			return None
+
+		marker = "AMBITION_RESULT:"
+		idx = output.rfind(marker)
+		if idx == -1:
+			log.warning("No AMBITION_RESULT marker in ZFC ambition output")
+			return None
+
+		from mission_control.json_utils import extract_json_from_text
+		remainder = output[idx + len(marker):]
+		data = extract_json_from_text(remainder)
+		if not isinstance(data, dict):
+			log.warning("Failed to parse ZFC ambition JSON")
+			return None
+
+		try:
+			score = int(data.get("score", 0))
+			return max(1, min(10, score))
+		except (TypeError, ValueError):
+			log.warning("Invalid score in ZFC ambition result: %s", data.get("score"))
+			return None
+
+	async def evaluate_ambition(self, planned_units: list[WorkUnit]) -> int:
+		"""Score planned work on a 1-10 scale.
+
+		Uses ZFC LLM-backed scoring if enabled, with heuristic fallback.
+		If zfc_propose_objective is enabled and a cached score exists from
+		propose_objective, returns that score (consumed once).
+		"""
+		# ZFC objective passthrough: use cached score from propose_objective
+		zfc = self.config.zfc
+		if zfc.zfc_propose_objective and self._proposed_ambition_score is not None:
+			score = self._proposed_ambition_score
+			self._proposed_ambition_score = None  # consume once
+			log.info("Using cached ambition score from propose_objective: %d", score)
+			return score
+
+		if zfc.zfc_ambition_scoring:
+			zfc_score = await self._zfc_evaluate_ambition(planned_units)
+			if zfc_score is not None:
+				return zfc_score
+			log.warning("ZFC ambition scoring failed, falling back to heuristic")
+
+		return self._heuristic_evaluate_ambition(planned_units)
+
 	def should_replan(self, ambition_score: int, backlog_items: list[BacklogItem]) -> tuple[bool, str]:
 		"""Determine if the planner should be re-invoked with a more ambitious objective.
 
@@ -299,17 +372,29 @@ class Strategist:
 			f"Consider replanning with a more ambitious objective."
 		)
 
-	async def _invoke_llm(self, prompt: str, label: str, raise_on_failure: bool = True) -> str:
+	async def _invoke_llm(
+		self,
+		prompt: str,
+		label: str,
+		raise_on_failure: bool = True,
+		budget_override: float | None = None,
+		timeout_override: int | None = None,
+	) -> str:
 		"""Run a prompt through the Claude subprocess and return raw output.
 
 		Args:
 			prompt: The prompt text to send.
 			label: Human-readable label for logging (e.g. "strategist", "followup").
 			raise_on_failure: If True, raise on non-zero exit. If False, return "".
+			budget_override: Override default budget (for ZFC calls).
+			timeout_override: Override default timeout (for ZFC calls).
 		"""
-		budget = self.config.planner.budget_per_call_usd
-		model = self.config.scheduler.model
-		timeout = self.config.target.verification.timeout
+		budget = budget_override if budget_override is not None else self.config.planner.budget_per_call_usd
+		if budget_override is not None:
+			model = self.config.zfc.model or self.config.scheduler.model
+		else:
+			model = self.config.scheduler.model
+		timeout = timeout_override if timeout_override is not None else self.config.target.verification.timeout
 
 		log.info("Invoking %s LLM", label)
 
@@ -396,7 +481,13 @@ class Strategist:
 			human_preferences=self._get_human_preferences(),
 		)
 		output = await self._invoke_llm(prompt, "strategist")
-		return self._parse_strategy_output(output)
+		objective, rationale, ambition_score = self._parse_strategy_output(output)
+
+		# ZFC passthrough: cache the LLM-proposed ambition score
+		if self.config.zfc.zfc_propose_objective:
+			self._proposed_ambition_score = ambition_score
+
+		return objective, rationale, ambition_score
 
 	def _build_followup_prompt(self, mission_result: object, strategic_context: str) -> str:
 		objective = getattr(mission_result, "objective", "")

@@ -11,9 +11,11 @@ from mission_control.config import (
 	_ENV_DENYLIST,
 	ContainerConfig,
 	ContinuousConfig,
+	HITLConfig,
 	MissionConfig,
 	ModelsConfig,
 	SecurityConfig,
+	ZFCConfig,
 	claude_subprocess_env,
 	load_config,
 	validate_config,
@@ -536,3 +538,133 @@ def test_validate_container_claude_config_dir_missing(tmp_path: Path) -> None:
 	issues = validate_config(cfg)
 	errors = [msg for lvl, msg in issues if lvl == "error"]
 	assert any("claude_config_dir does not exist" in e for e in errors)
+
+
+# -- HITL config tests --
+
+
+class TestHITLConfig:
+	def test_hitl_defaults(self) -> None:
+		"""HITLConfig and HITLGateConfig have correct defaults."""
+		hc = HITLConfig()
+		assert hc.approvals_dir == ".mc-approvals"
+		assert hc.telegram_poll_interval == 5.0
+		assert hc.push_gate.enabled is False
+		assert hc.push_gate.timeout_seconds == 300
+		assert hc.push_gate.timeout_action == "approve"
+		assert hc.large_merge_gate.enabled is False
+		assert hc.large_merge_gate.large_merge_threshold_lines == 500
+		assert hc.large_merge_gate.large_merge_threshold_files == 20
+
+	def test_hitl_on_mission_config(self) -> None:
+		"""MissionConfig includes hitl field with defaults."""
+		mc = MissionConfig()
+		assert isinstance(mc.hitl, HITLConfig)
+		assert mc.hitl.push_gate.enabled is False
+
+	def test_hitl_parsed_from_toml(self, tmp_path: Path) -> None:
+		"""[hitl] section values are parsed correctly from TOML."""
+		toml = tmp_path / "mission-control.toml"
+		toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[hitl]
+approvals_dir = ".approvals"
+telegram_poll_interval = 2.0
+
+[hitl.push_gate]
+enabled = true
+timeout_seconds = 120
+timeout_action = "deny"
+
+[hitl.large_merge_gate]
+enabled = true
+large_merge_threshold_lines = 200
+large_merge_threshold_files = 10
+""")
+		cfg = load_config(toml)
+		assert cfg.hitl.approvals_dir == ".approvals"
+		assert cfg.hitl.telegram_poll_interval == 2.0
+		assert cfg.hitl.push_gate.enabled is True
+		assert cfg.hitl.push_gate.timeout_seconds == 120
+		assert cfg.hitl.push_gate.timeout_action == "deny"
+		assert cfg.hitl.large_merge_gate.enabled is True
+		assert cfg.hitl.large_merge_gate.large_merge_threshold_lines == 200
+		assert cfg.hitl.large_merge_gate.large_merge_threshold_files == 10
+
+	def test_hitl_defaults_when_omitted(self, minimal_config: Path) -> None:
+		"""Without [hitl] section, defaults are used."""
+		cfg = load_config(minimal_config)
+		assert cfg.hitl.push_gate.enabled is False
+		assert cfg.hitl.large_merge_gate.enabled is False
+		assert cfg.hitl.approvals_dir == ".mc-approvals"
+
+
+# -- ZFC config tests --
+
+
+class TestZFCConfig:
+	def test_zfc_defaults(self) -> None:
+		"""ZFCConfig has correct defaults."""
+		zc = ZFCConfig()
+		assert zc.zfc_ambition_scoring is False
+		assert zc.zfc_fixup_prompts is False
+		assert zc.zfc_propose_objective is False
+		assert zc.llm_timeout == 60
+		assert zc.llm_budget_usd == 0.10
+		assert zc.model == ""
+
+	def test_zfc_on_mission_config(self) -> None:
+		"""MissionConfig includes zfc field with defaults."""
+		mc = MissionConfig()
+		assert isinstance(mc.zfc, ZFCConfig)
+		assert mc.zfc.zfc_ambition_scoring is False
+
+	def test_zfc_parsed_from_toml(self, tmp_path: Path) -> None:
+		"""[zfc] section values are parsed correctly from TOML."""
+		toml = tmp_path / "mission-control.toml"
+		toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[zfc]
+zfc_ambition_scoring = true
+zfc_fixup_prompts = true
+zfc_propose_objective = true
+llm_timeout = 30
+llm_budget_usd = 0.25
+model = "sonnet"
+""")
+		cfg = load_config(toml)
+		assert cfg.zfc.zfc_ambition_scoring is True
+		assert cfg.zfc.zfc_fixup_prompts is True
+		assert cfg.zfc.zfc_propose_objective is True
+		assert cfg.zfc.llm_timeout == 30
+		assert cfg.zfc.llm_budget_usd == 0.25
+		assert cfg.zfc.model == "sonnet"
+
+	def test_zfc_partial(self, tmp_path: Path) -> None:
+		"""Partial [zfc] section fills only specified fields."""
+		toml = tmp_path / "mission-control.toml"
+		toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[zfc]
+zfc_ambition_scoring = true
+""")
+		cfg = load_config(toml)
+		assert cfg.zfc.zfc_ambition_scoring is True
+		assert cfg.zfc.zfc_fixup_prompts is False
+		assert cfg.zfc.model == ""
+
+	def test_zfc_defaults_when_omitted(self, minimal_config: Path) -> None:
+		"""Without [zfc] section, defaults are used."""
+		cfg = load_config(minimal_config)
+		assert cfg.zfc.zfc_ambition_scoring is False
+		assert cfg.zfc.zfc_fixup_prompts is False
+		assert cfg.zfc.llm_timeout == 60

@@ -320,6 +320,39 @@ class TracingConfig:
 
 
 @dataclass
+class HITLGateConfig:
+	"""Configuration for a single HITL approval gate."""
+
+	enabled: bool = False
+	timeout_seconds: int = 300
+	timeout_action: str = "approve"  # approve | deny
+	large_merge_threshold_lines: int = 500
+	large_merge_threshold_files: int = 20
+
+
+@dataclass
+class HITLConfig:
+	"""Human-in-the-Loop interrupt gate settings."""
+
+	approvals_dir: str = ".mc-approvals"
+	telegram_poll_interval: float = 5.0
+	push_gate: HITLGateConfig = field(default_factory=HITLGateConfig)
+	large_merge_gate: HITLGateConfig = field(default_factory=HITLGateConfig)
+
+
+@dataclass
+class ZFCConfig:
+	"""ZFC migration settings -- LLM-backed replacements for hardcoded heuristics."""
+
+	zfc_ambition_scoring: bool = False
+	zfc_fixup_prompts: bool = False
+	zfc_propose_objective: bool = False
+	llm_timeout: int = 60
+	llm_budget_usd: float = 0.10
+	model: str = ""  # empty = inherit scheduler.model
+
+
+@dataclass
 class SecurityConfig:
 	"""Security settings for worker subprocess isolation."""
 
@@ -349,6 +382,8 @@ class MissionConfig:
 	tool_synthesis: ToolSynthesisConfig = field(default_factory=ToolSynthesisConfig)
 	security: SecurityConfig = field(default_factory=SecurityConfig)
 	tracing: TracingConfig = field(default_factory=TracingConfig)
+	hitl: HITLConfig = field(default_factory=HITLConfig)
+	zfc: ZFCConfig = field(default_factory=ZFCConfig)
 
 
 def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
@@ -694,6 +729,48 @@ def _build_security(data: dict[str, Any]) -> SecurityConfig:
 	return sc
 
 
+def _build_hitl_gate(data: dict[str, Any]) -> HITLGateConfig:
+	gc = HITLGateConfig()
+	if "enabled" in data:
+		gc.enabled = bool(data["enabled"])
+	if "timeout_seconds" in data:
+		gc.timeout_seconds = int(data["timeout_seconds"])
+	if "timeout_action" in data:
+		gc.timeout_action = str(data["timeout_action"])
+	if "large_merge_threshold_lines" in data:
+		gc.large_merge_threshold_lines = int(data["large_merge_threshold_lines"])
+	if "large_merge_threshold_files" in data:
+		gc.large_merge_threshold_files = int(data["large_merge_threshold_files"])
+	return gc
+
+
+def _build_hitl(data: dict[str, Any]) -> HITLConfig:
+	hc = HITLConfig()
+	if "approvals_dir" in data:
+		hc.approvals_dir = str(data["approvals_dir"])
+	if "telegram_poll_interval" in data:
+		hc.telegram_poll_interval = float(data["telegram_poll_interval"])
+	if "push_gate" in data:
+		hc.push_gate = _build_hitl_gate(data["push_gate"])
+	if "large_merge_gate" in data:
+		hc.large_merge_gate = _build_hitl_gate(data["large_merge_gate"])
+	return hc
+
+
+def _build_zfc(data: dict[str, Any]) -> ZFCConfig:
+	zc = ZFCConfig()
+	for key in ("zfc_ambition_scoring", "zfc_fixup_prompts", "zfc_propose_objective"):
+		if key in data:
+			setattr(zc, key, bool(data[key]))
+	if "llm_timeout" in data:
+		zc.llm_timeout = int(data["llm_timeout"])
+	if "llm_budget_usd" in data:
+		zc.llm_budget_usd = float(data["llm_budget_usd"])
+	if "model" in data:
+		zc.model = str(data["model"])
+	return zc
+
+
 def _build_deploy(data: dict[str, Any]) -> DeployConfig:
 	dc = DeployConfig()
 	if "enabled" in data:
@@ -817,6 +894,10 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.security = _build_security(data["security"])
 	if "tracing" in data:
 		mc.tracing = _build_tracing(data["tracing"])
+	if "hitl" in data:
+		mc.hitl = _build_hitl(data["hitl"])
+	if "zfc" in data:
+		mc.zfc = _build_zfc(data["zfc"])
 	# Populate module-level extra env keys for claude_subprocess_env()
 	global _extra_env_keys
 	_extra_env_keys = set(mc.security.extra_env_keys) - _ENV_DENYLIST
