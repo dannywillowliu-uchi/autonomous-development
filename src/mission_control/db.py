@@ -29,6 +29,8 @@ from mission_control.models import (
 	Mission,
 	Plan,
 	PlanNode,
+	PromptOutcome,
+	PromptVariant,
 	Reflection,
 	Reward,
 	Round,
@@ -529,6 +531,28 @@ CREATE TABLE IF NOT EXISTS tool_registry (
 
 CREATE INDEX IF NOT EXISTS idx_tool_registry_name ON tool_registry(name);
 CREATE INDEX IF NOT EXISTS idx_tool_registry_quality ON tool_registry(quality_score);
+
+CREATE TABLE IF NOT EXISTS prompt_variants (
+	id TEXT PRIMARY KEY,
+	component TEXT NOT NULL DEFAULT '',
+	variant_id TEXT NOT NULL DEFAULT '',
+	content TEXT NOT NULL DEFAULT '',
+	win_rate REAL NOT NULL DEFAULT 0.0,
+	sample_count INTEGER NOT NULL DEFAULT 0,
+	created_at TEXT NOT NULL,
+	parent_variant_id TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_variants_component ON prompt_variants(component);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prompt_variants_variant_id ON prompt_variants(variant_id);
+
+CREATE TABLE IF NOT EXISTS prompt_outcomes (
+	id TEXT PRIMARY KEY,
+	variant_id TEXT NOT NULL,
+	outcome TEXT NOT NULL DEFAULT '',
+	context TEXT NOT NULL DEFAULT '',
+	recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_prompt_outcomes_variant ON prompt_outcomes(variant_id);
 """
 
 
@@ -2912,4 +2936,94 @@ class Database:
 			created_by_mission=row["created_by_mission"],
 			created_at=row["created_at"],
 			updated_at=row["updated_at"],
+		)
+
+	# -- Prompt Variants --
+
+	def insert_prompt_variant(self, v: PromptVariant) -> None:
+		self.conn.execute(
+			"""INSERT INTO prompt_variants
+			(id, component, variant_id, content, win_rate, sample_count, created_at, parent_variant_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				v.id, v.component, v.variant_id, v.content,
+				v.win_rate, v.sample_count, v.created_at, v.parent_variant_id,
+			),
+		)
+		self.conn.commit()
+
+	def update_prompt_variant(self, v: PromptVariant) -> None:
+		self.conn.execute(
+			"""UPDATE prompt_variants SET
+			component=?, variant_id=?, content=?, win_rate=?, sample_count=?,
+			created_at=?, parent_variant_id=?
+			WHERE id=?""",
+			(
+				v.component, v.variant_id, v.content, v.win_rate, v.sample_count,
+				v.created_at, v.parent_variant_id, v.id,
+			),
+		)
+		self.conn.commit()
+
+	def get_prompt_variant(self, variant_id: str) -> PromptVariant | None:
+		row = self.conn.execute(
+			"SELECT * FROM prompt_variants WHERE variant_id=?", (variant_id,),
+		).fetchone()
+		if row is None:
+			return None
+		return self._row_to_prompt_variant(row)
+
+	def get_prompt_variants_for_component(self, component: str) -> list[PromptVariant]:
+		rows = self.conn.execute(
+			"SELECT * FROM prompt_variants WHERE component=? ORDER BY win_rate DESC",
+			(component,),
+		).fetchall()
+		return [self._row_to_prompt_variant(r) for r in rows]
+
+	@staticmethod
+	def _row_to_prompt_variant(row: sqlite3.Row) -> PromptVariant:
+		return PromptVariant(
+			id=row["id"],
+			component=row["component"],
+			variant_id=row["variant_id"],
+			content=row["content"],
+			win_rate=row["win_rate"],
+			sample_count=row["sample_count"],
+			created_at=row["created_at"],
+			parent_variant_id=row["parent_variant_id"],
+		)
+
+	# -- Prompt Outcomes --
+
+	def insert_prompt_outcome(self, o: PromptOutcome) -> None:
+		self.conn.execute(
+			"""INSERT INTO prompt_outcomes
+			(id, variant_id, outcome, context, recorded_at)
+			VALUES (?, ?, ?, ?, ?)""",
+			(o.id, o.variant_id, o.outcome, o.context, o.recorded_at),
+		)
+		self.conn.commit()
+
+	def get_prompt_outcomes_for_variant(self, variant_id: str) -> list[PromptOutcome]:
+		rows = self.conn.execute(
+			"SELECT * FROM prompt_outcomes WHERE variant_id=? ORDER BY recorded_at DESC",
+			(variant_id,),
+		).fetchall()
+		return [self._row_to_prompt_outcome(r) for r in rows]
+
+	def count_prompt_outcomes(self, variant_id: str) -> dict[str, int]:
+		rows = self.conn.execute(
+			"SELECT outcome, COUNT(*) as cnt FROM prompt_outcomes WHERE variant_id=? GROUP BY outcome",
+			(variant_id,),
+		).fetchall()
+		return {row["outcome"]: row["cnt"] for row in rows}
+
+	@staticmethod
+	def _row_to_prompt_outcome(row: sqlite3.Row) -> PromptOutcome:
+		return PromptOutcome(
+			id=row["id"],
+			variant_id=row["variant_id"],
+			outcome=row["outcome"],
+			context=row["context"],
+			recorded_at=row["recorded_at"],
 		)
