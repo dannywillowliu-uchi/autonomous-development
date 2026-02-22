@@ -285,6 +285,12 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 			if causal_text:
 				causal_section = f"\n{causal_text}\n"
 
+		snapshot_section = ""
+		if node.depth == 0:
+			snapshot_text = getattr(self, "_project_snapshot", "")
+			if snapshot_text:
+				snapshot_section = f"\n## Project Structure\n{snapshot_text}\n"
+
 		prompt = f"""You are a recursive planner decomposing work for parallel execution.
 
 ## Objective
@@ -297,7 +303,7 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 
 ## Prior Discoveries
 {discoveries_text}
-{feedback_section}{locked_section}{causal_section}
+{feedback_section}{locked_section}{causal_section}{snapshot_section}
 ## Heuristics
 - SUBDIVIDE when: scope spans multiple unrelated subsystems, >5 files across different directories
 - PRODUCE LEAVES when: scope is focused, 1-3 concrete tasks can handle it

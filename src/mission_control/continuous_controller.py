@@ -1125,6 +1125,16 @@ class ContinuousController:
 			except Exception:
 				pass
 
+			# Inject project structure snapshot for planner
+			try:
+				from mission_control.snapshot import get_project_snapshot
+
+				snapshot = get_project_snapshot(self.config.target.resolved_path)
+				if self._planner and snapshot:
+					self._planner._inner._project_snapshot = snapshot
+			except Exception:
+				pass
+
 			# Get next batch of units from the planner
 			try:
 				plan, units, epoch = await self._planner.get_next_units(
@@ -2429,12 +2439,19 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				logger.debug("No diff for unit %s, skipping blocking review", unit.id)
 				return None
 
+			try:
+				from mission_control.snapshot import get_project_snapshot
+				_snap = get_project_snapshot(self.config.target.resolved_path)
+			except Exception:
+				_snap = ""
+
 			review = await self._diff_reviewer.review_unit(
 				unit=unit,
 				diff=diff,
 				objective=mission.objective,
 				mission_id=mission.id,
 				epoch_id=epoch.id,
+				project_snapshot=_snap,
 			)
 			if review:
 				await self.db.locked_call("insert_unit_review", review)
@@ -2477,12 +2494,19 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				logger.debug("No diff for unit %s, skipping review", unit.id)
 				return
 
+			try:
+				from mission_control.snapshot import get_project_snapshot
+				_snap = get_project_snapshot(self.config.target.resolved_path)
+			except Exception:
+				_snap = ""
+
 			review = await self._diff_reviewer.review_unit(
 				unit=unit,
 				diff=diff,
 				objective=mission.objective,
 				mission_id=mission.id,
 				epoch_id=epoch.id,
+				project_snapshot=_snap,
 			)
 			if review:
 				await self.db.locked_call("insert_unit_review", review)

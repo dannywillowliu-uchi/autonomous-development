@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 REVIEW_RESULT_MARKER = "REVIEW_RESULT:"
 
 
-def _build_review_prompt(unit: WorkUnit, diff: str, objective: str) -> str:
+def _build_review_prompt(unit: WorkUnit, diff: str, objective: str, project_snapshot: str = "") -> str:
 	criteria_section = ""
 	criteria_scoring = ""
 	criteria_output = ""
@@ -25,6 +25,7 @@ def _build_review_prompt(unit: WorkUnit, diff: str, objective: str) -> str:
 		criteria_section = f"\nAcceptance Criteria: {unit.acceptance_criteria}\n"
 		criteria_scoring = '\n4. **Criteria Met** (1-10): How well does the diff satisfy the acceptance criteria above?'
 		criteria_output = ', "criteria_met": 7'
+	snapshot_section = f"\n## Project Structure\n{project_snapshot}\n\n" if project_snapshot else ""
 	return f"""You are a code reviewer evaluating a merged work unit's diff.
 
 ## Mission Objective
@@ -34,7 +35,7 @@ def _build_review_prompt(unit: WorkUnit, diff: str, objective: str) -> str:
 Title: {unit.title}
 Description: {unit.description}
 {criteria_section}
-## Git Diff
+{snapshot_section}## Git Diff
 ```
 {diff[:8000]}
 ```
@@ -107,6 +108,7 @@ class DiffReviewer:
 		objective: str,
 		mission_id: str,
 		epoch_id: str,
+		project_snapshot: str = "",
 	) -> UnitReview | None:
 		"""Review a merged unit's diff. Returns UnitReview on success, None on failure."""
 		if not self._review_config.enabled:
@@ -116,7 +118,7 @@ class DiffReviewer:
 			logger.debug("Skipping review for unit %s: empty diff", unit.id)
 			return None
 
-		prompt = _build_review_prompt(unit, diff, objective)
+		prompt = _build_review_prompt(unit, diff, objective, project_snapshot=project_snapshot)
 		model = self._review_config.model
 		budget = self._review_config.budget_per_review_usd
 

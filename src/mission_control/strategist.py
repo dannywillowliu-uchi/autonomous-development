@@ -27,6 +27,7 @@ def _build_strategy_prompt(
 	strategic_context: str,
 	pending_backlog: str,
 	human_preferences: str = "",
+	project_snapshot: str = "",
 ) -> str:
 	return f"""You are a strategic engineering lead for an autonomous development system.
 
@@ -51,6 +52,9 @@ Your job: propose the SINGLE most impactful mission objective to work on next.
 
 ### Human Quality Signals
 {human_preferences or "(No human ratings available yet)"}
+
+### Project Structure
+{project_snapshot or "(No project structure available)"}
 
 ## Instructions
 
@@ -472,6 +476,11 @@ AMBITION_RESULT:{{"score": N, "reasoning": "brief explanation"}}
 			Tuple of (objective, rationale, ambition_score).
 		"""
 		git_log = await self._get_git_log()
+		try:
+			from mission_control.snapshot import get_project_snapshot
+			_snap = get_project_snapshot(self.config.target.resolved_path)
+		except Exception:
+			_snap = ""
 		prompt = _build_strategy_prompt(
 			backlog_md=self._read_backlog(),
 			git_log=git_log,
@@ -479,6 +488,7 @@ AMBITION_RESULT:{{"score": N, "reasoning": "brief explanation"}}
 			strategic_context=self._get_strategic_context(),
 			pending_backlog=self._get_pending_backlog(),
 			human_preferences=self._get_human_preferences(),
+			project_snapshot=_snap,
 		)
 		output = await self._invoke_llm(prompt, "strategist")
 		objective, rationale, ambition_score = self._parse_strategy_output(output)
