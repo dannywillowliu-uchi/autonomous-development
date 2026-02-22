@@ -353,6 +353,16 @@ class A2AConfig:
 
 
 @dataclass
+class PromptEvolutionConfig:
+	"""Prompt A/B testing with UCB1 multi-armed bandit."""
+
+	enabled: bool = False
+	mutation_model: str = "sonnet"
+	exploration_factor: float = 1.4
+	min_samples_before_mutation: int = 5
+
+
+@dataclass
 class MCPRegistryConfig:
 	"""MCP tool registry settings."""
 
@@ -423,6 +433,7 @@ class MissionConfig:
 	degradation: DegradationConfig = field(default_factory=DegradationConfig)
 	a2a: A2AConfig = field(default_factory=A2AConfig)
 	mcp_registry: MCPRegistryConfig = field(default_factory=MCPRegistryConfig)
+	prompt_evolution: PromptEvolutionConfig = field(default_factory=PromptEvolutionConfig)
 
 
 def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
@@ -838,6 +849,19 @@ def _build_mcp_registry(data: dict[str, Any]) -> MCPRegistryConfig:
 	return mc
 
 
+def _build_prompt_evolution(data: dict[str, Any]) -> PromptEvolutionConfig:
+	pc = PromptEvolutionConfig()
+	if "enabled" in data:
+		pc.enabled = bool(data["enabled"])
+	if "mutation_model" in data:
+		pc.mutation_model = str(data["mutation_model"])
+	if "exploration_factor" in data:
+		pc.exploration_factor = float(data["exploration_factor"])
+	if "min_samples_before_mutation" in data:
+		pc.min_samples_before_mutation = int(data["min_samples_before_mutation"])
+	return pc
+
+
 def _build_degradation(data: dict[str, Any]) -> DegradationConfig:
 	dc = DegradationConfig()
 	float_keys = (
@@ -990,6 +1014,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.a2a = _build_a2a(data["a2a"])
 	if "mcp_registry" in data:
 		mc.mcp_registry = _build_mcp_registry(data["mcp_registry"])
+	if "prompt_evolution" in data:
+		mc.prompt_evolution = _build_prompt_evolution(data["prompt_evolution"])
 	# Populate module-level extra env keys for claude_subprocess_env()
 	global _extra_env_keys
 	_extra_env_keys = set(mc.security.extra_env_keys) - _ENV_DENYLIST
