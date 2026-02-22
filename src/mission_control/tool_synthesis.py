@@ -78,8 +78,9 @@ class ToolRegistry:
 				description = first_line.lstrip("# ").strip()
 			self._tools[name] = ToolEntry(name=name, description=description, script_path=script_path)
 
-	def _validate_script_content(self, content: str) -> None:
-		"""Validate script content against blocked imports and calls.
+	@staticmethod
+	def _validate_script_content_static(content: str) -> None:
+		"""Validate script content against blocked imports and calls (static).
 
 		Raises:
 			ValueError: If the script contains blocked imports or function calls.
@@ -93,14 +94,14 @@ class ToolRegistry:
 			if isinstance(node, ast.Import):
 				for alias in node.names:
 					top_module = alias.name.split(".")[0]
-					if top_module in self.BLOCKED_MODULES:
+					if top_module in ToolRegistry.BLOCKED_MODULES:
 						raise ValueError(
 							f"Blocked import: '{alias.name}' (module '{top_module}' is not allowed)"
 						)
 			elif isinstance(node, ast.ImportFrom):
 				if node.module:
 					top_module = node.module.split(".")[0]
-					if top_module in self.BLOCKED_MODULES:
+					if top_module in ToolRegistry.BLOCKED_MODULES:
 						raise ValueError(
 							f"Blocked import: 'from {node.module} import ...' "
 							f"(module '{top_module}' is not allowed)"
@@ -111,10 +112,14 @@ class ToolRegistry:
 					func_name = node.func.id
 				elif isinstance(node.func, ast.Attribute):
 					func_name = node.func.attr
-				if func_name and func_name in self.BLOCKED_CALLS:
+				if func_name and func_name in ToolRegistry.BLOCKED_CALLS:
 					raise ValueError(
 						f"Blocked function call: '{func_name}()' is not allowed"
 					)
+
+	def _validate_script_content(self, content: str) -> None:
+		"""Validate script content against blocked imports and calls."""
+		self._validate_script_content_static(content)
 
 	def register_tool(self, name: str, script_content: str, description: str = "") -> ToolEntry:
 		"""Register a new tool by writing a Python script to the tools directory.
@@ -218,3 +223,31 @@ def render_available_tools_section(registry: ToolRegistry) -> str:
 		lines.append(f"Run: `python {tool.script_path}`")
 		lines.append("")
 	return "\n".join(lines)
+
+
+def promote_to_mcp_registry(
+	tool: ToolEntry,
+	quality_score: float,
+	mission_id: str,
+	registry: object,
+) -> object | None:
+	"""Bridge function: promote a ToolEntry to the MCP registry.
+
+	Reads script content from tool.script_path and calls registry.register().
+	Returns the MCPToolEntry if promoted, None if below threshold.
+	The registry param is typed as object to avoid circular imports.
+	"""
+	from mission_control.mcp_registry import MCPToolRegistry
+
+	assert isinstance(registry, MCPToolRegistry)
+	try:
+		script_content = tool.script_path.read_text()
+	except OSError:
+		return None
+	return registry.register(
+		name=tool.name,
+		description=tool.description,
+		script_content=script_content,
+		quality_score=quality_score,
+		mission_id=mission_id,
+	)
