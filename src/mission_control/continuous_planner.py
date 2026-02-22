@@ -131,6 +131,9 @@ class ContinuousPlanner:
 	) -> tuple[Plan, list[WorkUnit], Epoch]:
 		"""Invoke the planner LLM to generate new work units."""
 		self._epoch_count += 1
+		from mission_control.snapshot import clear_snapshot_cache
+
+		clear_snapshot_cache()
 		epoch = Epoch(
 			mission_id=mission.id,
 			number=self._epoch_count,
