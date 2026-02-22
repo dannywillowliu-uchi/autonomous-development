@@ -806,12 +806,37 @@ class GreenBranchManager:
 		"""
 		from mission_control.state import _build_result_from_single_command
 
+		await self._reanchor_editable_install()
+
 		nodes = self.config.target.verification.nodes
 		if nodes:
 			return await run_verification_nodes(self.config, self.workspace)
 		# Single-command fallback using self._run_command
 		ok, output = await self._run_command(self.config.target.verification.command)
 		return _build_result_from_single_command(output, 0 if ok else 1)
+
+	async def _reanchor_editable_install(self) -> None:
+		"""Re-anchor the editable install to the source repo before verification.
+
+		Worker pool clones share the source .venv via symlink. If a worker runs
+		`pip install -e .` in its clone, the editable path gets hijacked to point
+		at the clone instead of the source repo. This causes verification to import
+		stale code from the clone rather than the merged code in the source repo.
+		"""
+		venv_python = Path(self.workspace) / ".venv" / "bin" / "python"
+		if not venv_python.exists():
+			return
+		proc = await asyncio.create_subprocess_exec(
+			"uv", "pip", "install", "-e", ".",
+			"--python", str(venv_python),
+			cwd=self.workspace,
+			stdout=asyncio.subprocess.PIPE,
+			stderr=asyncio.subprocess.STDOUT,
+		)
+		stdout, _ = await proc.communicate()
+		if proc.returncode != 0:
+			output = stdout.decode(errors="replace") if stdout else ""
+			logger.warning("Failed to re-anchor editable install: %s", output[:300])
 
 	async def _run_command(self, cmd: str | list[str]) -> tuple[bool, str]:
 		"""Run a command in self.workspace using shell for string commands."""
