@@ -1996,8 +1996,9 @@ class ContinuousController:
 
 		# Cost guard: check projected cost against remaining budget
 		budget_limit = self.config.scheduler.budget.max_per_run_usd
-		if budget_limit > 0 and self._ema.value > 0:
-			projected_cost = branch_count * self._ema.value * spec_cfg.cost_limit_multiplier
+		ema_val = self._ema.value
+		if budget_limit > 0 and ema_val is not None and ema_val > 0:
+			projected_cost = branch_count * ema_val * spec_cfg.cost_limit_multiplier
 			remaining = budget_limit - mission.total_cost_usd
 			if projected_cost > remaining:
 				logger.info(
