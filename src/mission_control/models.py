@@ -612,3 +612,28 @@ class DiscoveryResult:
 	error_type: str = ""  # timeout/budget_exceeded/permission_denied/workspace_corruption/unknown
 	error_detail: str = ""
 
+
+@dataclass
+class PromptVariant:
+	"""A prompt variant for A/B testing via UCB1 multi-armed bandit."""
+
+	id: str = field(default_factory=_new_id)
+	component: str = ""  # "worker" / "planner" / "reviewer"
+	variant_id: str = ""  # human-readable slug
+	content: str = ""
+	win_rate: float = 0.0
+	sample_count: int = 0
+	created_at: str = field(default_factory=_now_iso)
+	parent_variant_id: str = ""
+
+
+@dataclass
+class PromptOutcome:
+	"""Recorded outcome for a prompt variant trial."""
+
+	id: str = field(default_factory=_new_id)
+	variant_id: str = ""
+	outcome: str = ""  # "pass" / "fail"
+	context: str = ""  # JSON str
+	recorded_at: str = field(default_factory=_now_iso)
+
