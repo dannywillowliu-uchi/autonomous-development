@@ -13,6 +13,7 @@ from typing import Any, Generator, Sequence
 
 from mission_control.causal import CausalSignal
 from mission_control.constants import EVENT_TO_STATUS
+from mission_control.mcp_registry import MCPToolEntry
 from mission_control.models import (
 	BacklogItem,
 	ContextItem,
@@ -512,6 +513,22 @@ CREATE INDEX IF NOT EXISTS idx_causal_signals_outcome ON causal_signals(outcome)
 CREATE INDEX IF NOT EXISTS idx_causal_signals_specialist ON causal_signals(specialist);
 CREATE INDEX IF NOT EXISTS idx_causal_signals_model ON causal_signals(model);
 CREATE INDEX IF NOT EXISTS idx_causal_signals_file_count ON causal_signals(file_count);
+
+CREATE TABLE IF NOT EXISTS tool_registry (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL UNIQUE,
+	description TEXT NOT NULL DEFAULT '',
+	input_schema TEXT NOT NULL DEFAULT '{}',
+	handler_path TEXT NOT NULL DEFAULT '',
+	quality_score REAL NOT NULL DEFAULT 0.5,
+	usage_count INTEGER NOT NULL DEFAULT 0,
+	created_by_mission TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL DEFAULT '',
+	updated_at TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_registry_name ON tool_registry(name);
+CREATE INDEX IF NOT EXISTS idx_tool_registry_quality ON tool_registry(quality_score);
 """
 
 
@@ -2825,4 +2842,74 @@ class Database:
 			has_overlap=bool(row["has_overlap"]),
 			outcome=row["outcome"],
 			failure_stage=row["failure_stage"],
+		)
+
+	# -- Tool Registry --
+
+	def insert_tool_registry_entry(self, entry: MCPToolEntry) -> None:
+		self.conn.execute(
+			"""INSERT OR REPLACE INTO tool_registry
+			(id, name, description, input_schema, handler_path,
+			 quality_score, usage_count, created_by_mission, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				entry.id, entry.name, entry.description, entry.input_schema,
+				entry.handler_path, entry.quality_score, entry.usage_count,
+				entry.created_by_mission, entry.created_at, entry.updated_at,
+			),
+		)
+		self.conn.commit()
+
+	def get_tool_registry_entry(self, name: str) -> MCPToolEntry | None:
+		row = self.conn.execute(
+			"SELECT * FROM tool_registry WHERE name=?", (name,),
+		).fetchone()
+		if row is None:
+			return None
+		return self._row_to_mcp_tool_entry(row)
+
+	def search_tool_registry(self, query: str, limit: int = 5) -> list[MCPToolEntry]:
+		pattern = f"%{query}%"
+		rows = self.conn.execute(
+			"SELECT * FROM tool_registry WHERE name LIKE ? OR description LIKE ? "
+			"ORDER BY quality_score DESC LIMIT ?",
+			(pattern, pattern, limit),
+		).fetchall()
+		return [self._row_to_mcp_tool_entry(r) for r in rows]
+
+	def update_tool_registry_entry(self, entry: MCPToolEntry) -> None:
+		self.conn.execute(
+			"""UPDATE tool_registry SET
+			description=?, input_schema=?, handler_path=?,
+			quality_score=?, usage_count=?, updated_at=?
+			WHERE name=?""",
+			(
+				entry.description, entry.input_schema, entry.handler_path,
+				entry.quality_score, entry.usage_count, entry.updated_at,
+				entry.name,
+			),
+		)
+		self.conn.commit()
+
+	def delete_tool_registry_entries_below(self, min_quality: float) -> int:
+		cursor = self.conn.execute(
+			"DELETE FROM tool_registry WHERE quality_score < ?",
+			(min_quality,),
+		)
+		self.conn.commit()
+		return cursor.rowcount
+
+	@staticmethod
+	def _row_to_mcp_tool_entry(row: sqlite3.Row) -> MCPToolEntry:
+		return MCPToolEntry(
+			id=row["id"],
+			name=row["name"],
+			description=row["description"],
+			input_schema=row["input_schema"],
+			handler_path=row["handler_path"],
+			quality_score=row["quality_score"],
+			usage_count=row["usage_count"],
+			created_by_mission=row["created_by_mission"],
+			created_at=row["created_at"],
+			updated_at=row["updated_at"],
 		)
