@@ -27,12 +27,14 @@ Before ANY commit, run:
 - `continuous_controller.py` -- Event-driven loop: dispatch + completion processor via asyncio.Queue
 - `continuous_planner.py` -- Rolling backlog wrapper around RecursivePlanner
 - `recursive_planner.py` -- LLM-based recursive plan tree generation with PLAN_RESULT marker
-- `green_branch.py` -- mc/green branch lifecycle, merge_unit() for direct merge without verification
+- `green_branch.py` -- mc/green branch lifecycle, merge_unit() for direct merge without verification, ZFC fixup prompt generation
+- `hitl.py` -- Human-in-the-loop approval gates (file-based + Telegram polling) for push and large merge actions
 - `heartbeat.py` -- Time-based progress monitor (checks merge activity, sends Telegram alerts)
 - `notifier.py` -- Telegram notifications (mission start/end, merge conflicts, heartbeat)
 - `diff_reviewer.py` -- Fire-and-forget LLM diff review (alignment/approach/tests scoring); feeds quality signals to planner but does NOT gate merges
 - `feedback.py` -- Worker context from past experiences
 - `overlap.py` -- File overlap detection and dependency injection
+- `strategist.py` -- Mission objective proposal, ambition scoring (heuristic + ZFC LLM-backed)
 
 ### Infrastructure
 - `backends/` -- Worker execution backends (local pool, SSH)

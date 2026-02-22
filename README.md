@@ -1,4 +1,4 @@
-# autonomous-dev-scheduler
+# autonomous-development
 
 Autonomous dev daemon that continuously improves a codebase toward a "north star" objective. Spawns parallel Claude Code workers, manages state in SQLite, and learns from its own outcomes via an RL-style feedback loop.
 
@@ -48,8 +48,8 @@ Each epoch:
 
 ```bash
 # Clone and install
-git clone https://github.com/dannywillowliu-uchi/autonomous-dev-scheduler.git
-cd autonomous-dev-scheduler
+git clone git@github.com:dannywillowliu-uchi/autonomous-development.git
+cd autonomous-development
 uv venv && uv pip install -e .
 
 # Configure (edit to point at your repo)
@@ -122,13 +122,52 @@ fixup_max_attempts = 3
 enabled = true
 tracks = ["feature", "quality", "security"]
 research_enabled = true
+
+[models]
+planner = "opus"         # Model for planning calls
+reviewer = "sonnet"      # Model for diff review
+strategist = "opus"      # Model for objective proposal
+
+[hitl]
+enabled = false
+gates = ["push", "large_merge"]  # Actions requiring approval
+poll_timeout = 300               # Seconds to wait for approval
+telegram = true                  # Use Telegram for approval prompts
+
+[speculation]
+enabled = false
+branch_count = 3         # Parallel branches per uncertain unit
+selection = "best_score" # How to pick the winner
+
+[degradation]
+enabled = true
+failure_threshold = 5    # Failures before circuit opens
+reset_timeout = 300      # Seconds before half-open retry
+fallback_strategy = "simple"
+
+[episodic_memory]
+enabled = true
+max_episodes = 100       # Max stored episodes per project
+similarity_threshold = 0.7
+
+[a2a]
+enabled = false
+host = "0.0.0.0"
+port = 5000
+
+[tracing]
+enabled = false
+endpoint = "http://localhost:4318"  # OTLP endpoint
+service_name = "mission-control"
 ```
 
 ## Architecture
 
 ```
-src/mission_control/
-+-- cli.py                   # CLI (mission, live, init, discover, summary)
+src/mission_control/                    # 57 modules
++-- __init__.py
++-- __main__.py
++-- cli.py                   # CLI entry point (16 commands)
 +-- config.py                # TOML config loader + validation
 +-- models.py                # Dataclasses (Mission, WorkUnit, Epoch, ...)
 +-- db.py                    # SQLite with WAL mode + migrations
@@ -136,7 +175,9 @@ src/mission_control/
 +-- continuous_planner.py    # Adaptive planner with replan-on-stall
 +-- recursive_planner.py     # Tree decomposition of objectives
 +-- worker.py                # Worker prompt rendering + architect/editor mode
++-- specialist.py            # Specialist worker template routing
 +-- grading.py               # Deterministic decomposition grading
++-- evaluator.py             # Round scoring (test/lint delta, completion, regression)
 +-- diff_reviewer.py         # LLM diff review (alignment/approach/tests scoring)
 +-- reviewer.py              # Review gating logic
 +-- feedback.py              # Reflections, rewards, experiences
@@ -149,7 +190,17 @@ src/mission_control/
 +-- auto_discovery.py        # Gap analysis -> research -> backlog pipeline
 +-- priority.py              # Backlog priority scoring + recalculation
 +-- backlog_manager.py       # Persistent backlog across missions
-+-- overlap.py               # Work unit file overlap detection + dependency injection
++-- overlap.py               # File overlap detection + dependency injection
++-- causal.py                # Causal attribution for outcome analysis
++-- degradation.py           # Graceful degradation with circuit breakers
++-- circuit_breaker.py       # Circuit breaker state machine
++-- hitl.py                  # Human-in-the-loop approval gates (file + Telegram)
++-- a2a.py                   # Agent-to-Agent protocol server
++-- mcp_server.py            # MCP server for external control
++-- mcp_registry.py          # MCP tool registry
++-- tracing.py               # OpenTelemetry tracing integration
++-- tool_synthesis.py        # Dynamic tool generation for workers
++-- prompt_evolution.py      # Prompt variant evolution + scoring
 +-- planner_context.py       # Mission state formatting for planner prompts
 +-- mission_report.py        # Post-mission JSON report generation
 +-- heartbeat.py             # Liveness monitoring + stale worker recovery
@@ -160,7 +211,8 @@ src/mission_control/
 +-- state.py                 # Mission state formatting
 +-- launcher.py              # Subprocess launcher utilities
 +-- constants.py             # Shared constants
-+-- registry.py              # Component registry
++-- registry.py              # Multi-project registry
++-- workspace.py             # Git clone pool management
 +-- dashboard/
 |   +-- live.py              # FastAPI app for live web dashboard
 |   +-- live_ui.html         # Dashboard frontend (SSE + real-time updates)
@@ -170,7 +222,7 @@ src/mission_control/
 |   +-- base.py              # WorkerBackend ABC
 |   +-- local.py             # Local subprocess backend with workspace pool
 |   +-- ssh.py               # Remote SSH backend
-+-- workspace.py             # Git clone pool management
+|   +-- container.py         # Container-based worker backend
 ```
 
 ## Key concepts
@@ -187,6 +239,28 @@ src/mission_control/
 
 **Objective verification**: Before declaring a mission complete, an LLM reads the codebase and objective to verify the goal was actually met, preventing premature completion.
 
+**Speculation branching**: High-uncertainty units fork into N parallel branches with different approach hints. A selection gate picks the winner based on test/lint scores, allowing the system to explore multiple strategies simultaneously.
+
+**Graceful degradation**: Circuit breakers track failure rates per component. When tripped, the system falls back to simpler strategies (e.g., fewer workers, no architect pass) instead of failing outright.
+
+**Human-in-the-loop (HITL)**: Configurable approval gates before push/merge operations. Supports file-based polling and Telegram-based approval prompts with configurable timeout.
+
+**Agent-to-Agent (A2A)**: Protocol server for inter-agent communication, allowing external agents to submit work or query mission state.
+
+**MCP server**: Model Context Protocol server for external tool integration, exposing mission control operations as MCP tools.
+
+**Episodic memory**: Stores and retrieves past worker experiences for context injection into subsequent worker prompts, enabling learning from prior attempts.
+
+**Prompt evolution**: Variant tracking and scoring for prompt optimization. Maintains a population of prompt variants, scores them on worker outcomes, and evolves toward higher-performing prompts.
+
+**Tool synthesis**: Dynamic tool generation for specialized worker tasks, creating purpose-built tools from templates at runtime.
+
+**Specialist templates**: Role-specific worker prompts (e.g., test writer, refactorer, security auditor) that shape worker behavior for different task types.
+
+**Causal attribution**: Traces outcomes back to specific planning and execution decisions, feeding attribution signals into the feedback loop for improved future planning.
+
+**Evaluator**: Round-level scoring combining test delta, lint delta, completion rate, and regression detection. Drives the stall detector and adaptive replanning.
+
 **EMA budget tracking**: Per-cycle costs are tracked with exponential moving average (alpha=0.3) with outlier dampening and conservatism factor. Adaptive cooldown increases when costs exceed budget.
 
 **Typed context store**: Workers produce structured context items (architecture notes, gotchas, patterns) stored in SQLite with scope-based filtering. Relevant items are selectively injected into subsequent worker prompts.
@@ -197,7 +271,9 @@ src/mission_control/
 
 **Mission chaining**: With `--chain`, after a mission completes, the strategist proposes the next objective and a new mission starts automatically. Combined with auto-discovery, the system can continuously improve a codebase without human intervention.
 
-**Live dashboard**: Real-time web dashboard at `http://localhost:8080` showing mission state, worker status, merge activity, and cost tracking via Server-Sent Events.
+**Tracing**: OpenTelemetry integration for observability, emitting spans for planning, execution, merging, and verification phases.
+
+**Live dashboard**: Real-time web dashboard showing mission state, worker status, merge activity, and cost tracking via Server-Sent Events.
 
 **Workspace pool**: Parallel workers each get an isolated git clone from a pre-warmed pool. Clones are recycled between epochs.
 
@@ -207,23 +283,54 @@ src/mission_control/
 # Run a mission
 mc mission --config mission-control.toml --workers 2 [--chain]
 
-# Live web dashboard
-mc live --config mission-control.toml --port 8080
+# Show current status
+mc status --config mission-control.toml
+
+# Show session history
+mc history --config mission-control.toml
 
 # Auto-discover improvements
 mc discover --config mission-control.toml
 
-# Initialize green branches
+# Initialize a mission-control config
 mc init --config mission-control.toml
+
+# Live web dashboard
+mc live --config mission-control.toml --port 8080
+
+# TUI dashboard
+mc dashboard --config mission-control.toml
 
 # View mission summary
 mc summary --config mission-control.toml
+
+# Multi-project registry
+mc register --config mission-control.toml
+mc unregister --config mission-control.toml
+mc projects
+
+# Start MCP server (stdio)
+mc mcp --config mission-control.toml
+
+# Start A2A protocol server
+mc a2a --config mission-control.toml
+
+# Validate config file
+mc validate-config --config mission-control.toml
+
+# Manage backlog priority queue
+mc priority list --config mission-control.toml
+mc priority set <item-id> <score>
+mc priority defer <item-id>
+mc priority import --file BACKLOG.md
+mc priority recalc
+mc priority export
 ```
 
 ## Tests
 
 ```bash
-uv run pytest -q                           # 800+ tests
+uv run pytest -q                           # 1,500+ tests
 uv run ruff check src/ tests/              # Lint
 uv run mypy src/mission_control --ignore-missing-imports  # Types
 ```

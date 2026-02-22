@@ -96,6 +96,14 @@ Full backoff-with-condition-checking loop verified: pause on total round failure
 
 `dashboard/live.py` replaced deprecated `@app.on_event("startup"/"shutdown")` with modern `asynccontextmanager` lifespan pattern. No deprecation warnings remain.
 
+### HITL Interrupt Gates (Mission 7) -- DONE
+
+`hitl.py`: ApprovalGate with file-based fallback and Telegram polling. Push gate and large merge gate with configurable thresholds. Integrated into `green_branch.py` merge_unit() and auto_push. Config: HITLConfig, HITLGateConfig.
+
+### ZFC Migration (Mission 8) -- DONE
+
+LLM-backed replacements for three hardcoded heuristics: ambition scoring (`strategist.py`), fixup strategy selection (`green_branch.py`), and objective score passthrough. Independent toggles, automatic heuristic fallback on failure. Config: ZFCConfig.
+
 ---
 
 ## Remaining
