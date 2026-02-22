@@ -171,12 +171,19 @@ class ContinuousController:
 		self._causal_attributor: CausalAttributor = CausalAttributor(db)
 		self._tracer: MissionTracer = MissionTracer(config.tracing)
 		self._a2a_server: Any = None
-		if config.a2a.enabled:
-			try:
+		try:
+			if config.a2a.enabled is True:
 				from mission_control.a2a import A2AServer
 				self._a2a_server = A2AServer(config.a2a, db)
-			except ImportError:
-				logger.warning("A2A server requested but fastapi/uvicorn not installed")
+		except Exception:
+			logger.warning("Failed to initialize A2A server", exc_info=True)
+		self._mcp_registry: Any = None
+		try:
+			if config.mcp_registry.enabled is True:
+				from mission_control.mcp_registry import MCPToolRegistry
+				self._mcp_registry = MCPToolRegistry(db, config.mcp_registry)
+		except Exception:
+			logger.warning("Failed to initialize MCP registry", exc_info=True)
 		budget = config.scheduler.budget
 		self._ema: ExponentialMovingAverage = ExponentialMovingAverage(
 			alpha=budget.ema_alpha,
@@ -1705,6 +1712,25 @@ class ContinuousController:
 			# Feed handoff to planner for adaptive replanning
 			if handoff and self._planner:
 				self._planner.ingest_handoff(handoff)
+
+			# Promote synthesized tools to MCP registry after merge
+			if merged and self._mcp_registry and handoff:
+				try:
+					tools_created = handoff.discoveries  # tools reported via handoff
+					if isinstance(tools_created, list):
+						from mission_control.tool_synthesis import ToolEntry, promote_to_mcp_registry
+						review = self.db.get_unit_review_for_unit(unit.id)
+						score = review.avg_score / 10.0 if review else 0.5
+						for item in tools_created:
+							if isinstance(item, dict) and "name" in item:
+								tool = ToolEntry(
+									name=item["name"],
+									description=item.get("description", ""),
+									script_path=Path(item.get("script_path", "")),
+								)
+								promote_to_mcp_registry(tool, score, mission.id, self._mcp_registry)
+				except Exception as exc:
+					logger.debug("Failed to promote tools to MCP registry: %s", exc)
 
 			# Append changelog entry before updating state file
 			timestamp = unit.finished_at or _now_iso()
