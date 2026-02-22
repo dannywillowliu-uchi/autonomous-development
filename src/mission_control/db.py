@@ -21,6 +21,7 @@ from mission_control.models import (
 	DecompositionGrade,
 	DiscoveryItem,
 	DiscoveryResult,
+	EpisodicMemory,
 	Epoch,
 	Experience,
 	ExperimentResult,
@@ -34,6 +35,7 @@ from mission_control.models import (
 	Reflection,
 	Reward,
 	Round,
+	SemanticMemory,
 	Session,
 	Signal,
 	Snapshot,
@@ -553,6 +555,31 @@ CREATE TABLE IF NOT EXISTS prompt_outcomes (
 	recorded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_prompt_outcomes_variant ON prompt_outcomes(variant_id);
+
+CREATE TABLE IF NOT EXISTS episodic_memories (
+	id TEXT PRIMARY KEY,
+	event_type TEXT NOT NULL DEFAULT '',
+	content TEXT NOT NULL DEFAULT '',
+	outcome TEXT NOT NULL DEFAULT '',
+	scope_tokens TEXT NOT NULL DEFAULT '',
+	confidence REAL NOT NULL DEFAULT 1.0,
+	access_count INTEGER NOT NULL DEFAULT 0,
+	last_accessed TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	ttl_days INTEGER NOT NULL DEFAULT 30
+);
+CREATE INDEX IF NOT EXISTS idx_episodic_memories_event_type ON episodic_memories(event_type);
+CREATE INDEX IF NOT EXISTS idx_episodic_memories_ttl ON episodic_memories(ttl_days);
+
+CREATE TABLE IF NOT EXISTS semantic_memories (
+	id TEXT PRIMARY KEY,
+	content TEXT NOT NULL DEFAULT '',
+	source_episode_ids TEXT NOT NULL DEFAULT '',
+	confidence REAL NOT NULL DEFAULT 1.0,
+	application_count INTEGER NOT NULL DEFAULT 0,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_semantic_memories_confidence ON semantic_memories(confidence DESC);
 """
 
 
@@ -3026,4 +3053,125 @@ class Database:
 			outcome=row["outcome"],
 			context=row["context"],
 			recorded_at=row["recorded_at"],
+		)
+
+	# -- Episodic Memories --
+
+	def insert_episodic_memory(self, m: EpisodicMemory) -> None:
+		self.conn.execute(
+			"""INSERT INTO episodic_memories
+			(id, event_type, content, outcome, scope_tokens, confidence,
+			 access_count, last_accessed, created_at, ttl_days)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			(
+				m.id, m.event_type, m.content, m.outcome, m.scope_tokens,
+				m.confidence, m.access_count, m.last_accessed, m.created_at,
+				m.ttl_days,
+			),
+		)
+		self.conn.commit()
+
+	def update_episodic_memory(self, m: EpisodicMemory) -> None:
+		self.conn.execute(
+			"""UPDATE episodic_memories SET
+			event_type=?, content=?, outcome=?, scope_tokens=?, confidence=?,
+			access_count=?, last_accessed=?, created_at=?, ttl_days=?
+			WHERE id=?""",
+			(
+				m.event_type, m.content, m.outcome, m.scope_tokens, m.confidence,
+				m.access_count, m.last_accessed, m.created_at, m.ttl_days, m.id,
+			),
+		)
+		self.conn.commit()
+
+	def get_episodic_memories_by_scope(
+		self, tokens: list[str], limit: int = 10,
+	) -> list[EpisodicMemory]:
+		"""Find episodic memories whose scope_tokens overlap with given tokens.
+
+		Excludes expired memories (ttl_days <= 0). Ordered by access_count DESC, confidence DESC.
+		"""
+		if not tokens:
+			return []
+		conditions = []
+		params: list[str | int] = []
+		for token in tokens:
+			conditions.append("scope_tokens LIKE ?")
+			params.append(f"%{token}%")
+		where = " OR ".join(conditions)
+		rows = self.conn.execute(
+			f"SELECT * FROM episodic_memories WHERE ({where}) AND ttl_days > 0 "  # noqa: S608
+			f"ORDER BY access_count DESC, confidence DESC LIMIT ?",
+			(*params, limit),
+		).fetchall()
+		return [self._row_to_episodic_memory(r) for r in rows]
+
+	def get_all_episodic_memories(self) -> list[EpisodicMemory]:
+		rows = self.conn.execute(
+			"SELECT * FROM episodic_memories ORDER BY created_at DESC",
+		).fetchall()
+		return [self._row_to_episodic_memory(r) for r in rows]
+
+	def delete_episodic_memory(self, memory_id: str) -> None:
+		self.conn.execute("DELETE FROM episodic_memories WHERE id=?", (memory_id,))
+		self.conn.commit()
+
+	@staticmethod
+	def _row_to_episodic_memory(row: sqlite3.Row) -> EpisodicMemory:
+		return EpisodicMemory(
+			id=row["id"],
+			event_type=row["event_type"],
+			content=row["content"],
+			outcome=row["outcome"],
+			scope_tokens=row["scope_tokens"],
+			confidence=row["confidence"],
+			access_count=row["access_count"],
+			last_accessed=row["last_accessed"],
+			created_at=row["created_at"],
+			ttl_days=row["ttl_days"],
+		)
+
+	# -- Semantic Memories --
+
+	def insert_semantic_memory(self, m: SemanticMemory) -> None:
+		self.conn.execute(
+			"""INSERT INTO semantic_memories
+			(id, content, source_episode_ids, confidence, application_count, created_at)
+			VALUES (?, ?, ?, ?, ?, ?)""",
+			(
+				m.id, m.content, m.source_episode_ids, m.confidence,
+				m.application_count, m.created_at,
+			),
+		)
+		self.conn.commit()
+
+	def update_semantic_memory(self, m: SemanticMemory) -> None:
+		self.conn.execute(
+			"""UPDATE semantic_memories SET
+			content=?, source_episode_ids=?, confidence=?, application_count=?, created_at=?
+			WHERE id=?""",
+			(
+				m.content, m.source_episode_ids, m.confidence,
+				m.application_count, m.created_at, m.id,
+			),
+		)
+		self.conn.commit()
+
+	def get_top_semantic_memories(self, limit: int = 5) -> list[SemanticMemory]:
+		rows = self.conn.execute(
+			"SELECT * FROM semantic_memories "
+			"ORDER BY confidence DESC, application_count DESC LIMIT ?",
+			(limit,),
+		).fetchall()
+		return [self._row_to_semantic_memory(r) for r in rows]
+
+	@staticmethod
+	def _row_to_semantic_memory(row: sqlite3.Row) -> SemanticMemory:
+		return SemanticMemory(
+			id=row["id"],
+			content=row["content"],
+			source_episode_ids=row["source_episode_ids"],
+			confidence=row["confidence"],
+			application_count=row["application_count"],
+			created_at=row["created_at"],
 		)
