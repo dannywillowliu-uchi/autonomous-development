@@ -341,6 +341,27 @@ class HITLConfig:
 
 
 @dataclass
+class A2AConfig:
+	"""Agent-to-Agent protocol settings."""
+
+	enabled: bool = False
+	host: str = "0.0.0.0"
+	port: int = 8420
+	agent_name: str = "mission-control"
+	agent_version: str = "0.1.0"
+	agent_capabilities: list[str] = field(default_factory=lambda: ["code_edit", "test_write", "refactor"])
+
+
+@dataclass
+class MCPRegistryConfig:
+	"""MCP tool registry settings."""
+
+	enabled: bool = False
+	promotion_threshold: float = 0.7
+	ema_alpha: float = 0.3
+
+
+@dataclass
 class DegradationConfig:
 	"""Tiered degradation settings."""
 
@@ -400,6 +421,8 @@ class MissionConfig:
 	hitl: HITLConfig = field(default_factory=HITLConfig)
 	zfc: ZFCConfig = field(default_factory=ZFCConfig)
 	degradation: DegradationConfig = field(default_factory=DegradationConfig)
+	a2a: A2AConfig = field(default_factory=A2AConfig)
+	mcp_registry: MCPRegistryConfig = field(default_factory=MCPRegistryConfig)
 
 
 def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
@@ -787,6 +810,34 @@ def _build_zfc(data: dict[str, Any]) -> ZFCConfig:
 	return zc
 
 
+def _build_a2a(data: dict[str, Any]) -> A2AConfig:
+	ac = A2AConfig()
+	if "enabled" in data:
+		ac.enabled = bool(data["enabled"])
+	if "host" in data:
+		ac.host = str(data["host"])
+	if "port" in data:
+		ac.port = int(data["port"])
+	if "agent_name" in data:
+		ac.agent_name = str(data["agent_name"])
+	if "agent_version" in data:
+		ac.agent_version = str(data["agent_version"])
+	if "agent_capabilities" in data:
+		ac.agent_capabilities = [str(c) for c in data["agent_capabilities"]]
+	return ac
+
+
+def _build_mcp_registry(data: dict[str, Any]) -> MCPRegistryConfig:
+	mc = MCPRegistryConfig()
+	if "enabled" in data:
+		mc.enabled = bool(data["enabled"])
+	if "promotion_threshold" in data:
+		mc.promotion_threshold = float(data["promotion_threshold"])
+	if "ema_alpha" in data:
+		mc.ema_alpha = float(data["ema_alpha"])
+	return mc
+
+
 def _build_degradation(data: dict[str, Any]) -> DegradationConfig:
 	dc = DegradationConfig()
 	float_keys = (
@@ -935,6 +986,10 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.zfc = _build_zfc(data["zfc"])
 	if "degradation" in data:
 		mc.degradation = _build_degradation(data["degradation"])
+	if "a2a" in data:
+		mc.a2a = _build_a2a(data["a2a"])
+	if "mcp_registry" in data:
+		mc.mcp_registry = _build_mcp_registry(data["mcp_registry"])
 	# Populate module-level extra env keys for claude_subprocess_env()
 	global _extra_env_keys
 	_extra_env_keys = set(mc.security.extra_env_keys) - _ENV_DENYLIST
