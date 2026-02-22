@@ -26,6 +26,7 @@ from mission_control.constants import (
 	UNIT_EVENT_REJECTED,
 	UNIT_EVENT_RESEARCH_COMPLETED,
 	UNIT_EVENT_RETRY_QUEUED,
+	UNIT_EVENT_SPECULATION_COMPLETED,
 )
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
@@ -44,10 +45,12 @@ from mission_control.models import (
 	Handoff,
 	Mission,
 	Signal,
+	SpeculationResult,
 	UnitEvent,
 	UnitReview,
 	Worker,
 	WorkUnit,
+	_new_id,
 	_now_iso,
 )
 from mission_control.notifier import TelegramNotifier
@@ -199,6 +202,8 @@ class ContinuousController:
 				self._memory_manager = MemoryManager(db, config.episodic_memory)
 		except Exception:
 			logger.warning("Failed to initialize memory manager", exc_info=True)
+		self._speculation_completions: dict[str, list[WorkerCompletion]] = {}
+		self._speculation_parent_units: dict[str, WorkUnit] = {}
 		budget = config.scheduler.budget
 		self._ema: ExponentialMovingAverage = ExponentialMovingAverage(
 			alpha=budget.ema_alpha,
@@ -1337,6 +1342,17 @@ class ContinuousController:
 					self._deferred_units.append((unit, epoch, mission))
 					continue
 
+				# Speculation: fork into N branches for high-uncertainty units
+				if (
+					self.config.speculation.enabled
+					and unit.speculation_score >= self.config.speculation.uncertainty_threshold
+				):
+					dispatched = await self._dispatch_speculated_unit(
+						unit, epoch, mission, semaphore, unit_layer_map,
+					)
+					if dispatched:
+						continue
+
 				logger.info("Waiting for semaphore to dispatch unit %s: %s", unit.id[:12], unit.title[:60])
 				await semaphore.acquire()
 				self._in_flight_count += 1
@@ -1586,6 +1602,25 @@ class ContinuousController:
 				try:
 					signal = self._build_causal_signal(unit, epoch, mission, merged=True)
 					self._causal_attributor.record(signal)
+				except Exception:
+					pass
+				continue
+
+			# Speculation branch: collect and run selection gate when all done
+			if unit.unit_type == "speculation_branch" and unit.speculation_parent_id:
+				parent_id = unit.speculation_parent_id
+				if parent_id in self._speculation_completions:
+					self._speculation_completions[parent_id].append(completion)
+					if len(self._speculation_completions[parent_id]) >= self.config.speculation.branch_count:
+						await self._speculation_select_winner(parent_id, mission, epoch)
+				else:
+					logger.warning("Orphan speculation branch %s", unit.id)
+					self._total_failed += 1
+				mission.total_cost_usd += unit.cost_usd
+				if unit.cost_usd > 0:
+					self._ema.update(unit.cost_usd)
+				try:
+					self.db.update_mission(mission)
 				except Exception:
 					pass
 				continue
@@ -1932,6 +1967,288 @@ class ContinuousController:
 
 		# Clean up resolved round
 		del round_tracker[epoch.id]
+
+	# -- Speculation branching --
+
+	SPECULATION_APPROACH_HINTS: tuple[str, ...] = (
+		"straightforward: use the most obvious, conventional approach",
+		"alternative: try a less common but potentially cleaner approach",
+		"defensive: prioritize error handling, edge cases, and robustness",
+		"minimal: implement the smallest possible change to satisfy requirements",
+		"exploratory: refactor surrounding code as needed for the best long-term design",
+	)
+
+	async def _dispatch_speculated_unit(
+		self,
+		unit: WorkUnit,
+		epoch: Epoch,
+		mission: Mission,
+		semaphore: asyncio.Semaphore,
+		unit_layer_map: dict[str, int],
+	) -> bool:
+		"""Fork a high-uncertainty unit into N parallel branches.
+
+		Returns True if speculation was dispatched, False if fallback to
+		single dispatch is needed (e.g. cost cap exceeded).
+		"""
+		spec_cfg = self.config.speculation
+		branch_count = spec_cfg.branch_count
+
+		# Cost guard: check projected cost against remaining budget
+		budget_limit = self.config.scheduler.budget.max_per_run_usd
+		if budget_limit > 0 and self._ema.value > 0:
+			projected_cost = branch_count * self._ema.value * spec_cfg.cost_limit_multiplier
+			remaining = budget_limit - mission.total_cost_usd
+			if projected_cost > remaining:
+				logger.info(
+					"Speculation cost cap: projected $%.2f > remaining $%.2f, falling back to single dispatch",
+					projected_cost, remaining,
+				)
+				return False
+
+		# Mark parent unit
+		unit.unit_type = "speculation_parent"
+		unit.status = "running"
+		unit.started_at = _now_iso()
+		try:
+			self.db.insert_work_unit(unit)
+		except Exception as exc:
+			logger.error("Failed to insert speculation parent unit: %s", exc)
+			return False
+
+		self._log_unit_event(
+			mission_id=mission.id,
+			epoch_id=epoch.id,
+			work_unit_id=unit.id,
+			event_type=UNIT_EVENT_DISPATCHED,
+			stream_details={
+				"title": unit.title,
+				"files": unit.files_hint,
+				"layer": unit_layer_map.get(unit.id, 0),
+				"speculation": True,
+				"branch_count": branch_count,
+			},
+		)
+
+		self._speculation_parent_units[unit.id] = unit
+		self._speculation_completions[unit.id] = []
+
+		# Generate N branch clones with distinct approach hints
+		hints = self.SPECULATION_APPROACH_HINTS[:branch_count]
+		for i in range(branch_count):
+			branch_id = _new_id()
+			hint = hints[i] if i < len(hints) else f"approach_{i}"
+			branch = WorkUnit(
+				id=branch_id,
+				plan_id=unit.plan_id,
+				title=f"{unit.title} [branch {i}: {hint.split(':')[0]}]",
+				description=f"{unit.description}\n\nAPPROACH HINT: {hint}",
+				files_hint=unit.files_hint,
+				verification_hint=unit.verification_hint,
+				priority=unit.priority,
+				plan_node_id=unit.plan_node_id,
+				epoch_id=epoch.id,
+				unit_type="speculation_branch",
+				speculation_parent_id=unit.id,
+				speculation_score=unit.speculation_score,
+				acceptance_criteria=unit.acceptance_criteria,
+				specialist=unit.specialist,
+			)
+
+			await semaphore.acquire()
+			self._in_flight_count += 1
+			try:
+				self.db.insert_work_unit(branch)
+			except Exception as exc:
+				logger.error("Failed to insert speculation branch: %s", exc)
+				self._in_flight_count -= 1
+				semaphore.release()
+				continue
+
+			self._total_dispatched += 1
+
+			task = asyncio.create_task(
+				self._execute_single_unit(branch, epoch, mission, semaphore),
+			)
+			self._active_tasks.add(task)
+			self._unit_tasks[branch.id] = task
+
+			def _on_branch_done(t: asyncio.Task[None], uid: str = branch.id) -> None:
+				self._active_tasks.discard(t)
+				self._unit_tasks.pop(uid, None)
+				if not t.cancelled():
+					exc = t.exception()
+					if exc is not None:
+						logger.error("Speculation branch task failed: %s", exc, exc_info=exc)
+
+			task.add_done_callback(_on_branch_done)
+
+		logger.info(
+			"Dispatched %d speculation branches for unit %s (score=%.2f)",
+			branch_count, unit.id[:12], unit.speculation_score,
+		)
+		return True
+
+	async def _speculation_select_winner(
+		self,
+		parent_id: str,
+		mission: Mission,
+		epoch: Epoch,
+	) -> None:
+		"""Select the winning branch and merge it, discard losers."""
+		completions = self._speculation_completions.pop(parent_id, [])
+		parent_unit = self._speculation_parent_units.pop(parent_id, None)
+		if parent_unit is None:
+			logger.warning("Speculation parent %s not found", parent_id)
+			return
+
+		spec_cfg = self.config.speculation
+		metric = spec_cfg.selection_metric
+
+		# Separate passing and failing branches
+		passing: list[WorkerCompletion] = []
+		failing: list[WorkerCompletion] = []
+		for c in completions:
+			if c.unit.status == "completed" and c.unit.commit_hash:
+				passing.append(c)
+			else:
+				failing.append(c)
+
+		branch_ids = [c.unit.id for c in completions]
+		total_cost = sum(c.unit.cost_usd for c in completions)
+
+		if not passing:
+			logger.warning(
+				"All %d speculation branches failed for parent %s",
+				len(completions), parent_id[:12],
+			)
+			parent_unit.status = "failed"
+			parent_unit.finished_at = _now_iso()
+			parent_unit.cost_usd = total_cost
+			try:
+				self.db.update_work_unit(parent_unit)
+			except Exception:
+				pass
+			self._total_failed += 1
+			self._record_speculation_result(
+				parent_unit, "", branch_ids, {}, total_cost, metric, mission, epoch,
+			)
+			# Release all workspaces
+			for c in completions:
+				if c.workspace and self._backend:
+					try:
+						await self._backend.release_workspace(c.workspace)
+					except Exception:
+						pass
+			return
+
+		# Score passing branches
+		scores: dict[str, float] = {}
+		if metric == "review_score":
+			for c in passing:
+				review = await self._blocking_review(
+					c.unit, c.workspace, mission, epoch,
+				)
+				scores[c.unit.id] = review.avg_score if review else 5.0
+		elif metric == "cost":
+			for c in passing:
+				scores[c.unit.id] = -c.unit.cost_usd  # lower cost = higher score
+		else:
+			for i, c in enumerate(passing):
+				scores[c.unit.id] = float(len(passing) - i)
+
+		# Select winner
+		winner_id = max(scores, key=lambda k: scores[k])
+		winner = next(c for c in passing if c.unit.id == winner_id)
+		losers = [c for c in completions if c.unit.id != winner_id]
+
+		# Merge winner
+		merged = False
+		if self._green_branch:
+			try:
+				merge_result = await self._green_branch.merge_unit(
+					winner.workspace, winner.unit.branch_name,
+				)
+				merged = merge_result.merged
+			except Exception as exc:
+				logger.error("Speculation winner merge failed: %s", exc)
+
+		if merged:
+			parent_unit.status = "completed"
+			parent_unit.commit_hash = winner.unit.commit_hash
+			parent_unit.cost_usd = total_cost
+			parent_unit.finished_at = _now_iso()
+			try:
+				self.db.update_work_unit(parent_unit)
+			except Exception:
+				pass
+			self._completed_unit_ids.add(parent_unit.id)
+			self._total_merged += 1
+			self._log_unit_event(
+				mission_id=mission.id,
+				epoch_id=epoch.id,
+				work_unit_id=parent_unit.id,
+				event_type=UNIT_EVENT_SPECULATION_COMPLETED,
+				stream_details={
+					"winner": winner_id,
+					"branch_count": len(completions),
+					"scores": scores,
+				},
+			)
+			# Ingest winner handoff
+			if winner.handoff and self._planner:
+				self._planner.ingest_handoff(winner.handoff)
+		else:
+			parent_unit.status = "failed"
+			parent_unit.cost_usd = total_cost
+			parent_unit.finished_at = _now_iso()
+			try:
+				self.db.update_work_unit(parent_unit)
+			except Exception:
+				pass
+			self._total_failed += 1
+
+		# Release loser workspaces
+		for c in losers:
+			if c.workspace and self._backend:
+				try:
+					await self._backend.release_workspace(c.workspace)
+				except Exception:
+					pass
+
+		self._record_speculation_result(
+			parent_unit, winner_id if merged else "", branch_ids,
+			scores, total_cost, metric, mission, epoch,
+		)
+		self._record_round_outcome(parent_unit, epoch, merged)
+
+	def _record_speculation_result(
+		self,
+		parent_unit: WorkUnit,
+		winner_branch_id: str,
+		branch_ids: list[str],
+		branch_scores: dict[str, float],
+		total_cost: float,
+		selection_metric: str,
+		mission: Mission,
+		epoch: Epoch,
+	) -> None:
+		"""Persist a SpeculationResult to the database."""
+		try:
+			result = SpeculationResult(
+				parent_unit_id=parent_unit.id,
+				winner_branch_id=winner_branch_id,
+				mission_id=mission.id,
+				epoch_id=epoch.id,
+				branch_count=len(branch_ids),
+				branch_ids=",".join(branch_ids),
+				branch_scores=json.dumps(branch_scores),
+				total_speculation_cost_usd=total_cost,
+				selection_metric=selection_metric,
+			)
+			self.db.insert_speculation_result(result)
+		except Exception as exc:
+			logger.warning("Failed to record speculation result: %s", exc)
 
 	def _build_causal_signal(
 		self,
