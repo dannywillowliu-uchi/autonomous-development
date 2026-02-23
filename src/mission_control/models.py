@@ -118,6 +118,7 @@ class VerificationResult:
 
 	kind: VerificationNodeKind = VerificationNodeKind.CUSTOM
 	passed: bool = False
+	skipped: bool = False
 	exit_code: int = 0
 	output: str = ""
 	metrics: dict[str, int] = field(default_factory=dict)
@@ -135,16 +136,20 @@ class VerificationReport:
 
 	@property
 	def overall_passed(self) -> bool:
-		return all(r.passed for r in self.results if r.required)
+		required_ran = [r for r in self.results if r.required and not r.skipped]
+		if not required_ran:
+			return False
+		return all(r.passed for r in required_ran)
 
 	@property
 	def weighted_score(self) -> float:
-		if not self.results:
+		ran = [r for r in self.results if not r.skipped]
+		if not ran:
 			return 0.0
-		return sum(r.weight * (1.0 if r.passed else 0.0) for r in self.results)
+		return sum(r.weight * (1.0 if r.passed else 0.0) for r in ran)
 
 	def failed_kinds(self) -> list[VerificationNodeKind]:
-		return [r.kind for r in self.results if not r.passed]
+		return [r.kind for r in self.results if not r.passed and not r.skipped]
 
 
 # -- Parallel mode models --
