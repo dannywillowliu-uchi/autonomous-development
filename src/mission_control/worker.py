@@ -527,7 +527,7 @@ class WorkerAgent:
 		cmd = [
 			"claude",
 			"-p",
-			"--output-format", "stream-json",
+			"--output-format", "text",
 			"--permission-mode", "bypassPermissions",
 			"--model", model,
 			"--max-budget-usd", str(budget),
