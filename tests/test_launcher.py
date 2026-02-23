@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,7 +17,7 @@ from mission_control.registry import ProjectRegistry
 @pytest.fixture
 def registry(tmp_path):
 	db_path = tmp_path / "test_registry.db"
-	reg = ProjectRegistry(db_path=db_path)
+	reg = ProjectRegistry(db_path=db_path, allowed_bases=[tmp_path, Path.home()])
 	yield reg
 	reg.close()
 
