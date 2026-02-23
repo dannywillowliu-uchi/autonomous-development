@@ -11,3 +11,5 @@ build/
 *.db-shm
 *.db-wal
 events.jsonl
+MISSION_STATE.md
+.mc-pool-*/
