@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from mission_control.models import Snapshot
+from mission_control.models import Snapshot, VerificationNodeKind
 from mission_control.state import (
+	_build_result_from_single_command,
 	_parse_mypy,
 	_parse_pytest,
 	_parse_ruff,
+	_tool_detected,
 	compare_snapshots,
 )
 
@@ -183,3 +185,125 @@ class TestRunCommandTimeout:
 		# Verify process was killed
 		mock_proc.kill.assert_called_once()
 		mock_proc.wait.assert_called_once()
+
+
+class TestToolDetected:
+	def test_pytest_detected(self) -> None:
+		assert _tool_detected("pytest", "10 passed in 0.5s")
+		assert _tool_detected("pytest", "3 failed, 2 passed in 1.0s")
+		assert _tool_detected("pytest", "1 error in 0.1s")
+		assert _tool_detected("pytest", "no tests ran")
+
+	def test_pytest_not_detected(self) -> None:
+		assert not _tool_detected("pytest", "")
+		assert not _tool_detected("pytest", "All checks passed!")
+
+	def test_ruff_detected(self) -> None:
+		assert _tool_detected("ruff", "All checks passed!")
+		assert _tool_detected("ruff", "Found 2 errors.")
+		assert _tool_detected("ruff", "src/foo.py:10:1: E501 Line too long")
+
+	def test_ruff_not_detected(self) -> None:
+		assert not _tool_detected("ruff", "")
+		assert not _tool_detected("ruff", "10 passed in 0.5s")
+
+	def test_mypy_detected(self) -> None:
+		assert _tool_detected("mypy", "Success: no issues found in 5 source files")
+		assert _tool_detected("mypy", "src/foo.py:10: error: Incompatible types")
+
+	def test_mypy_not_detected(self) -> None:
+		assert not _tool_detected("mypy", "")
+		assert not _tool_detected("mypy", "10 passed in 0.5s")
+
+	def test_bandit_detected(self) -> None:
+		assert _tool_detected("bandit", "No issues identified.")
+		assert _tool_detected("bandit", ">> Issue: [B101:assert_used]")
+		assert _tool_detected("bandit", "Run started:2024-01-01")
+
+	def test_bandit_not_detected(self) -> None:
+		assert not _tool_detected("bandit", "")
+		assert not _tool_detected("bandit", "10 passed in 0.5s")
+
+	def test_unknown_kind(self) -> None:
+		assert not _tool_detected("unknown", "anything")
+
+
+class TestBuildResultSkipped:
+	"""Tests for skipped node detection in _build_result_from_single_command."""
+
+	PYTEST_RUFF_OUTPUT = "10 passed in 0.5s\nAll checks passed!"
+
+	def test_pytest_ruff_marks_those_two_passed(self) -> None:
+		"""(a) Combined pytest+ruff output marks those two as passed."""
+		report = _build_result_from_single_command(self.PYTEST_RUFF_OUTPUT, returncode=0)
+		by_kind = {r.kind: r for r in report.results}
+
+		assert by_kind[VerificationNodeKind.PYTEST].passed is True
+		assert by_kind[VerificationNodeKind.PYTEST].skipped is False
+		assert by_kind[VerificationNodeKind.RUFF].passed is True
+		assert by_kind[VerificationNodeKind.RUFF].skipped is False
+
+	def test_mypy_bandit_marked_skipped(self) -> None:
+		"""(b) mypy/bandit nodes are marked skipped when only pytest+ruff ran."""
+		report = _build_result_from_single_command(self.PYTEST_RUFF_OUTPUT, returncode=0)
+		by_kind = {r.kind: r for r in report.results}
+
+		assert by_kind[VerificationNodeKind.MYPY].skipped is True
+		assert by_kind[VerificationNodeKind.MYPY].passed is False
+		assert by_kind[VerificationNodeKind.BANDIT].skipped is True
+		assert by_kind[VerificationNodeKind.BANDIT].passed is False
+
+	def test_overall_passed_with_skipped_nodes(self) -> None:
+		"""(c) overall_passed ignores skipped nodes -- only considers nodes that ran."""
+		report = _build_result_from_single_command(self.PYTEST_RUFF_OUTPUT, returncode=0)
+		assert report.overall_passed is True
+
+	def test_overall_passed_fails_when_ran_node_fails(self) -> None:
+		"""overall_passed is False when a non-skipped required node fails."""
+		output = "3 passed, 1 failed in 0.5s\nAll checks passed!"
+		report = _build_result_from_single_command(output, returncode=1)
+		assert report.overall_passed is False
+
+	def test_weighted_score_excludes_skipped(self) -> None:
+		"""weighted_score only counts nodes that actually ran."""
+		report = _build_result_from_single_command(self.PYTEST_RUFF_OUTPUT, returncode=0)
+		# 2 nodes ran and passed, each weight=1.0 → score=2.0
+		assert report.weighted_score == 2.0
+
+	def test_failed_kinds_excludes_skipped(self) -> None:
+		"""failed_kinds should not include skipped nodes."""
+		report = _build_result_from_single_command(self.PYTEST_RUFF_OUTPUT, returncode=0)
+		assert VerificationNodeKind.MYPY not in report.failed_kinds()
+		assert VerificationNodeKind.BANDIT not in report.failed_kinds()
+
+	def test_all_four_tools_detected(self) -> None:
+		"""When all four tools produce output, none are skipped."""
+		output = (
+			"10 passed in 0.5s\n"
+			"All checks passed!\n"
+			"Success: no issues found in 5 source files\n"
+			"No issues identified.\n"
+		)
+		report = _build_result_from_single_command(output, returncode=0)
+		for r in report.results:
+			assert r.skipped is False, f"{r.kind} should not be skipped"
+			assert r.passed is True, f"{r.kind} should be passed"
+
+	def test_nonzero_returncode_skipped_nodes(self) -> None:
+		"""When command fails partway, undetected tools are still skipped."""
+		# pytest failed, ruff never ran
+		output = "3 passed, 2 failed in 0.5s"
+		report = _build_result_from_single_command(output, returncode=1)
+		by_kind = {r.kind: r for r in report.results}
+
+		assert by_kind[VerificationNodeKind.PYTEST].skipped is False
+		assert by_kind[VerificationNodeKind.RUFF].skipped is True
+		assert by_kind[VerificationNodeKind.MYPY].skipped is True
+		assert by_kind[VerificationNodeKind.BANDIT].skipped is True
+
+	def test_no_tools_detected_falls_back_to_returncode(self) -> None:
+		"""When no tool markers are found (custom script), nothing is skipped."""
+		report = _build_result_from_single_command("", returncode=0)
+		for r in report.results:
+			assert r.skipped is False, f"{r.kind} should not be skipped with empty output"
+			assert r.passed is True, f"{r.kind} should be passed when returncode=0"

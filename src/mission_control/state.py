@@ -85,6 +85,23 @@ _KIND_PARSER_MAP: dict[str, Any] = {
 }
 
 
+def _tool_detected(kind: str, output: str) -> bool:
+	"""Check if a verification tool actually produced recognizable output."""
+	if kind == "pytest":
+		return bool(re.search(r"\d+ passed|\d+ failed|\d+ error|no tests ran", output))
+	if kind == "ruff":
+		return (
+			"All checks passed" in output
+			or bool(re.search(r"Found \d+ errors?", output))
+			or bool(re.search(r"\S+:\d+:\d+: [A-Z]\d+", output))
+		)
+	if kind == "mypy":
+		return "Success" in output or bool(re.search(r"\S+\.py:\d+: error:", output))
+	if kind == "bandit":
+		return "No issues identified" in output or ">> Issue:" in output or "Run started" in output
+	return False
+
+
 async def _run_command(cmd: str, cwd: str, timeout: int = 300) -> dict[str, Any]:
 	"""Run a shell command and capture output."""
 	try:
@@ -111,56 +128,79 @@ async def _run_command(cmd: str, cwd: str, timeout: int = 300) -> dict[str, Any]
 
 
 def _build_result_from_single_command(output: str, returncode: int) -> VerificationReport:
-	"""Build a VerificationReport from a single combined verification command (backward compat)."""
+	"""Build a VerificationReport from a single combined verification command (backward compat).
+
+	Detects which tools actually produced output via tool-specific markers.
+	Tools that never ran are marked skipped=True, passed=False so downstream
+	scoring distinguishes 'never ran' from 'ran and failed'.
+	"""
 	pytest_data = _parse_pytest(output)
 	ruff_data = _parse_ruff(output)
 	mypy_data = _parse_mypy(output)
 	bandit_data = _parse_bandit(output)
 
+	pytest_ran = _tool_detected("pytest", output)
+	ruff_ran = _tool_detected("ruff", output)
+	mypy_ran = _tool_detected("mypy", output)
+	bandit_ran = _tool_detected("bandit", output)
+
+	# Only mark undetected tools as skipped when at least one tool IS detected.
+	# If no tools are detected (e.g. custom script or empty output), fall back
+	# to trusting the returncode for all nodes (backward compat).
+	any_detected = pytest_ran or ruff_ran or mypy_ran or bandit_ran
+
 	results: list[VerificationResult] = []
 
 	# Pytest node
+	pytest_skipped = not pytest_ran and any_detected
 	test_passed = pytest_data["test_failed"] == 0 and pytest_data["test_total"] > 0
 	results.append(VerificationResult(
 		kind=VerificationNodeKind.PYTEST,
-		passed=test_passed or (pytest_data["test_total"] == 0 and returncode == 0),
+		passed=False if pytest_skipped else (test_passed or (pytest_data["test_total"] == 0 and returncode == 0)),
+		skipped=pytest_skipped,
 		exit_code=returncode,
 		output=output,
 		metrics=pytest_data,
 	))
 
 	# Ruff node
+	ruff_skipped = not ruff_ran and any_detected
 	results.append(VerificationResult(
 		kind=VerificationNodeKind.RUFF,
-		passed=ruff_data["lint_errors"] == 0,
+		passed=False if ruff_skipped else ruff_data["lint_errors"] == 0,
+		skipped=ruff_skipped,
 		exit_code=0 if ruff_data["lint_errors"] == 0 else 1,
 		output=output,
 		metrics=ruff_data,
 	))
 
 	# Mypy node
+	mypy_skipped = not mypy_ran and any_detected
 	results.append(VerificationResult(
 		kind=VerificationNodeKind.MYPY,
-		passed=mypy_data["type_errors"] == 0,
+		passed=False if mypy_skipped else mypy_data["type_errors"] == 0,
+		skipped=mypy_skipped,
 		exit_code=0 if mypy_data["type_errors"] == 0 else 1,
 		output=output,
 		metrics=mypy_data,
 	))
 
 	# Bandit node
+	bandit_skipped = not bandit_ran and any_detected
 	results.append(VerificationResult(
 		kind=VerificationNodeKind.BANDIT,
-		passed=bandit_data["security_findings"] == 0,
+		passed=False if bandit_skipped else bandit_data["security_findings"] == 0,
+		skipped=bandit_skipped,
 		exit_code=0 if bandit_data["security_findings"] == 0 else 1,
 		output=output,
 		metrics=bandit_data,
 	))
 
-	overall_ok = returncode == 0
-	# If the command passed, mark all nodes as passed (single-command mode)
-	if overall_ok:
+	# When the overall command succeeded, mark non-skipped nodes as passed
+	if returncode == 0:
 		for r in results:
-			r.passed = True
+			if not r.skipped:
+				r.passed = True
 
 	return VerificationReport(results=results, raw_output=output)
 
