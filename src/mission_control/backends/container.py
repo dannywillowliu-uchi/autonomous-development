@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from mission_control.backends.base import WorkerBackend, WorkerHandle
-from mission_control.config import ContainerConfig, claude_subprocess_env
+from mission_control.config import ContainerConfig, MissionConfig, claude_subprocess_env
 from mission_control.workspace import WorkspacePool
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,9 @@ class ContainerBackend(WorkerBackend):
 		max_clones: int = 10,
 		base_branch: str = "main",
 		max_output_mb: int = 50,
+		config: MissionConfig | None = None,
 	) -> None:
+		self._config = config
 		self._pool = WorkspacePool(
 			source_repo=source_repo,
 			pool_dir=pool_dir,
@@ -146,7 +148,7 @@ class ContainerBackend(WorkerBackend):
 			cmd.extend(["-e", "CLAUDE_CONFIG_DIR=/home/mcworker/.config/claude"])
 
 		# Pass through allowlisted env vars
-		for key, value in claude_subprocess_env().items():
+		for key, value in claude_subprocess_env(self._config).items():
 			cmd.extend(["-e", f"{key}={value}"])
 
 		cmd.append(cc.image)
