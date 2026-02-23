@@ -147,6 +147,14 @@ class CircuitBreakerManager:
 		cb._half_open_probes = 0
 		logger.info("Circuit breaker %s: force reset to CLOSED", workspace_id)
 
+	def get_summary(self) -> dict[str, int]:
+		"""Return counts per circuit breaker state."""
+		counts: dict[str, int] = {"closed": 0, "open": 0, "half_open": 0}
+		for cb in self._breakers.values():
+			counts[cb.state.value] += 1
+		counts["total"] = len(self._breakers)
+		return counts
+
 	def get_open_workspaces(self) -> dict[str, int]:
 		"""Return mapping of OPEN workspace IDs to their failure counts."""
 		return {
