@@ -618,8 +618,9 @@ class GreenBranchManager:
 		gb = self.config.green_branch
 		all_ok = True
 		for branch in (gb.green_branch, gb.working_branch):
+			# Force-update (+) because workspace mc/green always has the latest merges
 			ok, output = await self._run_git_in(
-				source_repo, "fetch", self.workspace, f"{branch}:{branch}",
+				source_repo, "fetch", self.workspace, f"+{branch}:{branch}",
 			)
 			if not ok:
 				logger.warning("Failed to sync %s to source repo: %s", branch, output)
