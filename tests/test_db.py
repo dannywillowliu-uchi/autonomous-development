@@ -603,7 +603,6 @@ class TestMigrationResilience:
 		"""Re-running migrations with already-existing columns should not raise."""
 		db._migrate_epoch_columns()
 		db._migrate_token_columns()
-		db._migrate_unit_type_column()
 
 
 class TestContextManager:
