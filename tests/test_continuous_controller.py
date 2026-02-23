@@ -2487,3 +2487,235 @@ class TestDependencyAwareDispatch:
 		ctrl = ContinuousController(config, db)
 		assert ctrl._completed_unit_ids == set()
 
+
+class TestLayerByLayerDispatch:
+	"""Verify _dispatch_loop dispatches units grouped by topological layer."""
+
+	@pytest.mark.asyncio
+	async def test_layer_barrier_enforces_ordering(self, config: MissionConfig, db: Database) -> None:
+		"""Units in layer 1 only start after layer 0 tasks complete via gather barrier."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 10
+		config.continuous.cooldown_between_units = 0
+		config.discovery.enabled = False
+		config.scheduler.parallel.num_workers = 4
+		ctrl = ContinuousController(config, db)
+
+		events: list[str] = []
+		planner_may_finish = asyncio.Event()
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			events.append(f"start:{unit.id}")
+			await asyncio.sleep(0.02)
+			events.append(f"end:{unit.id}")
+			unit.status = "completed"
+			unit.commit_hash = "abc123"
+			unit.branch_name = f"mc/unit-{unit.id}"
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
+			)
+			semaphore.release()
+
+		call_count = 0
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			plan = Plan(id=f"p{call_count}", objective="test")
+			epoch = Epoch(id=f"ep{call_count}", mission_id=mission.id, number=call_count)
+			if call_count == 1:
+				# A and B in layer 0 (no deps), C depends on A (layer 1)
+				units = [
+					WorkUnit(id="wu-a", plan_id=plan.id, title="A", max_attempts=1, depends_on=""),
+					WorkUnit(id="wu-b", plan_id=plan.id, title="B", max_attempts=1, depends_on=""),
+					WorkUnit(id="wu-c", plan_id=plan.id, title="C", max_attempts=1, depends_on="wu-a"),
+				]
+				return plan, units, epoch
+			await planner_may_finish.wait()
+			return plan, [], epoch
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock(
+			return_value=UnitMergeResult(merged=True, rebase_ok=True, verification_passed=True),
+		)
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
+
+		async def monitor_and_release() -> None:
+			while ctrl._total_merged + ctrl._total_failed < 3:
+				await asyncio.sleep(0.01)
+			planner_may_finish.set()
+
+		async def run_all() -> ContinuousMissionResult:
+			with (
+				patch.object(ctrl, "_init_components", mock_init),
+				patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+				patch("mission_control.continuous_controller.EventStream"),
+			):
+				monitor_task = asyncio.create_task(monitor_and_release())
+				try:
+					return await ctrl.run()
+				finally:
+					monitor_task.cancel()
+					try:
+						await monitor_task
+					except asyncio.CancelledError:
+						pass
+
+		result = await asyncio.wait_for(run_all(), timeout=10.0)
+
+		assert result.total_units_dispatched >= 3
+		assert ctrl._total_merged == 3
+
+		# Layer 0 units (A, B) must both end before layer 1 unit (C) starts
+		a_end = events.index("end:wu-a")
+		b_end = events.index("end:wu-b")
+		c_start = events.index("start:wu-c")
+		assert a_end < c_start, "A must finish before C starts"
+		assert b_end < c_start, "B must finish before C starts"
+
+	@pytest.mark.asyncio
+	async def test_same_layer_units_run_concurrently(self, config: MissionConfig, db: Database) -> None:
+		"""Units in the same layer are dispatched before any completes (concurrent)."""
+		config.target.name = "test"
+		config.continuous.max_wall_time_seconds = 10
+		config.continuous.cooldown_between_units = 0
+		config.discovery.enabled = False
+		config.scheduler.parallel.num_workers = 4
+		ctrl = ContinuousController(config, db)
+
+		events: list[str] = []
+		planner_may_finish = asyncio.Event()
+
+		async def mock_execute(
+			unit: WorkUnit, epoch: Epoch, mission: Mission,
+			semaphore: asyncio.Semaphore,
+		) -> None:
+			events.append(f"start:{unit.id}")
+			await asyncio.sleep(0.02)
+			events.append(f"end:{unit.id}")
+			unit.status = "completed"
+			unit.commit_hash = "abc123"
+			unit.branch_name = f"mc/unit-{unit.id}"
+			unit.finished_at = "2025-01-01T00:00:00"
+			await ctrl._completion_queue.put(
+				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
+			)
+			semaphore.release()
+
+		call_count = 0
+
+		async def mock_get_next(
+			mission: Mission, max_units: int = 3, feedback_context: str = "", **kwargs: object,
+		) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			plan = Plan(id=f"p{call_count}", objective="test")
+			epoch = Epoch(id=f"ep{call_count}", mission_id=mission.id, number=call_count)
+			if call_count == 1:
+				# All units in the same layer (no dependencies)
+				units = [
+					WorkUnit(id=f"wu-{i}", plan_id=plan.id, title=f"T{i}", max_attempts=1)
+					for i in range(3)
+				]
+				return plan, units, epoch
+			await planner_may_finish.wait()
+			return plan, [], epoch
+
+		mock_planner = MagicMock()
+		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
+		mock_planner.ingest_handoff = MagicMock()
+		mock_planner.backlog_size = 0
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_unit = AsyncMock(
+			return_value=UnitMergeResult(merged=True, rebase_ok=True, verification_passed=True),
+		)
+
+		async def mock_init() -> None:
+			ctrl._planner = mock_planner
+			ctrl._green_branch = mock_gbm
+			ctrl._backend = AsyncMock()
+			ctrl._notifier = None
+			ctrl._heartbeat = None
+			ctrl._event_stream = None
+
+		async def monitor_and_release() -> None:
+			while ctrl._total_merged + ctrl._total_failed < 3:
+				await asyncio.sleep(0.01)
+			planner_may_finish.set()
+
+		async def run_all() -> ContinuousMissionResult:
+			with (
+				patch.object(ctrl, "_init_components", mock_init),
+				patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute),
+				patch("mission_control.continuous_controller.EventStream"),
+			):
+				monitor_task = asyncio.create_task(monitor_and_release())
+				try:
+					return await ctrl.run()
+				finally:
+					monitor_task.cancel()
+					try:
+						await monitor_task
+					except asyncio.CancelledError:
+						pass
+
+		result = await asyncio.wait_for(run_all(), timeout=10.0)
+
+		assert result.total_units_dispatched >= 3
+
+		# All 3 units should start before any ends (concurrent dispatch in same layer)
+		starts = [e for e in events if e.startswith("start:")]
+		ends = [e for e in events if e.startswith("end:")]
+		first_end_idx = events.index(ends[0])
+		all_starts_before_first_end = all(events.index(s) < first_end_idx for s in starts)
+		assert all_starts_before_first_end, "All same-layer units should start before any finishes"
+
+	@pytest.mark.asyncio
+	async def test_overlap_deferred_within_layer(self, config: MissionConfig, db: Database) -> None:
+		"""In-flight overlap check still defers units within a layer."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._backend = AsyncMock()
+
+		# Simulate a running unit with overlapping files
+		running_unit = WorkUnit(
+			id="wu-running", plan_id="p1", title="Running",
+			status="running", files_hint="src/foo.py,src/bar.py",
+		)
+		db.insert_plan(Plan(id="p1", objective="test"))
+		db.insert_work_unit(running_unit)
+
+		# New unit with overlapping files
+		overlap_unit = WorkUnit(
+			id="wu-overlap", plan_id="p1", title="Overlap",
+			files_hint="src/foo.py,src/baz.py",
+		)
+
+		assert ctrl._check_in_flight_overlap(overlap_unit) is True
+
+		# Non-overlapping unit passes
+		clean_unit = WorkUnit(
+			id="wu-clean", plan_id="p1", title="Clean",
+			files_hint="src/other.py",
+		)
+		assert ctrl._check_in_flight_overlap(clean_unit) is False
+

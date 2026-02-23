@@ -1322,93 +1322,126 @@ class ContinuousController:
 				for lu in layer_units:
 					unit_layer_map[lu.id] = layer_idx
 
-			# Dispatch each unit
-			for unit in units:
-				unit.epoch_id = epoch.id
+			# Dispatch units layer-by-layer with gather barrier between layers
+			for layer_idx, layer in enumerate(layers):
+				logger.info(
+					"Dispatching layer %d/%d (%d units)",
+					layer_idx, len(layers) - 1, len(layer),
+				)
 
-				# Dependency gate: defer if depends_on IDs haven't completed
-				if not self._check_dependencies_met(unit):
-					logger.info(
-						"Deferring unit %s: dependencies not yet met",
-						unit.id[:12],
-					)
-					self._deferred_units.append((unit, epoch, mission))
-					continue
+				layer_tasks: list[asyncio.Task[None]] = []
+				pre_layer_total = self._total_merged + self._total_failed
 
-				# Skip units whose files are already covered by merged work
-				if self._check_already_merged(unit):
-					logger.info(
-						"Skipping unit %s (%s): files already covered by merged work",
-						unit.id[:12], unit.title[:50],
-					)
-					continue
+				for unit in layer:
+					unit.epoch_id = epoch.id
 
-				# Cross-epoch overlap check: defer if overlapping with in-flight work
-				if self._check_in_flight_overlap(unit):
-					logger.warning(
-						"Deferring unit %s: overlaps with in-flight work",
-						unit.id[:12],
-					)
-					self._deferred_units.append((unit, epoch, mission))
-					continue
-
-				# Speculation: fork into N branches for high-uncertainty units
-				if (
-					self.config.speculation.enabled
-					and unit.speculation_score >= self.config.speculation.uncertainty_threshold
-				):
-					dispatched = await self._dispatch_speculated_unit(
-						unit, epoch, mission, semaphore, unit_layer_map,
-					)
-					if dispatched:
+					# Dependency gate: defer if depends_on IDs haven't completed
+					if not self._check_dependencies_met(unit):
+						logger.info(
+							"Deferring unit %s: dependencies not yet met",
+							unit.id[:12],
+						)
+						self._deferred_units.append((unit, epoch, mission))
 						continue
 
-				logger.info("Waiting for semaphore to dispatch unit %s: %s", unit.id[:12], unit.title[:60])
-				await semaphore.acquire()
-				self._in_flight_count += 1
-				logger.info("Semaphore acquired, dispatching unit %s", unit.id[:12])
-				try:
-					self.db.insert_work_unit(unit)
-				except Exception as exc:
-					logger.error(
-						"Failed to insert work unit: %s", exc, exc_info=True,
+					# Skip units whose files are already covered by merged work
+					if self._check_already_merged(unit):
+						logger.info(
+							"Skipping unit %s (%s): files already covered by merged work",
+							unit.id[:12], unit.title[:50],
+						)
+						continue
+
+					# Cross-epoch overlap check: defer if overlapping with in-flight work
+					if self._check_in_flight_overlap(unit):
+						logger.warning(
+							"Deferring unit %s: overlaps with in-flight work",
+							unit.id[:12],
+						)
+						self._deferred_units.append((unit, epoch, mission))
+						continue
+
+					# Speculation: fork into N branches for high-uncertainty units
+					if (
+						self.config.speculation.enabled
+						and unit.speculation_score >= self.config.speculation.uncertainty_threshold
+					):
+						dispatched = await self._dispatch_speculated_unit(
+							unit, epoch, mission, semaphore, unit_layer_map,
+						)
+						if dispatched:
+							continue
+
+					logger.info("Waiting for semaphore to dispatch unit %s: %s", unit.id[:12], unit.title[:60])
+					await semaphore.acquire()
+					self._in_flight_count += 1
+					logger.info("Semaphore acquired, dispatching unit %s", unit.id[:12])
+					try:
+						self.db.insert_work_unit(unit)
+					except Exception as exc:
+						logger.error(
+							"Failed to insert work unit: %s", exc, exc_info=True,
+						)
+						self._in_flight_count -= 1
+						semaphore.release()
+						continue
+
+					# Log dispatch event with layer index metadata
+					self._log_unit_event(
+						mission_id=mission.id,
+						epoch_id=epoch.id,
+						work_unit_id=unit.id,
+						event_type=UNIT_EVENT_DISPATCHED,
+						stream_details={
+							"title": unit.title,
+							"files": unit.files_hint,
+							"layer": layer_idx,
+						},
 					)
-					self._in_flight_count -= 1
-					semaphore.release()
-					continue
 
-				# Log dispatch event with layer index metadata
-				self._log_unit_event(
-					mission_id=mission.id,
-					epoch_id=epoch.id,
-					work_unit_id=unit.id,
-					event_type=UNIT_EVENT_DISPATCHED,
-					stream_details={
-						"title": unit.title,
-						"files": unit.files_hint,
-						"layer": unit_layer_map.get(unit.id, 0),
-					},
-				)
+					self._total_dispatched += 1
 
-				self._total_dispatched += 1
+					task = asyncio.create_task(
+						self._execute_single_unit(
+							unit, epoch, mission, semaphore,
+						),
+					)
+					self._active_tasks.add(task)
+					self._unit_tasks[unit.id] = task
+					layer_tasks.append(task)
 
-				task = asyncio.create_task(
-					self._execute_single_unit(
-						unit, epoch, mission, semaphore,
-					),
-				)
-				self._active_tasks.add(task)
-				self._unit_tasks[unit.id] = task
+					def _on_task_done(t: asyncio.Task[None], uid: str = unit.id) -> None:
+						self._active_tasks.discard(t)
+						self._unit_tasks.pop(uid, None)
+						if not t.cancelled():
+							exc = t.exception()
+							if exc is not None:
+								logger.error("Fire-and-forget task failed: %s", exc, exc_info=exc)
 
-				def _on_task_done(t: asyncio.Task[None], uid: str = unit.id) -> None:
-					self._active_tasks.discard(t)
-					self._unit_tasks.pop(uid, None)
-					if not t.cancelled():
-						exc = t.exception()
-						if exc is not None:
-							logger.error("Fire-and-forget task failed: %s", exc, exc_info=exc)
+					task.add_done_callback(_on_task_done)
 
-				task.add_done_callback(_on_task_done)
+				# Barrier: wait for all units in this layer before starting next layer
+				if layer_tasks:
+					expected = pre_layer_total + len(layer_tasks)
+					logger.info(
+						"Layer %d: waiting for %d tasks to complete",
+						layer_idx, len(layer_tasks),
+					)
+					await asyncio.gather(*layer_tasks, return_exceptions=True)
+					# Wait for completion processor to finish merging this layer's
+					# results so _completed_unit_ids is current for the next layer
+					drain_deadline = time.monotonic() + 5.0
+					while (self._total_merged + self._total_failed) < expected:
+						if time.monotonic() > drain_deadline:
+							logger.warning(
+								"Layer %d: completion drain timeout (%d/%d processed)",
+								layer_idx,
+								self._total_merged + self._total_failed - pre_layer_total,
+								len(layer_tasks),
+							)
+							break
+						await asyncio.sleep(0.01)
+					logger.info("Layer %d complete", layer_idx)
 
 			if cooldown > 0:
 				await asyncio.sleep(cooldown)
