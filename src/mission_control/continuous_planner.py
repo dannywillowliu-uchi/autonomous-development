@@ -32,6 +32,14 @@ class ContinuousPlanner:
 		self._unit_to_backlog: dict[str, str] = {}
 		self._backlog_items: list[BacklogItem] = []
 
+	def set_causal_context(self, risks: str) -> None:
+		"""Set causal risk factors, delegating to the inner planner."""
+		self._inner.set_causal_context(risks)
+
+	def set_project_snapshot(self, snapshot: str) -> None:
+		"""Set project structure snapshot, delegating to the inner planner."""
+		self._inner.set_project_snapshot(snapshot)
+
 	def ingest_handoff(self, handoff: Handoff) -> None:
 		"""Accumulate discoveries and concerns from worker feedback."""
 		if handoff.discoveries:

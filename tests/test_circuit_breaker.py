@@ -158,6 +158,54 @@ class TestCanDispatch:
 		assert mgr.can_dispatch("/ws/a") is False
 
 
+class TestOnStateChangeCallback:
+	def test_closed_to_open_fires_callback(self) -> None:
+		"""Callback fires on CLOSED -> OPEN transition."""
+		transitions: list[tuple[str, str, str]] = []
+		mgr = CircuitBreakerManager(
+			max_failures=2, cooldown_seconds=60,
+			on_state_change=lambda ws, old, new: transitions.append((ws, old, new)),
+		)
+		mgr.record_failure("/ws/a")
+		assert transitions == []
+		mgr.record_failure("/ws/a")
+		assert transitions == [("/ws/a", "closed", "open")]
+
+	def test_half_open_to_open_fires_callback(self) -> None:
+		"""Callback fires on HALF_OPEN -> OPEN transition."""
+		transitions: list[tuple[str, str, str]] = []
+		mgr = CircuitBreakerManager(
+			max_failures=1, cooldown_seconds=0.01,
+			on_state_change=lambda ws, old, new: transitions.append((ws, old, new)),
+		)
+		mgr.record_failure("/ws/a")
+		transitions.clear()
+		time.sleep(0.02)
+		mgr.can_dispatch("/ws/a")  # OPEN -> HALF_OPEN
+		transitions.clear()
+		mgr.record_failure("/ws/a")  # HALF_OPEN -> OPEN
+		assert transitions == [("/ws/a", "half_open", "open")]
+
+	def test_open_to_half_open_fires_callback(self) -> None:
+		"""Callback fires on OPEN -> HALF_OPEN transition."""
+		transitions: list[tuple[str, str, str]] = []
+		mgr = CircuitBreakerManager(
+			max_failures=1, cooldown_seconds=0.01,
+			on_state_change=lambda ws, old, new: transitions.append((ws, old, new)),
+		)
+		mgr.record_failure("/ws/a")
+		transitions.clear()
+		time.sleep(0.02)
+		mgr.can_dispatch("/ws/a")
+		assert transitions == [("/ws/a", "open", "half_open")]
+
+	def test_no_callback_when_none(self) -> None:
+		"""No error when on_state_change is None (default)."""
+		mgr = CircuitBreakerManager(max_failures=1, cooldown_seconds=60)
+		mgr.record_failure("/ws/a")
+		assert mgr.get_state("/ws/a") == CircuitBreakerState.OPEN
+
+
 class TestCircuitBreakerDataclass:
 	def test_defaults(self) -> None:
 		cb = CircuitBreaker(workspace_id="/ws/test")
