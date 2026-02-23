@@ -107,6 +107,8 @@ class RecursivePlanner:
 		self._project_snapshot: str = ""
 		self._feedback_context: str = ""
 		self._locked_files: dict[str, list[str]] = {}
+		max_concurrent = getattr(config.planner, "max_concurrent_expansions", 4)
+		self._semaphore = asyncio.Semaphore(max_concurrent)
 
 	def set_causal_context(self, risks: str) -> None:
 		"""Set causal risk factors to include in the planner prompt."""
@@ -144,6 +146,18 @@ class RecursivePlanner:
 
 		return plan, root
 
+	async def _bounded_expand(
+		self,
+		node: PlanNode,
+		plan: Plan,
+		objective: str,
+		snapshot_hash: str,
+		prior_discoveries: list[str],
+	) -> None:
+		"""Expand a node while respecting the concurrency semaphore."""
+		async with self._semaphore:
+			await self.expand_node(node, plan, objective, snapshot_hash, prior_discoveries)
+
 	async def expand_node(
 		self,
 		node: PlanNode,
@@ -176,7 +190,10 @@ class RecursivePlanner:
 				)
 				child_ids.append(child.id)
 				child_nodes.append(child)
-				await self.expand_node(child, plan, objective, snapshot_hash, prior_discoveries)
+
+			async with asyncio.TaskGroup() as tg:
+				for child in child_nodes:
+					tg.create_task(self._bounded_expand(child, plan, objective, snapshot_hash, prior_discoveries))
 
 			node.children_ids = ",".join(child_ids)
 			node._subdivided_children = child_nodes  # type: ignore[attr-defined]

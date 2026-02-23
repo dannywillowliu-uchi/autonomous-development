@@ -419,6 +419,84 @@ class TestMaxDepthEnforcement:
 		assert node.status == "expanded"
 
 	@pytest.mark.asyncio
+	async def test_sibling_expansion_is_concurrent(self) -> None:
+		"""Sibling children are expanded concurrently via TaskGroup, not sequentially."""
+		planner = _planner(max_depth=3)
+
+		subdivide_result = PlannerResult(
+			type="subdivide",
+			children=[{"scope": "A"}, {"scope": "B"}, {"scope": "C"}],
+		)
+		leaf_result = PlannerResult(
+			type="leaves",
+			units=[{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		)
+
+		num_children = 3
+		entered_count = 0
+		all_entered = asyncio.Event()
+
+		async def mock_invoke(node, objective, snapshot_hash, prior_discoveries):
+			nonlocal entered_count
+			if node.depth == 0:
+				return subdivide_result
+			# Each child signals entry, then waits for all siblings.
+			# If expansion were sequential, only one child enters at a time
+			# and the event never gets set -> timeout.
+			entered_count += 1
+			if entered_count >= num_children:
+				all_entered.set()
+			await asyncio.wait_for(all_entered.wait(), timeout=2.0)
+			return leaf_result
+
+		with patch.object(planner, "_invoke_planner_llm", side_effect=mock_invoke):
+			plan, root = await planner.plan_round("Concurrent test", "hash", [], 1)
+
+		assert entered_count == num_children
+		assert plan.total_units == 3
+		assert root.strategy == "subdivide"
+
+	@pytest.mark.asyncio
+	async def test_semaphore_bounds_concurrency(self) -> None:
+		"""Semaphore limits max concurrent expansions to configured value."""
+		planner = _planner(max_depth=3)
+		# Override semaphore to allow only 2 concurrent
+		planner._semaphore = asyncio.Semaphore(2)
+
+		subdivide_result = PlannerResult(
+			type="subdivide",
+			children=[{"scope": "A"}, {"scope": "B"}, {"scope": "C"}, {"scope": "D"}],
+		)
+		leaf_result = PlannerResult(
+			type="leaves",
+			units=[{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		)
+
+		max_concurrent = 0
+		current_concurrent = 0
+		lock = asyncio.Lock()
+
+		async def mock_invoke(node, objective, snapshot_hash, prior_discoveries):
+			nonlocal max_concurrent, current_concurrent
+			if node.depth == 0:
+				return subdivide_result
+			async with lock:
+				current_concurrent += 1
+				if current_concurrent > max_concurrent:
+					max_concurrent = current_concurrent
+			# Yield to let other tasks enter if they can
+			await asyncio.sleep(0.01)
+			async with lock:
+				current_concurrent -= 1
+			return leaf_result
+
+		with patch.object(planner, "_invoke_planner_llm", side_effect=mock_invoke):
+			plan, root = await planner.plan_round("Bounded test", "hash", [], 1)
+
+		assert plan.total_units == 4
+		assert max_concurrent <= 2
+
+	@pytest.mark.asyncio
 	async def test_subdivide_respects_max_children(self) -> None:
 		"""Subdivision should cap children at max_children_per_node."""
 		planner = _planner(max_depth=3, max_children=2)
