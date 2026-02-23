@@ -15,15 +15,15 @@ Priority backlog items to address:
 
 ## Completed
 - [x] 811d3867 (2026-02-23T07:18:25.318661+00:00) -- Added 4 end-to-end tests covering quality review aggregation in build_planner_context: scores sectio (files: tests/test_planner_context.py)
+- [x] 01a06c0b (2026-02-23T07:19:41.143798+00:00) -- Replaced __file__-based _UI_PATH with importlib.resources primary lookup and __file__ fallback. Adde (files: src/mission_control/dashboard/live.py, tests/test_live_dashboard.py)
 
 ## In-Flight (DO NOT duplicate)
 - [ ] 8934c84e -- Add WebResearchTool to MCP server for strategist and worker web access (files: src/mission_control/mcp_server.py)
 - [ ] cd5f000f -- Fix diff_reviewer parsing, prompt structure, and logging (files: src/mission_control/diff_reviewer.py)
 - [ ] d2a672c1 -- Add needs_research flag to WorkUnit and planner awareness (files: src/mission_control/models.py, src/mission_control/recursive_planner.py)
-- [ ] 01a06c0b -- Resolve dashboard UI path via importlib.resources instead of __file__ (files: src/mission_control/dashboard/live.py, tests/test_live_dashboard.py)
 
 ## Files Modified
-tests/test_planner_context.py
+src/mission_control/dashboard/live.py, tests/test_live_dashboard.py, tests/test_planner_context.py
 
 ## System Health
 Degradation level: FULL_CAPACITY
@@ -35,3 +35,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 ## Changelog
 - 2026-02-23T07:17:34.133337+00:00 | 47d035ed merged (commit: no-commit) -- n    13→from mission_control.db import Database\n    14→from mission_control.jso
 - 2026-02-23T07:17:38.753680+00:00 | f7ebfd6f merged (commit: no-commit) -- ror(\n\t\t\t\t\t\"Worker %s output exceeded limit (%dMB). Killing worker.\",\n\t
+- 2026-02-23T07:18:25.318661+00:00 | 811d3867 merged (commit: 7cb908a) -- Added 4 end-to-end tests covering quality review aggregation in build_planner_co
