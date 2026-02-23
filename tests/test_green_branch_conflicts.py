@@ -722,6 +722,8 @@ class TestMergedFilesFromGitDiff:
 				return (True, "src/app.py\nsrc/utils.py\n")
 			if args[0] == "rev-parse" and args[1] == "HEAD":
 				return (True, "abc123\n")
+			if args[0] == "rev-list" and "--count" in args:
+				return (True, "1")
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=mock_git)
@@ -740,6 +742,8 @@ class TestMergedFilesFromGitDiff:
 		async def mock_git(*args: str) -> tuple[bool, str]:
 			if args[0] == "diff" and args[1] == "--name-only":
 				return (True, "")
+			if args[0] == "rev-list" and "--count" in args:
+				return (True, "1")
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=mock_git)
@@ -1020,6 +1024,8 @@ class TestRebaseRetry:
 				return (True, "")
 			if args[0] == "diff" and args[1] == "--name-only":
 				return (True, "file.py\n")
+			if args[0] == "rev-list" and "--count" in args:
+				return (True, "1")
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=mock_git)
@@ -1064,6 +1070,8 @@ class TestRebaseRetry:
 				return (True, "")
 			if args[0] == "diff" and args[1] == "--name-only":
 				return (True, "")
+			if args[0] == "rev-list" and "--count" in args:
+				return (True, "1")
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=mock_git)

@@ -46,13 +46,20 @@ def _manager() -> GreenBranchManager:
 	return mgr
 
 
+def _git_mock_ok(*args: str) -> tuple[bool, str]:
+	"""Default git mock that handles rev-list --count for empty-rebase check."""
+	if args[0] == "rev-list" and "--count" in args:
+		return (True, "1")
+	return (True, "")
+
+
 class TestMergeUnit:
 	"""Tests for merge_unit() -- merge with smoke-test verification."""
 
 	async def test_successful_merge(self) -> None:
 		"""Successful merge: merged=True, verification passes."""
 		mgr = _manager()
-		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
 		mgr._run_command = AsyncMock(return_value=(True, "all tests passed"))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
@@ -112,6 +119,8 @@ class TestMergeUnit:
 
 		async def tracking_git(*args: str) -> tuple[bool, str]:
 			git_calls.append(args)
+			if args[0] == "rev-list" and "--count" in args:
+				return (True, "1")
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=tracking_git)
@@ -131,7 +140,7 @@ class TestMergeUnit:
 		"""When auto_push is configured, push_green_to_main is called."""
 		mgr = _manager()
 		mgr.config.green_branch.auto_push = True
-		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
 		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 		mgr.push_green_to_main = AsyncMock(return_value=True)  # type: ignore[method-assign]
@@ -148,7 +157,7 @@ class TestMergeUnitVerification:
 	async def test_verification_pass_allows_merge(self) -> None:
 		"""When verification passes, merge succeeds with verification_passed=True."""
 		mgr = _manager()
-		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
 		mgr._run_command = AsyncMock(return_value=(True, "12 passed"))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
@@ -163,7 +172,7 @@ class TestMergeUnitVerification:
 	async def test_verification_fail_blocks_merge(self) -> None:
 		"""When verification fails, merge is blocked with failure details."""
 		mgr = _manager()
-		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
 		mgr._run_command = AsyncMock(return_value=(False, "FAILED test_foo.py::test_bar - AssertionError"))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
@@ -178,7 +187,7 @@ class TestMergeUnitVerification:
 	async def test_verification_failure_output_preserved(self) -> None:
 		"""Full verification output is captured in failure_output."""
 		mgr = _manager()
-		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
 		failure_text = "FAILED tests/test_api.py::test_auth\nERROR tests/test_db.py::test_connect\n2 failed, 1 error"
 		mgr._run_command = AsyncMock(return_value=(False, failure_text))  # type: ignore[method-assign]
 
@@ -190,7 +199,7 @@ class TestMergeUnitVerification:
 		"""Verification uses the command from config.target.verification.command."""
 		mgr = _manager()
 		mgr.config.target.verification.command = "make test && make lint"
-		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
 		mgr._run_command = AsyncMock(return_value=(True, "ok"))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
@@ -205,6 +214,8 @@ class TestMergeUnitVerification:
 
 		async def tracking_git(*args: str) -> tuple[bool, str]:
 			git_calls.append(args)
+			if args[0] == "rev-list" and "--count" in args:
+				return (True, "1")
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=tracking_git)
@@ -469,6 +480,8 @@ class TestParallelMergeConflicts:
 			# rebase --abort is fine
 			if args[0] == "rebase" and "--abort" in args:
 				return (True, "")
+			if args[0] == "rev-list" and "--count" in args:
+				return (True, "1")
 			# All other git commands succeed
 			return (True, "")
 
@@ -505,6 +518,8 @@ class TestParallelMergeConflicts:
 				execution_order.append(branch)
 				# Small sleep to verify that other tasks don't interleave
 				await asyncio.sleep(0.01)
+			if args[0] == "rev-list" and "--count" in args:
+				return (True, "1")
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=ordered_git)
@@ -601,7 +616,7 @@ class TestRunDeploy:
 		db = Database(":memory:")
 		mgr = GreenBranchManager(config, db)
 		mgr.workspace = "/tmp/test-workspace"
-		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
 		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 		mgr.push_green_to_main = AsyncMock(return_value=True)  # type: ignore[method-assign]

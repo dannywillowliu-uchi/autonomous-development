@@ -1828,14 +1828,14 @@ class TestAmbitionLevel:
 
 class TestCapabilityGapAnalysis:
 	def test_all_gaps_when_no_context(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		s.db.get_pending_backlog.return_value = []
 		s.db.get_all_missions.return_value = []
 		gaps = s.analyze_capability_gaps()
 		assert len(gaps) == len(CAPABILITY_DOMAINS)
 
 	def test_gap_removed_when_keyword_in_backlog(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		item = BacklogItem(
 			title="Add web research capability",
 			description="Workers can web search for docs",
@@ -1848,7 +1848,7 @@ class TestCapabilityGapAnalysis:
 		assert "Web Research" not in gap_names
 
 	def test_gap_removed_when_keyword_in_mission_objective(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		s.db.get_pending_backlog.return_value = []
 		m = Mission(objective="Add browser automation testing", status="completed")
 		s.db.get_all_missions.return_value = [m]
@@ -1857,7 +1857,7 @@ class TestCapabilityGapAnalysis:
 		assert "Browser Automation" not in gap_names
 
 	def test_gap_structure(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		s.db.get_pending_backlog.return_value = []
 		s.db.get_all_missions.return_value = []
 		gaps = s.analyze_capability_gaps()
@@ -1869,7 +1869,7 @@ class TestCapabilityGapAnalysis:
 
 	def test_compute_gaps_partial_match(self) -> None:
 		"""Only matching domains are excluded, rest remain as gaps."""
-		s = _strategist()
+		s = _make_strategist()
 		item = BacklogItem(
 			title="Implement playwright end-to-end test suite",
 			description="Browser automation for UI testing",
@@ -1889,7 +1889,7 @@ class TestCapabilityGapAnalysis:
 
 class TestDetermineAmbitionLevel:
 	def test_level_1_when_quality_items_exist(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		pending = [
 			BacklogItem(title="Fix auth bug", track="quality", priority_score=7.0, status="pending"),
 		]
@@ -1897,7 +1897,7 @@ class TestDetermineAmbitionLevel:
 		assert level == AmbitionLevel.BUGS_QUALITY
 
 	def test_level_1_when_security_items_exist(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		pending = [
 			BacklogItem(title="SQL injection vulnerability", track="security", priority_score=9.0, status="pending"),
 		]
@@ -1905,7 +1905,7 @@ class TestDetermineAmbitionLevel:
 		assert level == AmbitionLevel.BUGS_QUALITY
 
 	def test_level_1_from_title_keywords(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		pending = [
 			BacklogItem(title="Fix broken tests", track="feature", priority_score=6.0, status="pending"),
 		]
@@ -1913,7 +1913,7 @@ class TestDetermineAmbitionLevel:
 		assert level == AmbitionLevel.BUGS_QUALITY
 
 	def test_level_2_when_feature_items_exist(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		pending = [
 			BacklogItem(title="Add retry logic to API", track="feature", priority_score=7.0, status="pending"),
 		]
@@ -1921,7 +1921,7 @@ class TestDetermineAmbitionLevel:
 		assert level == AmbitionLevel.IMPROVE_FEATURES
 
 	def test_level_2_from_improve_keywords(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		pending = [
 			BacklogItem(title="Improve error handling", track="", priority_score=6.0, status="pending"),
 		]
@@ -1929,25 +1929,25 @@ class TestDetermineAmbitionLevel:
 		assert level == AmbitionLevel.IMPROVE_FEATURES
 
 	def test_level_3_when_no_lower_items_and_gaps_exist(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		gaps = [{"name": "Web Research", "level": int(AmbitionLevel.NEW_CAPABILITIES), "description": "..."}]
 		level = s._determine_ambition_level([], gaps)
 		assert level == AmbitionLevel.NEW_CAPABILITIES
 
 	def test_level_4_when_no_lower_items_and_no_level_3_gaps(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		gaps = [{"name": "Self-Improving", "level": int(AmbitionLevel.META_IMPROVEMENTS), "description": "..."}]
 		level = s._determine_ambition_level([], gaps)
 		assert level == AmbitionLevel.META_IMPROVEMENTS
 
 	def test_level_4_when_no_items_and_no_gaps(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		level = s._determine_ambition_level([], [])
 		assert level == AmbitionLevel.META_IMPROVEMENTS
 
 	def test_ignores_low_priority_items(self) -> None:
 		"""Items below priority 3.0 don't count toward any level."""
-		s = _strategist()
+		s = _make_strategist()
 		pending = [
 			BacklogItem(title="Fix trivial lint", track="quality", priority_score=1.0, status="pending"),
 		]
@@ -1957,7 +1957,7 @@ class TestDetermineAmbitionLevel:
 
 	def test_ignores_non_pending_items(self) -> None:
 		"""Completed/deferred items don't count."""
-		s = _strategist()
+		s = _make_strategist()
 		pending = [
 			BacklogItem(title="Fix auth bug", track="quality", priority_score=8.0, status="completed"),
 		]
@@ -1967,7 +1967,7 @@ class TestDetermineAmbitionLevel:
 
 	def test_level_1_takes_priority_over_level_2(self) -> None:
 		"""When both Level 1 and Level 2 items exist, Level 1 wins."""
-		s = _strategist()
+		s = _make_strategist()
 		pending = [
 			BacklogItem(title="Add caching", track="feature", priority_score=8.0, status="pending"),
 			BacklogItem(title="Fix race condition", track="security", priority_score=7.0, status="pending"),
@@ -1981,7 +1981,7 @@ class TestDetermineAmbitionLevel:
 
 class TestWebResearchContextHook:
 	def test_returns_empty_by_default(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		assert s._get_web_research_context() == ""
 
 
@@ -2052,7 +2052,7 @@ class TestStrategyPromptAmbitionLevel:
 class TestProposeObjectiveAmbition:
 	@pytest.mark.asyncio
 	async def test_propose_includes_ambition_context(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		s.db.get_pending_backlog.return_value = []
 		s.db.get_all_missions.return_value = []
 		strategy_output = _make_strategy_output("Add web research", "Expand capabilities", 8)
@@ -2077,7 +2077,7 @@ class TestProposeObjectiveAmbition:
 
 	@pytest.mark.asyncio
 	async def test_propose_escalates_when_backlog_empty(self) -> None:
-		s = _strategist()
+		s = _make_strategist()
 		s.db.get_pending_backlog.return_value = []
 		s.db.get_all_missions.return_value = []
 		strategy_output = _make_strategy_output("Build new system", "Level 3 escalation", 9)
