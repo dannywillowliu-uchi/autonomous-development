@@ -94,6 +94,24 @@ class GreenBranchManager:
 		gb = self.config.green_branch
 		source_repo = self.config.target.path
 
+		# Flush unpushed mc/green work before resetting
+		if gb.reset_on_init and gb.auto_push:
+			green_exists, _ = await self._run_git_in(
+				source_repo, "rev-parse", "--verify", gb.green_branch,
+			)
+			if green_exists:
+				# Check if mc/green has commits ahead of base (unpushed work)
+				ok, ahead = await self._run_git_in(
+					source_repo, "rev-list", "--count", f"{base}..{gb.green_branch}",
+				)
+				if ok and ahead.strip() not in ("", "0"):
+					logger.warning(
+						"mc/green has %s unpushed commits, pushing before reset",
+						ahead.strip(),
+					)
+					self.workspace = workspace
+					await self.push_green_to_main()
+
 		# Ensure branches exist in SOURCE repo first (worker clones need them)
 		for branch in (gb.working_branch, gb.green_branch):
 			ok, _ = await self._run_git_in(source_repo, "rev-parse", "--verify", branch)
@@ -299,7 +317,7 @@ class GreenBranchManager:
 							)
 						hitl_decision = "large_merge_approved"
 
-					sync_ok = await self._sync_to_source()
+				sync_ok = await self._sync_to_source()
 
 				# Auto-push if configured
 				if gb.auto_push:
@@ -649,10 +667,16 @@ class GreenBranchManager:
 			# Pull remote first to avoid non-fast-forward
 			await self._run_git_in(source_repo, "pull", "--rebase", "origin", push_branch)
 
+			# Try ff-only first; fall back to regular merge if main has diverged
 			ok, output = await self._run_git_in(source_repo, "merge", "--ff-only", green_ref)
 			if not ok:
-				logger.error("Failed to ff-merge mc/green into %s: %s", push_branch, output)
-				return False
+				logger.warning("ff-merge failed, trying regular merge: %s", output)
+				ok, output = await self._run_git_in(
+					source_repo, "merge", "--no-edit", green_ref,
+				)
+				if not ok:
+					logger.error("Failed to merge mc/green into %s: %s", push_branch, output)
+					return False
 
 			ok, output = await self._run_git_in(source_repo, "push", "origin", push_branch)
 			if not ok:
