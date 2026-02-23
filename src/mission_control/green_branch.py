@@ -645,9 +645,10 @@ class GreenBranchManager:
 		green_ref = "refs/mc/green-push"
 
 		# Fetch mc/green into a named ref (FETCH_HEAD gets overwritten by pull)
+		# Force-update (+) because mc/green is reset at each mission start
 		ok, output = await self._run_git_in(
 			source_repo, "fetch", self.workspace,
-			f"{gb.green_branch}:{green_ref}",
+			f"+{gb.green_branch}:{green_ref}",
 		)
 		if not ok:
 			logger.error("Failed to fetch mc/green: %s", output)
