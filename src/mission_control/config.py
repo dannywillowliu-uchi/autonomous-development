@@ -994,17 +994,18 @@ _ENV_DENYLIST = {
 	"TELEGRAM_BOT_TOKEN",
 }
 
-# Module-level extra keys, populated by load_config from [security] section
-_extra_env_keys: set[str] = set()
-
-
-def claude_subprocess_env() -> dict[str, str]:
+def claude_subprocess_env(config: MissionConfig | None = None) -> dict[str, str]:
 	"""Build a restricted environment for claude subprocess calls.
 
 	Uses an allowlist approach: only safe system vars plus any explicitly
 	configured extras are passed through. Secrets and API keys are stripped.
+
+	Args:
+		config: When provided, includes extra_env_keys from this config.
+			When None, only allowlisted keys are passed (safe default).
 	"""
-	allowed = _ENV_ALLOWLIST | _extra_env_keys
+	extra = config._resolved_extra_env_keys if config is not None else set()
+	allowed = _ENV_ALLOWLIST | extra
 	return {
 		k: v for k, v in os.environ.items()
 		if k in allowed and k not in _ENV_DENYLIST
@@ -1086,9 +1087,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.episodic_memory = _build_episodic_memory(data["episodic_memory"])
 	if "speculation" in data:
 		mc.speculation = _build_speculation(data["speculation"])
-	# Populate module-level extra env keys for claude_subprocess_env()
-	global _extra_env_keys
-	_extra_env_keys = set(mc.security.extra_env_keys) - _ENV_DENYLIST
+	# Compute resolved extra env keys on this config instance
+	mc._resolved_extra_env_keys = set(mc.security.extra_env_keys) - _ENV_DENYLIST
 	# Allow env vars as fallback for Telegram credentials
 	tg = mc.notifications.telegram
 	if not tg.bot_token:

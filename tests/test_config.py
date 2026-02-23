@@ -409,9 +409,6 @@ extra_env_keys = ["CUSTOM_VAR", "MY_PROJECT_KEY"]
 
 def test_claude_subprocess_env_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
 	"""Only allowlisted env vars pass through to workers."""
-	import mission_control.config as config_mod
-
-	monkeypatch.setattr(config_mod, "_extra_env_keys", set())
 	monkeypatch.setenv("HOME", "/home/test")
 	monkeypatch.setenv("PATH", "/usr/bin")
 	monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "supersecret")
@@ -428,37 +425,82 @@ def test_claude_subprocess_env_allowlist(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_claude_subprocess_env_denylist_blocks_extra_keys(monkeypatch: pytest.MonkeyPatch) -> None:
 	"""Denylist overrides extra_env_keys -- secrets can never be added."""
-	import mission_control.config as config_mod
+	cfg = MissionConfig()
+	cfg.security.extra_env_keys = ["AWS_SECRET_ACCESS_KEY", "MY_SAFE_VAR"]
+	cfg._resolved_extra_env_keys = set(cfg.security.extra_env_keys) - _ENV_DENYLIST
 
-	monkeypatch.setattr(config_mod, "_extra_env_keys", {"AWS_SECRET_ACCESS_KEY", "MY_SAFE_VAR"})
 	monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "supersecret")
 	monkeypatch.setenv("MY_SAFE_VAR", "allowed_value")
 
-	env = claude_subprocess_env()
+	env = claude_subprocess_env(cfg)
 	assert "AWS_SECRET_ACCESS_KEY" not in env
 	assert env.get("MY_SAFE_VAR") == "allowed_value"
 
 
 def test_claude_subprocess_env_extra_keys_passed(monkeypatch: pytest.MonkeyPatch) -> None:
 	"""Extra env keys from config are included in worker env."""
-	import mission_control.config as config_mod
+	cfg = MissionConfig()
+	cfg.security.extra_env_keys = ["CUSTOM_PROJECT_VAR"]
+	cfg._resolved_extra_env_keys = {"CUSTOM_PROJECT_VAR"}
 
-	monkeypatch.setattr(config_mod, "_extra_env_keys", {"CUSTOM_PROJECT_VAR"})
 	monkeypatch.setenv("CUSTOM_PROJECT_VAR", "my_value")
 
-	env = claude_subprocess_env()
+	env = claude_subprocess_env(cfg)
 	assert env.get("CUSTOM_PROJECT_VAR") == "my_value"
 
 
 def test_claude_subprocess_env_anthropic_key_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
 	"""ANTHROPIC_API_KEY is always blocked."""
-	import mission_control.config as config_mod
-
-	monkeypatch.setattr(config_mod, "_extra_env_keys", set())
 	monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
 
 	env = claude_subprocess_env()
 	assert "ANTHROPIC_API_KEY" not in env
+
+
+def test_claude_subprocess_env_no_config_returns_only_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+	"""claude_subprocess_env() with no args returns only allowlisted keys."""
+	monkeypatch.setenv("HOME", "/home/test")
+	monkeypatch.setenv("CUSTOM_PROJECT_VAR", "should_not_pass")
+
+	env = claude_subprocess_env()
+	assert env.get("HOME") == "/home/test"
+	assert "CUSTOM_PROJECT_VAR" not in env
+
+
+def test_two_configs_no_env_leakage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	"""Loading two configs produces isolated env dicts -- no cross-project leakage."""
+	toml_a = tmp_path / "a.toml"
+	toml_a.write_text("""
+[target]
+name = "project-a"
+path = "/tmp/a"
+
+[security]
+extra_env_keys = ["VAR_A"]
+""")
+	toml_b = tmp_path / "b.toml"
+	toml_b.write_text("""
+[target]
+name = "project-b"
+path = "/tmp/b"
+
+[security]
+extra_env_keys = ["VAR_B"]
+""")
+
+	cfg_a = load_config(toml_a)
+	cfg_b = load_config(toml_b)
+
+	monkeypatch.setenv("VAR_A", "val_a")
+	monkeypatch.setenv("VAR_B", "val_b")
+
+	env_a = claude_subprocess_env(cfg_a)
+	env_b = claude_subprocess_env(cfg_b)
+
+	assert env_a.get("VAR_A") == "val_a"
+	assert "VAR_B" not in env_a
+	assert env_b.get("VAR_B") == "val_b"
+	assert "VAR_A" not in env_b
 
 
 def test_env_denylist_coverage() -> None:
