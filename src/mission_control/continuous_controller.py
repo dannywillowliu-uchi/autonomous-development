@@ -65,6 +65,54 @@ from mission_control.worker import load_specialist_template, render_mission_work
 logger = logging.getLogger(__name__)
 
 
+class DynamicSemaphore:
+	"""Asyncio semaphore with dynamically adjustable capacity.
+
+	Unlike creating a new Semaphore (which orphans waiters on the old one),
+	adjust() manipulates the existing underlying semaphore so that all
+	in-progress acquire() calls remain valid.
+	"""
+
+	def __init__(self, value: int = 1) -> None:
+		self._sem = asyncio.Semaphore(value)
+		self._capacity = value
+		self._debt = 0
+
+	async def acquire(self) -> None:
+		await self._sem.acquire()
+
+	def release(self) -> None:
+		if self._debt > 0:
+			self._debt -= 1
+		else:
+			self._sem.release()
+
+	def locked(self) -> bool:
+		return self._sem.locked()
+
+	@property
+	def capacity(self) -> int:
+		return self._capacity
+
+	@property
+	def _value(self) -> int:
+		"""Expose internal counter for test introspection."""
+		return self._sem._value
+
+	def adjust(self, new_capacity: int) -> None:
+		"""Adjust effective capacity without replacing the semaphore object."""
+		delta = new_capacity - self._capacity
+		self._capacity = new_capacity
+		if delta > 0:
+			absorb = min(delta, self._debt)
+			self._debt -= absorb
+			delta -= absorb
+			for _ in range(delta):
+				self._sem.release()
+		elif delta < 0:
+			self._debt += abs(delta)
+
+
 @dataclass
 class WorkerCompletion:
 	"""A completed unit ready for verification and merge."""
@@ -138,7 +186,7 @@ class ContinuousController:
 		self._completion_queue: asyncio.Queue[WorkerCompletion] = asyncio.Queue()
 		self._active_tasks: set[asyncio.Task[None]] = set()
 		self._unit_tasks: dict[str, asyncio.Task[None]] = {}  # unit_id -> task
-		self._semaphore: asyncio.Semaphore | None = None
+		self._semaphore: DynamicSemaphore | None = None
 		self._paused: bool = False
 		self._start_time: float = 0.0
 		self._state_changelog: list[str] = []
@@ -974,7 +1022,6 @@ class ContinuousController:
 		self,
 		mission: Mission,
 		epoch_map: dict[str, Epoch],
-		semaphore: asyncio.Semaphore,
 	) -> None:
 		"""Try to dispatch previously deferred units that no longer overlap."""
 		if not self._deferred_units:
@@ -1001,7 +1048,7 @@ class ContinuousController:
 				"Dispatching previously deferred unit %s: %s",
 				unit.id[:12], unit.title[:60],
 			)
-			await semaphore.acquire()
+			await self._semaphore.acquire()
 			self._in_flight_count += 1
 			try:
 				self.db.insert_work_unit(unit)
@@ -1010,7 +1057,7 @@ class ContinuousController:
 					"Failed to insert deferred work unit: %s", exc, exc_info=True,
 				)
 				self._in_flight_count -= 1
-				semaphore.release()
+				self._semaphore.release()
 				continue
 
 			self._log_unit_event(
@@ -1023,7 +1070,7 @@ class ContinuousController:
 			self._total_dispatched += 1
 
 			task = asyncio.create_task(
-				self._execute_single_unit(unit, epoch, mission_ref, semaphore),
+				self._execute_single_unit(unit, epoch, mission_ref),
 			)
 			self._active_tasks.add(task)
 			self._unit_tasks[unit.id] = task
@@ -1052,8 +1099,7 @@ class ContinuousController:
 			raise RuntimeError("Controller not initialized: call start() first")
 
 		num_workers = self.config.scheduler.parallel.num_workers
-		semaphore = asyncio.Semaphore(num_workers)
-		self._semaphore = semaphore
+		self._semaphore = DynamicSemaphore(num_workers)
 		cooldown = self.config.continuous.cooldown_between_units
 		epoch_map: dict[str, Epoch] = {}
 
@@ -1065,7 +1111,7 @@ class ContinuousController:
 				continue
 
 			# Try to dispatch previously deferred units before planning new ones
-			await self._dispatch_deferred(mission, epoch_map, semaphore)
+			await self._dispatch_deferred(mission, epoch_map)
 
 			# Honor pause state
 			if self._paused:
@@ -1367,13 +1413,13 @@ class ContinuousController:
 						and unit.speculation_score >= self.config.speculation.uncertainty_threshold
 					):
 						dispatched = await self._dispatch_speculated_unit(
-							unit, epoch, mission, semaphore, unit_layer_map,
+							unit, epoch, mission, unit_layer_map,
 						)
 						if dispatched:
 							continue
 
 					logger.info("Waiting for semaphore to dispatch unit %s: %s", unit.id[:12], unit.title[:60])
-					await semaphore.acquire()
+					await self._semaphore.acquire()
 					self._in_flight_count += 1
 					logger.info("Semaphore acquired, dispatching unit %s", unit.id[:12])
 					try:
@@ -1383,7 +1429,7 @@ class ContinuousController:
 							"Failed to insert work unit: %s", exc, exc_info=True,
 						)
 						self._in_flight_count -= 1
-						semaphore.release()
+						self._semaphore.release()
 						continue
 
 					# Log dispatch event with layer index metadata
@@ -1403,7 +1449,7 @@ class ContinuousController:
 
 					task = asyncio.create_task(
 						self._execute_single_unit(
-							unit, epoch, mission, semaphore,
+							unit, epoch, mission,
 						),
 					)
 					self._active_tasks.add(task)
@@ -2026,7 +2072,6 @@ class ContinuousController:
 		unit: WorkUnit,
 		epoch: Epoch,
 		mission: Mission,
-		semaphore: asyncio.Semaphore,
 		unit_layer_map: dict[str, int],
 	) -> bool:
 		"""Fork a high-uncertainty unit into N parallel branches.
@@ -2099,20 +2144,20 @@ class ContinuousController:
 				specialist=unit.specialist,
 			)
 
-			await semaphore.acquire()
+			await self._semaphore.acquire()
 			self._in_flight_count += 1
 			try:
 				self.db.insert_work_unit(branch)
 			except Exception as exc:
 				logger.error("Failed to insert speculation branch: %s", exc)
 				self._in_flight_count -= 1
-				semaphore.release()
+				self._semaphore.release()
 				continue
 
 			self._total_dispatched += 1
 
 			task = asyncio.create_task(
-				self._execute_single_unit(branch, epoch, mission, semaphore),
+				self._execute_single_unit(branch, epoch, mission),
 			)
 			self._active_tasks.add(task)
 			self._unit_tasks[branch.id] = task
@@ -2625,7 +2670,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		await self._semaphore.acquire()
 		self._in_flight_count += 1
 		task = asyncio.create_task(
-			self._execute_single_unit(unit, epoch, mission, self._semaphore),
+			self._execute_single_unit(unit, epoch, mission),
 		)
 		self._active_tasks.add(task)
 		task.add_done_callback(self._task_done_callback)
@@ -2671,7 +2716,6 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		unit: WorkUnit,
 		epoch: Epoch,
 		mission: Mission,
-		semaphore: asyncio.Semaphore,
 	) -> None:
 		"""Execute a single work unit and put completion on queue."""
 		if self._backend is None:
@@ -2992,7 +3036,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			if workspace:
 				await self._backend.release_workspace(workspace)
 			self._in_flight_count = max(self._in_flight_count - 1, 0)
-			semaphore.release()
+			self._semaphore.release()
 
 	def _should_stop(self, mission: Mission) -> str:
 		"""Check stopping conditions. Returns reason string or empty."""
@@ -3066,8 +3110,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				new_count = int(params["num_workers"])
 				self.config.scheduler.parallel.num_workers = new_count
 				if self._semaphore is not None:
-					available = max(new_count - self._in_flight_count, 0)
-					self._semaphore = asyncio.Semaphore(available)
+					self._semaphore.adjust(new_count)
 				logger.info(
 					"Adjusted num_workers to %d",
 					self.config.scheduler.parallel.num_workers,

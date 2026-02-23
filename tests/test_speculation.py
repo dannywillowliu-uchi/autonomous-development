@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -10,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from mission_control.config import MissionConfig, SpeculationConfig, _build_speculation, load_config
-from mission_control.continuous_controller import ContinuousController, WorkerCompletion
+from mission_control.continuous_controller import ContinuousController, DynamicSemaphore, WorkerCompletion
 from mission_control.db import Database
 from mission_control.models import (
 	Epoch,
@@ -377,14 +376,14 @@ class TestSpeculationCostCapFallback:
 
 		mission = Mission(id="m-1", objective="test", total_cost_usd=8.0)
 		epoch = Epoch(id="e-1")
-		semaphore = asyncio.Semaphore(4)
+		controller._semaphore = DynamicSemaphore(4)
 		unit = WorkUnit(
 			id="wu-cost", plan_id="p-1", speculation_score=0.9,
 			unit_type="implementation",
 		)
 
 		result = await controller._dispatch_speculated_unit(
-			unit, epoch, mission, semaphore, {},
+			unit, epoch, mission, {},
 		)
 		assert result is False
 

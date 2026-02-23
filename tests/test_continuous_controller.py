@@ -15,6 +15,7 @@ from mission_control.config import MissionConfig
 from mission_control.continuous_controller import (
 	ContinuousController,
 	ContinuousMissionResult,
+	DynamicSemaphore,
 	WorkerCompletion,
 	_RoundTracker,
 )
@@ -23,12 +24,11 @@ from mission_control.green_branch import UnitMergeResult
 from mission_control.models import BacklogItem, Epoch, Handoff, Mission, Plan, Signal, Worker, WorkUnit
 
 
-def _assert_semaphore_available(sem: asyncio.Semaphore, expected: int) -> None:
-	"""Assert the number of available permits on an asyncio.Semaphore.
+def _assert_semaphore_available(sem: asyncio.Semaphore | DynamicSemaphore, expected: int) -> None:
+	"""Assert the number of available permits on a semaphore.
 
 	For 0 expected, checks locked(). For N > 0, reads the internal _value
-	counter. Reading _value in tests is safe; the production fix was removing
-	_value *mutation* from _handle_adjust_signal.
+	counter. Works with both asyncio.Semaphore and DynamicSemaphore.
 	"""
 	if expected == 0:
 		assert sem.locked(), "Expected 0 available permits but semaphore is not locked"
@@ -460,9 +460,9 @@ class TestExecuteSingleUnit:
 
 		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
 		db.insert_work_unit(unit)
-		semaphore = asyncio.Semaphore(1)
+		ctrl._semaphore = DynamicSemaphore(1)
 
-		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"), semaphore)
+		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
 
 		assert not ctrl._completion_queue.empty()
 		completion = ctrl._completion_queue.get_nowait()
@@ -483,7 +483,6 @@ class TestEndToEnd:
 
 		async def mock_execute(
 			unit: WorkUnit, epoch: Epoch, mission: Mission,
-			semaphore: asyncio.Semaphore,
 		) -> None:
 			executed_ids.append(unit.id)
 			unit.status = "completed"
@@ -494,7 +493,7 @@ class TestEndToEnd:
 					workspace="/tmp/ws", epoch=epoch,
 				),
 			)
-			semaphore.release()
+			ctrl._semaphore.release()
 
 		# Mock planner: returns 2 units first call, then empty (mission done)
 		call_count = 0
@@ -555,7 +554,7 @@ class TestRetry:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		ctrl = ContinuousController(config, db)
 		ctrl._green_branch = MagicMock()
-		ctrl._semaphore = asyncio.Semaphore(2)
+		ctrl._semaphore = DynamicSemaphore(2)
 		return ctrl, db
 
 	@pytest.mark.asyncio
@@ -836,9 +835,9 @@ class TestWorkerRecordPersistence:
 
 		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
 		db.insert_work_unit(unit)
-		semaphore = asyncio.Semaphore(1)
+		ctrl._semaphore = DynamicSemaphore(1)
 
-		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"), semaphore)
+		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
 
 		worker = db.get_worker("wu1")
 		assert worker is not None
@@ -867,9 +866,9 @@ class TestWorkerRecordPersistence:
 
 		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
 		db.insert_work_unit(unit)
-		semaphore = asyncio.Semaphore(1)
+		ctrl._semaphore = DynamicSemaphore(1)
 
-		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"), semaphore)
+		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
 
 		worker = db.get_worker("wu1")
 		assert worker is not None
@@ -923,12 +922,13 @@ class TestFailUnitHelper:
 
 class TestHandleAdjustSemaphoreRebuild:
 	def test_semaphore_rebuilt_with_new_value(self, config: MissionConfig, db: Database) -> None:
-		"""_handle_adjust_signal should rebuild semaphore with new worker count."""
+		"""_handle_adjust_signal should adjust semaphore capacity in-place."""
 		db.insert_mission(Mission(id="m1", objective="test"))
 		ctrl = ContinuousController(config, db)
-		ctrl._semaphore = asyncio.Semaphore(2)
+		ctrl._semaphore = DynamicSemaphore(2)
 		ctrl._in_flight_count = 0
 
+		original_sem = ctrl._semaphore
 		signal = Signal(
 			mission_id="m1",
 			signal_type="adjust",
@@ -938,15 +938,15 @@ class TestHandleAdjustSemaphoreRebuild:
 		ctrl._handle_adjust_signal(signal)
 
 		assert config.scheduler.parallel.num_workers == 6
-		assert ctrl._semaphore is not None
-		# With 0 in-flight, all 6 slots should be available
+		assert ctrl._semaphore is original_sem  # same object, not replaced
+		assert ctrl._semaphore.capacity == 6
 		_assert_semaphore_available(ctrl._semaphore, 6)
 
 	def test_semaphore_accounts_for_in_flight(self, config: MissionConfig, db: Database) -> None:
-		"""Semaphore rebuild should subtract in-flight count from new capacity."""
+		"""Semaphore adjust increases available slots even with in-flight workers."""
 		db.insert_mission(Mission(id="m1", objective="test"))
 		ctrl = ContinuousController(config, db)
-		ctrl._semaphore = asyncio.Semaphore(2)
+		ctrl._semaphore = DynamicSemaphore(2)
 		ctrl._in_flight_count = 3  # 3 workers currently executing
 
 		signal = Signal(
@@ -959,14 +959,16 @@ class TestHandleAdjustSemaphoreRebuild:
 
 		assert config.scheduler.parallel.num_workers == 5
 		assert ctrl._semaphore is not None
-		# 5 total - 3 in-flight = 2 available
-		_assert_semaphore_available(ctrl._semaphore, 2)
+		assert ctrl._semaphore.capacity == 5
+		# adjust(5) adds 3 slots to underlying semaphore (5-2=3)
+		# so available = original 2 + 3 = 5
+		_assert_semaphore_available(ctrl._semaphore, 5)
 
 	def test_semaphore_clamps_to_zero_when_in_flight_exceeds(self, config: MissionConfig, db: Database) -> None:
-		"""When in-flight exceeds new worker count, available slots should be 0."""
+		"""When reducing capacity, debt absorbs future releases."""
 		db.insert_mission(Mission(id="m1", objective="test"))
 		ctrl = ContinuousController(config, db)
-		ctrl._semaphore = asyncio.Semaphore(4)
+		ctrl._semaphore = DynamicSemaphore(4)
 		ctrl._in_flight_count = 4  # all 4 slots used
 
 		signal = Signal(
@@ -979,8 +981,9 @@ class TestHandleAdjustSemaphoreRebuild:
 
 		assert config.scheduler.parallel.num_workers == 2
 		assert ctrl._semaphore is not None
-		# 2 total - 4 in-flight = clamped to 0
-		_assert_semaphore_available(ctrl._semaphore, 0)
+		assert ctrl._semaphore.capacity == 2
+		# Debt of 2 means 2 future releases will be swallowed
+		assert ctrl._semaphore._debt == 2
 
 
 
@@ -1000,7 +1003,6 @@ class TestConcurrentDispatchAndCompletion:
 
 		async def mock_execute(
 			unit: WorkUnit, epoch: Epoch, mission: Mission,
-			semaphore: asyncio.Semaphore,
 		) -> None:
 			events.append(f"exec:{unit.id}")
 			# Small delay to ensure dispatch and completion overlap
@@ -1015,7 +1017,7 @@ class TestConcurrentDispatchAndCompletion:
 					workspace="/tmp/ws", epoch=epoch,
 				),
 			)
-			semaphore.release()
+			ctrl._semaphore.release()
 
 		call_count = 0
 
@@ -1097,10 +1099,12 @@ class TestAdjustWorkersDuringDispatch:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		ctrl = ContinuousController(config, db)
 
-		# Simulate active dispatch state: semaphore with 0 available, 2 in-flight
-		semaphore = asyncio.Semaphore(0)
-		ctrl._semaphore = semaphore
+		# Simulate active dispatch state: capacity=2 with 0 available (both acquired), 2 in-flight
+		ctrl._semaphore = DynamicSemaphore(2)
+		await ctrl._semaphore.acquire()
+		await ctrl._semaphore.acquire()
 		ctrl._in_flight_count = 2
+		original_sem = ctrl._semaphore
 
 		mock_task1 = MagicMock(spec=asyncio.Task)
 		mock_task1.done.return_value = False
@@ -1119,15 +1123,14 @@ class TestAdjustWorkersDuringDispatch:
 
 		# Verify config updated
 		assert config.scheduler.parallel.num_workers == 4
-		# Semaphore rebuilt: 4 total - 2 in-flight = 2 available
-		assert ctrl._semaphore is not None
+		# Same semaphore object, adjusted in-place
+		assert ctrl._semaphore is original_sem
+		assert ctrl._semaphore.capacity == 4
+		# 2 new slots added: should be able to acquire 2 more
 		_assert_semaphore_available(ctrl._semaphore, 2)
-		# Old semaphore replaced
-		assert ctrl._semaphore is not semaphore
 
-		# Verify new semaphore allows 2 more dispatches
+		# Verify new capacity allows 2 more dispatches
 		acquired = ctrl._semaphore.acquire()
-		# Should succeed immediately (non-blocking)
 		done = asyncio.ensure_future(acquired)
 		await asyncio.sleep(0)
 		assert done.done()
@@ -1304,14 +1307,13 @@ class TestAmbitionScoringInDispatch:
 
 		async def mock_execute(
 			unit: WorkUnit, epoch: Epoch, mission: Mission,
-			semaphore: asyncio.Semaphore,
 		) -> None:
 			unit.status = "completed"
 			unit.finished_at = "2025-01-01T00:00:00"
 			await ctrl._completion_queue.put(
 				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
 			)
-			semaphore.release()
+			ctrl._semaphore.release()
 
 		mock_planner = MagicMock()
 		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
@@ -1376,14 +1378,13 @@ class TestNextObjectivePopulation:
 
 		async def mock_execute(
 			unit: WorkUnit, epoch: Epoch, mission: Mission,
-			semaphore: asyncio.Semaphore,
 		) -> None:
 			unit.status = "completed"
 			unit.finished_at = "2025-01-01T00:00:00"
 			await ctrl._completion_queue.put(
 				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
 			)
-			semaphore.release()
+			ctrl._semaphore.release()
 
 		mock_planner = MagicMock()
 		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
@@ -1438,14 +1439,13 @@ class TestNextObjectivePopulation:
 
 		async def mock_execute(
 			unit: WorkUnit, epoch: Epoch, mission: Mission,
-			semaphore: asyncio.Semaphore,
 		) -> None:
 			unit.status = "completed"
 			unit.finished_at = "2025-01-01T00:00:00"
 			await ctrl._completion_queue.put(
 				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
 			)
-			semaphore.release()
+			ctrl._semaphore.release()
 
 		mock_planner = MagicMock()
 		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
@@ -1487,7 +1487,6 @@ class TestInFlightUnitsPreventPrematureCompletion:
 
 		async def mock_execute(
 			unit: WorkUnit, epoch: Epoch, mission: Mission,
-			semaphore: asyncio.Semaphore,
 		) -> None:
 			# Simulate slow execution
 			await asyncio.sleep(0.1)
@@ -1500,7 +1499,7 @@ class TestInFlightUnitsPreventPrematureCompletion:
 					workspace="/tmp/ws", epoch=epoch,
 				),
 			)
-			semaphore.release()
+			ctrl._semaphore.release()
 
 		call_count = 0
 
@@ -1956,7 +1955,6 @@ class TestAutoFailurePause:
 
 		async def mock_execute(
 			unit: WorkUnit, epoch: Epoch, mission: Mission,
-			semaphore: asyncio.Semaphore,
 		) -> None:
 			# All units fail
 			unit.status = "failed"
@@ -1965,7 +1963,7 @@ class TestAutoFailurePause:
 			await ctrl._completion_queue.put(
 				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
 			)
-			semaphore.release()
+			ctrl._semaphore.release()
 
 		mock_planner = MagicMock()
 		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
@@ -2019,7 +2017,6 @@ class TestAutoFailurePause:
 
 		async def mock_execute(
 			unit: WorkUnit, epoch: Epoch, mission: Mission,
-			semaphore: asyncio.Semaphore,
 		) -> None:
 			unit.status = "failed"
 			unit.attempt = 1
@@ -2027,7 +2024,7 @@ class TestAutoFailurePause:
 			await ctrl._completion_queue.put(
 				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
 			)
-			semaphore.release()
+			ctrl._semaphore.release()
 
 		mock_planner = MagicMock()
 		mock_planner.get_next_units = AsyncMock(side_effect=mock_get_next)
@@ -2062,14 +2059,13 @@ class TestInFlightCount:
 		ctrl = ContinuousController(config, db)
 		assert ctrl._in_flight_count == 0
 
-	def test_adjust_uses_in_flight_count_not_active_tasks(self, config: MissionConfig, db: Database) -> None:
-		"""Semaphore rebuild uses _in_flight_count, not _active_tasks length."""
+	def test_adjust_modifies_existing_semaphore_in_place(self, config: MissionConfig, db: Database) -> None:
+		"""DynamicSemaphore.adjust() modifies the same object, not replacing it."""
 		db.insert_mission(Mission(id="m1", objective="test"))
+		config.scheduler.parallel.num_workers = 2
 		ctrl = ContinuousController(config, db)
-		ctrl._semaphore = asyncio.Semaphore(0)
-		ctrl._in_flight_count = 1
-		# active_tasks has 3 items (includes fire-and-forget tasks like reviews)
-		ctrl._active_tasks = {MagicMock(), MagicMock(), MagicMock()}
+		ctrl._semaphore = DynamicSemaphore(2)
+		original_sem = ctrl._semaphore
 
 		signal = Signal(
 			mission_id="m1",
@@ -2079,9 +2075,9 @@ class TestInFlightCount:
 		db.insert_signal(signal)
 		ctrl._handle_adjust_signal(signal)
 
-		# Should use _in_flight_count (1), not len(_active_tasks) (3)
-		assert ctrl._semaphore is not None
-		_assert_semaphore_available(ctrl._semaphore, 3)  # 4 - 1
+		assert ctrl._semaphore is original_sem  # same object
+		assert ctrl._semaphore.capacity == 4
+		_assert_semaphore_available(ctrl._semaphore, 4)
 
 	def test_adjust_without_semaphore_skips_rebuild(self, config: MissionConfig, db: Database) -> None:
 		"""When semaphore is None, adjust only updates config."""
@@ -2353,7 +2349,7 @@ class TestDeferredUnitRecovery:
 		db.insert_work_unit(blocker)
 
 		ctrl = ContinuousController(config, db)
-		ctrl._semaphore = asyncio.Semaphore(2)
+		ctrl._semaphore = DynamicSemaphore(2)
 
 		# Create a deferred unit that overlaps with the blocker
 		deferred_unit = WorkUnit(
@@ -2466,11 +2462,11 @@ class TestDependencyAwareDispatch:
 		mission = Mission(id="m1", objective="test")
 		ctrl._deferred_units = [(unit, epoch, mission)]
 
-		semaphore = asyncio.Semaphore(2)
+		ctrl._semaphore = DynamicSemaphore(2)
 		epoch_map = {"ep1": epoch}
 
 		# Dependency not met -- unit stays deferred
-		await ctrl._dispatch_deferred(mission, epoch_map, semaphore)
+		await ctrl._dispatch_deferred(mission, epoch_map)
 		assert len(ctrl._deferred_units) == 1
 
 		# Mark dependency as completed
@@ -2478,7 +2474,7 @@ class TestDependencyAwareDispatch:
 
 		# Mock _execute_single_unit to prevent actual execution
 		with patch.object(ctrl, "_execute_single_unit", new_callable=AsyncMock):
-			await ctrl._dispatch_deferred(mission, epoch_map, semaphore)
+			await ctrl._dispatch_deferred(mission, epoch_map)
 
 		assert len(ctrl._deferred_units) == 0
 
@@ -2506,7 +2502,6 @@ class TestLayerByLayerDispatch:
 
 		async def mock_execute(
 			unit: WorkUnit, epoch: Epoch, mission: Mission,
-			semaphore: asyncio.Semaphore,
 		) -> None:
 			events.append(f"start:{unit.id}")
 			await asyncio.sleep(0.02)
@@ -2518,7 +2513,7 @@ class TestLayerByLayerDispatch:
 			await ctrl._completion_queue.put(
 				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
 			)
-			semaphore.release()
+			ctrl._semaphore.release()
 
 		call_count = 0
 
@@ -2606,7 +2601,6 @@ class TestLayerByLayerDispatch:
 
 		async def mock_execute(
 			unit: WorkUnit, epoch: Epoch, mission: Mission,
-			semaphore: asyncio.Semaphore,
 		) -> None:
 			events.append(f"start:{unit.id}")
 			await asyncio.sleep(0.02)
@@ -2618,7 +2612,7 @@ class TestLayerByLayerDispatch:
 			await ctrl._completion_queue.put(
 				WorkerCompletion(unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch),
 			)
-			semaphore.release()
+			ctrl._semaphore.release()
 
 		call_count = 0
 
@@ -2718,4 +2712,133 @@ class TestLayerByLayerDispatch:
 			files_hint="src/other.py",
 		)
 		assert ctrl._check_in_flight_overlap(clean_unit) is False
+
+
+class TestDynamicSemaphore:
+	def test_basic_acquire_release(self) -> None:
+		sem = DynamicSemaphore(2)
+		assert sem.capacity == 2
+		assert sem._value == 2
+
+	def test_adjust_increase(self) -> None:
+		sem = DynamicSemaphore(2)
+		sem.adjust(4)
+		assert sem.capacity == 4
+		assert sem._value == 4  # 2 original + 2 released
+
+	def test_adjust_decrease_with_debt(self) -> None:
+		sem = DynamicSemaphore(4)
+		sem.adjust(2)
+		assert sem.capacity == 2
+		assert sem._debt == 2
+		# Two releases get absorbed by debt
+		sem.release()
+		sem.release()
+		assert sem._debt == 0
+		assert sem._value == 4  # unchanged since releases were swallowed
+		# Third release goes through normally
+		sem.release()
+		assert sem._value == 5
+
+	def test_adjust_increase_absorbs_debt(self) -> None:
+		sem = DynamicSemaphore(4)
+		sem.adjust(2)  # debt = 2
+		sem.adjust(3)  # increase by 1, absorbs 1 debt
+		assert sem._debt == 1
+		assert sem.capacity == 3
+
+	@pytest.mark.asyncio
+	async def test_adjust_increases_concurrent_capacity(self) -> None:
+		"""After adjusting from 2->4, 4 concurrent acquires should succeed."""
+		sem = DynamicSemaphore(2)
+		sem.adjust(4)
+
+		acquired = 0
+		for _ in range(4):
+			await asyncio.wait_for(sem.acquire(), timeout=0.1)
+			acquired += 1
+		assert acquired == 4
+
+		# 5th acquire should block (timeout)
+		with pytest.raises(asyncio.TimeoutError):
+			await asyncio.wait_for(sem.acquire(), timeout=0.05)
+
+
+class TestAdjustSignalSemaphore:
+	@pytest.mark.asyncio
+	async def test_adjust_signal_increases_semaphore_capacity(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""After adjust signal from 2->4 workers, 4 concurrent dispatches are possible."""
+		config.scheduler.parallel.num_workers = 2
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		ctrl = ContinuousController(config, db)
+		ctrl._semaphore = DynamicSemaphore(2)
+
+		# Verify initial capacity: 2 acquires succeed, 3rd blocks
+		await asyncio.wait_for(ctrl._semaphore.acquire(), timeout=0.1)
+		await asyncio.wait_for(ctrl._semaphore.acquire(), timeout=0.1)
+		with pytest.raises(asyncio.TimeoutError):
+			await asyncio.wait_for(ctrl._semaphore.acquire(), timeout=0.05)
+
+		# Release the 2 slots back
+		ctrl._semaphore.release()
+		ctrl._semaphore.release()
+
+		# Send adjust signal to increase to 4
+		signal = Signal(
+			mission_id="m1",
+			signal_type="adjust",
+			payload='{"num_workers": 4}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_adjust_signal(signal)
+
+		assert config.scheduler.parallel.num_workers == 4
+		assert ctrl._semaphore.capacity == 4
+
+		# Now 4 concurrent acquires should succeed
+		acquired = 0
+		for _ in range(4):
+			await asyncio.wait_for(ctrl._semaphore.acquire(), timeout=0.1)
+			acquired += 1
+		assert acquired == 4
+
+		# 5th should block
+		with pytest.raises(asyncio.TimeoutError):
+			await asyncio.wait_for(ctrl._semaphore.acquire(), timeout=0.05)
+
+	@pytest.mark.asyncio
+	async def test_adjust_signal_decreases_semaphore_capacity(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""After adjust signal from 4->2 workers, excess releases are absorbed."""
+		config.scheduler.parallel.num_workers = 4
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		ctrl = ContinuousController(config, db)
+		ctrl._semaphore = DynamicSemaphore(4)
+
+		# Simulate 4 in-flight workers (acquire all 4)
+		for _ in range(4):
+			await asyncio.wait_for(ctrl._semaphore.acquire(), timeout=0.1)
+
+		# Adjust down to 2
+		signal = Signal(
+			mission_id="m1",
+			signal_type="adjust",
+			payload='{"num_workers": 2}',
+		)
+		db.insert_signal(signal)
+		ctrl._handle_adjust_signal(signal)
+
+		assert ctrl._semaphore.capacity == 2
+
+		# Release 4 slots (simulating 4 workers finishing)
+		for _ in range(4):
+			ctrl._semaphore.release()
+
+		# Only 2 should be available (2 releases were absorbed by debt)
+		assert ctrl._semaphore._value == 2
 
