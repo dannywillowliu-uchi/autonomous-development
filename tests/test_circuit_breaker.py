@@ -101,6 +101,25 @@ class TestCircuitBreakerManager:
 		mgr.reset("/ws/a")
 		assert mgr.get_state("/ws/a") == CircuitBreakerState.CLOSED
 
+	def test_get_summary_empty(self) -> None:
+		"""get_summary returns all zeros when no workspaces tracked."""
+		mgr = CircuitBreakerManager()
+		assert mgr.get_summary() == {"closed": 0, "open": 0, "half_open": 0, "total": 0}
+
+	def test_get_summary_mixed_states(self) -> None:
+		"""get_summary counts breakers in each state."""
+		mgr = CircuitBreakerManager(max_failures=1, cooldown_seconds=0.01)
+		# /ws/a -> CLOSED (success keeps it closed)
+		mgr.record_success("/ws/a")
+		# /ws/b -> OPEN (one failure trips it)
+		mgr.record_failure("/ws/b")
+		# /ws/c -> HALF_OPEN (fail then cooldown)
+		mgr.record_failure("/ws/c")
+		time.sleep(0.02)
+		mgr.can_dispatch("/ws/c")  # transitions OPEN -> HALF_OPEN
+		summary = mgr.get_summary()
+		assert summary == {"closed": 1, "open": 1, "half_open": 1, "total": 3}
+
 	def test_get_open_workspaces(self) -> None:
 		"""get_open_workspaces returns OPEN workspaces with failure counts."""
 		mgr = CircuitBreakerManager(max_failures=2, cooldown_seconds=60)
