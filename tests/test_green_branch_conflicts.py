@@ -850,21 +850,24 @@ class TestMergedFilesFromGitDiff:
 class TestGetLockedFiles:
 	"""ContinuousController._get_locked_files() returns in-flight + merged files."""
 
-	def test_empty_when_nothing_running(self, config: MissionConfig, db: Database) -> None:
+	@pytest.mark.asyncio
+	async def test_empty_when_nothing_running(self, config: MissionConfig, db: Database) -> None:
 		ctrl = ContinuousController(config, db)
-		locked = ctrl._get_locked_files()
+		locked = await ctrl._get_locked_files()
 		assert locked == {}
 
-	def test_includes_merged_files(self, config: MissionConfig, db: Database) -> None:
+	@pytest.mark.asyncio
+	async def test_includes_merged_files(self, config: MissionConfig, db: Database) -> None:
 		ctrl = ContinuousController(config, db)
 		ctrl._merged_files = {"src/app.py", "src/index.html"}
-		locked = ctrl._get_locked_files()
+		locked = await ctrl._get_locked_files()
 		assert "src/app.py" in locked
 		assert "already merged" in locked["src/app.py"]
 		assert "src/index.html" in locked
 		assert "already merged" in locked["src/index.html"]
 
-	def test_includes_in_flight_files(self, config: MissionConfig, db: Database) -> None:
+	@pytest.mark.asyncio
+	async def test_includes_in_flight_files(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		plan = Plan(id="p1", objective="test")
 		db.insert_plan(plan)
@@ -875,13 +878,14 @@ class TestGetLockedFiles:
 		db.insert_work_unit(unit)
 
 		ctrl = ContinuousController(config, db)
-		locked = ctrl._get_locked_files()
+		locked = await ctrl._get_locked_files()
 
 		assert "src/api.py" in locked
 		assert any("in-flight" in r for r in locked["src/api.py"])
 		assert "src/routes.py" in locked
 
-	def test_combines_in_flight_and_merged(self, config: MissionConfig, db: Database) -> None:
+	@pytest.mark.asyncio
+	async def test_combines_in_flight_and_merged(self, config: MissionConfig, db: Database) -> None:
 		db.insert_mission(Mission(id="m1", objective="test"))
 		plan = Plan(id="p1", objective="test")
 		db.insert_plan(plan)
@@ -893,7 +897,7 @@ class TestGetLockedFiles:
 
 		ctrl = ContinuousController(config, db)
 		ctrl._merged_files = {"src/app.py"}
-		locked = ctrl._get_locked_files()
+		locked = await ctrl._get_locked_files()
 
 		assert "src/api.py" in locked
 		assert "src/app.py" in locked
