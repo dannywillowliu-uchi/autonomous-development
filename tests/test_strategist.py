@@ -2098,3 +2098,187 @@ class TestProposeObjectiveAmbition:
 		prompt = prompt_bytes.decode()
 		# Should escalate to Level 3+ when no pending items
 		assert "lower-level work has been exhausted" in prompt
+
+
+# ============================================================================
+# Episodic Memory Integration Tests
+# ============================================================================
+
+
+class TestBuildStrategyPromptEpisodicContext:
+	def test_episodic_context_included(self) -> None:
+		prompt = _build_strategy_prompt(
+			"", "", "", "", "",
+			episodic_context="Learned rules:\n  - [0.9] Always run tests before merge",
+		)
+		assert "Past Learnings" in prompt
+		assert "Always run tests before merge" in prompt
+
+	def test_empty_episodic_context_omitted(self) -> None:
+		prompt = _build_strategy_prompt("", "", "", "", "", episodic_context="")
+		assert "Past Learnings" not in prompt
+
+
+class TestGetEpisodicContext:
+	def test_formats_semantic_and_episodic(self) -> None:
+		s = _make_strategist()
+		sem = MagicMock()
+		sem.confidence = 0.9
+		sem.content = "Cross-cutting refactors cause merge conflicts"
+		s.db.get_top_semantic_memories.return_value = [sem]
+
+		ep = MagicMock()
+		ep.event_type = "merge_conflict"
+		ep.content = "Overlap on db.py"
+		ep.outcome = "fail"
+		s.db.get_episodic_memories_by_scope.return_value = [ep]
+
+		result = s._get_episodic_context()
+		assert "Learned rules:" in result
+		assert "Cross-cutting refactors" in result
+		assert "Recent episodes:" in result
+		assert "merge_conflict" in result
+		assert "Overlap on db.py" in result
+
+	def test_empty_when_no_memories(self) -> None:
+		s = _make_strategist()
+		s.db.get_top_semantic_memories.return_value = []
+		s.db.get_episodic_memories_by_scope.return_value = []
+		assert s._get_episodic_context() == ""
+
+	def test_semantic_only(self) -> None:
+		s = _make_strategist()
+		sem = MagicMock()
+		sem.confidence = 0.8
+		sem.content = "Unit tests prevent regressions"
+		s.db.get_top_semantic_memories.return_value = [sem]
+		s.db.get_episodic_memories_by_scope.return_value = []
+		result = s._get_episodic_context()
+		assert "Learned rules:" in result
+		assert "Recent episodes:" not in result
+
+	def test_episodic_only(self) -> None:
+		s = _make_strategist()
+		s.db.get_top_semantic_memories.return_value = []
+		ep = MagicMock()
+		ep.event_type = "mission_summary"
+		ep.content = "Built auth system"
+		ep.outcome = "pass"
+		s.db.get_episodic_memories_by_scope.return_value = [ep]
+		result = s._get_episodic_context()
+		assert "Learned rules:" not in result
+		assert "Recent episodes:" in result
+
+	def test_resilient_to_db_errors(self) -> None:
+		s = _make_strategist()
+		s.db.get_top_semantic_memories.side_effect = Exception("DB error")
+		s.db.get_episodic_memories_by_scope.side_effect = Exception("DB error")
+		assert s._get_episodic_context() == ""
+
+
+class TestProposeObjectiveEpisodicContext:
+	@pytest.mark.asyncio
+	async def test_episodic_context_in_prompt(self) -> None:
+		s = _make_strategist()
+		s.db.get_pending_backlog.return_value = []
+		s.db.get_all_missions.return_value = []
+
+		sem = MagicMock()
+		sem.confidence = 0.85
+		sem.content = "Reduce file overlap for parallel workers"
+		s.db.get_top_semantic_memories.return_value = [sem]
+		s.db.get_episodic_memories_by_scope.return_value = []
+
+		strategy_output = _make_strategy_output("Improve worker isolation", "Reason", 7)
+
+		git_proc = AsyncMock()
+		git_proc.communicate.return_value = (b"abc123 commit", b"")
+		git_proc.returncode = 0
+
+		llm_proc = AsyncMock()
+		llm_proc.communicate.return_value = (strategy_output.encode(), b"")
+		llm_proc.returncode = 0
+
+		with patch("mission_control.strategist.asyncio.create_subprocess_exec", side_effect=[git_proc, llm_proc]):
+			await s.propose_objective()
+
+		call_args = llm_proc.communicate.call_args
+		prompt_bytes = call_args[1].get("input") or call_args[0][0] if call_args[0] else call_args[1]["input"]
+		prompt = prompt_bytes.decode()
+		assert "Past Learnings" in prompt
+		assert "Reduce file overlap" in prompt
+
+
+class TestStoreMissionEpisode:
+	def test_stores_episode_on_followup(self) -> None:
+		s = _make_strategist()
+		mock_mm = MagicMock()
+		s._memory_manager = mock_mm
+		s.config.target.name = "my-project"
+
+		result = _mission_result(
+			objective="Build auth system",
+			objective_met=True,
+			total_units_merged=3,
+			total_units_failed=0,
+			stopped_reason="planner_completed",
+		)
+		s._store_mission_episode(result)
+
+		mock_mm.store_episode.assert_called_once()
+		call_kwargs = mock_mm.store_episode.call_args[1]
+		assert call_kwargs["event_type"] == "mission_summary"
+		assert "Build auth system" in call_kwargs["content"]
+		assert call_kwargs["outcome"] == "pass"
+		assert "mission" in call_kwargs["scope_tokens"]
+		assert "strategy" in call_kwargs["scope_tokens"]
+		assert "my-project" in call_kwargs["scope_tokens"]
+
+	def test_failed_mission_outcome(self) -> None:
+		s = _make_strategist()
+		mock_mm = MagicMock()
+		s._memory_manager = mock_mm
+		s.config.target.name = "test"
+
+		result = _mission_result(objective_met=False)
+		s._store_mission_episode(result)
+
+		call_kwargs = mock_mm.store_episode.call_args[1]
+		assert call_kwargs["outcome"] == "fail"
+
+	def test_no_memory_manager_is_noop(self) -> None:
+		s = _make_strategist()
+		s._memory_manager = None
+		# Should not raise
+		s._store_mission_episode(_mission_result())
+
+	def test_resilient_to_store_errors(self) -> None:
+		s = _make_strategist()
+		mock_mm = MagicMock()
+		mock_mm.store_episode.side_effect = Exception("DB write failed")
+		s._memory_manager = mock_mm
+		s.config.target.name = "test"
+		# Should not raise
+		s._store_mission_episode(_mission_result())
+
+	@pytest.mark.asyncio
+	async def test_suggest_followup_persists_episode(self) -> None:
+		s = _make_strategist()
+		mock_mm = MagicMock()
+		s._memory_manager = mock_mm
+		s.config.target.name = "proj"
+
+		llm_output = _make_followup_output("Continue with remaining work")
+		mock_proc = AsyncMock()
+		mock_proc.communicate.return_value = (llm_output.encode(), b"")
+		mock_proc.returncode = 0
+
+		result = _mission_result(objective="Build API", objective_met=True)
+
+		with patch("mission_control.strategist.asyncio.create_subprocess_exec", return_value=mock_proc):
+			await s.suggest_followup(result, "context")
+
+		mock_mm.store_episode.assert_called_once()
+		call_kwargs = mock_mm.store_episode.call_args[1]
+		assert "Build API" in call_kwargs["content"]
+		assert call_kwargs["outcome"] == "pass"

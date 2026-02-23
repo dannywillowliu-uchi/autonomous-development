@@ -13,6 +13,7 @@ from enum import IntEnum
 from mission_control.config import MissionConfig, claude_subprocess_env
 from mission_control.db import Database
 from mission_control.json_utils import extract_json_from_text
+from mission_control.memory import MemoryManager
 from mission_control.models import BacklogItem, WorkUnit
 
 log = logging.getLogger(__name__)
@@ -117,6 +118,7 @@ def _build_strategy_prompt(
 	ambition_level: AmbitionLevel | None = None,
 	capability_gaps: str = "",
 	web_research_context: str = "",
+	episodic_context: str = "",
 ) -> str:
 	ambition_section = ""
 	if ambition_level is not None:
@@ -149,6 +151,13 @@ Consider proposing objectives that address these gaps, especially at Level 3-4.
 		research_section = f"""
 ### Web Research Context
 {web_research_context}
+"""
+
+	episodic_section = ""
+	if episodic_context:
+		episodic_section = f"""
+### Past Learnings
+{episodic_context}
 """
 
 	escalation_instruction = ""
@@ -184,7 +193,7 @@ Your job: propose the SINGLE most impactful mission objective to work on next.
 
 ### Project Structure
 {project_snapshot or "(No project structure available)"}
-{ambition_section}{capability_section}{research_section}
+{ambition_section}{capability_section}{research_section}{episodic_section}
 ## Instructions
 
 1. Analyze all context to understand what has been done and what needs doing.
@@ -214,10 +223,11 @@ def _effective_score(item: BacklogItem) -> float:
 class Strategist:
 	"""Proposes mission objectives by analyzing project context."""
 
-	def __init__(self, config: MissionConfig, db: Database) -> None:
+	def __init__(self, config: MissionConfig, db: Database, memory_manager: MemoryManager | None = None) -> None:
 		self.config = config
 		self.db = db
 		self._proposed_ambition_score: int | None = None
+		self._memory_manager = memory_manager
 
 	def _read_backlog(self) -> str:
 		backlog_path = self.config.target.resolved_path / "BACKLOG.md"
@@ -662,6 +672,29 @@ AMBITION_RESULT:{{"score": N, "reasoning": "brief explanation"}}
 
 		return output
 
+	def _get_episodic_context(self) -> str:
+		"""Load episodic + semantic memories and format as context for strategy prompts."""
+		lines: list[str] = []
+		try:
+			semantic = self.db.get_top_semantic_memories(limit=5)
+			if semantic:
+				lines.append("Learned rules:")
+				for sm in semantic:
+					lines.append(f"  - [{sm.confidence:.1f}] {sm.content}")
+		except Exception:
+			log.debug("Failed to load semantic memories", exc_info=True)
+
+		try:
+			episodes = self.db.get_episodic_memories_by_scope(["mission", "strategy"], limit=10)
+			if episodes:
+				lines.append("Recent episodes:")
+				for ep in episodes:
+					lines.append(f"  - [{ep.event_type}] {ep.content} -> {ep.outcome}")
+		except Exception:
+			log.debug("Failed to load episodic memories", exc_info=True)
+
+		return "\n".join(lines)
+
 	def _get_human_preferences(self) -> str:
 		"""Build a human preference signals section from trajectory ratings."""
 		try:
@@ -722,6 +755,7 @@ AMBITION_RESULT:{{"score": N, "reasoning": "brief explanation"}}
 			)
 
 		web_research = self._get_web_research_context()
+		episodic_ctx = self._get_episodic_context()
 
 		log.info(
 			"Ambition level: %s (%d capability gaps identified)",
@@ -739,6 +773,7 @@ AMBITION_RESULT:{{"score": N, "reasoning": "brief explanation"}}
 			ambition_level=ambition_level,
 			capability_gaps=gaps_text,
 			web_research_context=web_research,
+			episodic_context=episodic_ctx,
 		)
 		output = await self._invoke_llm(prompt, "strategist")
 		objective, rationale, ambition_score = self._parse_strategy_output(output)
@@ -826,8 +861,40 @@ IMPORTANT: The FOLLOWUP_RESULT line must be the LAST line of your output."""
 		Returns:
 			A next_objective string if follow-up is warranted, or empty string.
 		"""
+		# Persist mission summary as episodic memory for future strategy cycles
+		self._store_mission_episode(mission_result)
+
 		prompt = self._build_followup_prompt(mission_result, strategic_context)
 		output = await self._invoke_llm(prompt, "followup", raise_on_failure=False)
 		if not output:
 			return ""
 		return self._parse_followup_output(output)
+
+	def _store_mission_episode(self, mission_result: object) -> None:
+		"""Persist a mission summary as an episodic memory for cross-mission learning."""
+		if self._memory_manager is None:
+			return
+
+		objective = getattr(mission_result, "objective", "")
+		objective_met = getattr(mission_result, "objective_met", False)
+		total_merged = getattr(mission_result, "total_units_merged", 0)
+		total_failed = getattr(mission_result, "total_units_failed", 0)
+		stopped_reason = getattr(mission_result, "stopped_reason", "")
+
+		content = (
+			f"Mission: {objective[:200]}. "
+			f"Merged={total_merged}, Failed={total_failed}, "
+			f"Stopped={stopped_reason or 'normal'}"
+		)
+		outcome = "pass" if objective_met else "fail"
+		project_name = self.config.target.name or "unknown"
+
+		try:
+			self._memory_manager.store_episode(
+				event_type="mission_summary",
+				content=content,
+				outcome=outcome,
+				scope_tokens=["mission", "strategy", project_name],
+			)
+		except Exception:
+			log.warning("Failed to store mission episode", exc_info=True)
