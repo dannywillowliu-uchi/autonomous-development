@@ -103,6 +103,18 @@ class RecursivePlanner:
 	def __init__(self, config: MissionConfig, db: Database) -> None:
 		self.config = config
 		self.db = db
+		self._causal_risks: str = ""
+		self._project_snapshot: str = ""
+		self._feedback_context: str = ""
+		self._locked_files: dict[str, list[str]] = {}
+
+	def set_causal_context(self, risks: str) -> None:
+		"""Set causal risk factors to include in the planner prompt."""
+		self._causal_risks = risks
+
+	def set_project_snapshot(self, snapshot: str) -> None:
+		"""Set project structure snapshot to include in the planner prompt."""
+		self._project_snapshot = snapshot
 
 	async def plan_round(
 		self,
@@ -260,12 +272,12 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 		max_depth = self.config.planner.max_depth
 		max_children = self.config.planner.max_children_per_node
 
-		feedback_text = getattr(self, "_feedback_context", "")
+		feedback_text = self._feedback_context
 		feedback_section = ""
 		if feedback_text and node.depth == 0:
 			feedback_section = f"\n## Past Round Performance\n{feedback_text}\n"
 
-		locked_files = getattr(self, "_locked_files", {})
+		locked_files = self._locked_files
 		locked_section = ""
 		if locked_files and node.depth == 0:
 			lines = []
@@ -280,16 +292,12 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 			)
 
 		causal_section = ""
-		if node.depth == 0:
-			causal_text = getattr(self, "_causal_risks", "")
-			if causal_text:
-				causal_section = f"\n{causal_text}\n"
+		if node.depth == 0 and self._causal_risks:
+			causal_section = f"\n{self._causal_risks}\n"
 
 		snapshot_section = ""
-		if node.depth == 0:
-			snapshot_text = getattr(self, "_project_snapshot", "")
-			if snapshot_text:
-				snapshot_section = f"\n## Project Structure\n{snapshot_text}\n"
+		if node.depth == 0 and self._project_snapshot:
+			snapshot_section = f"\n## Project Structure\n{self._project_snapshot}\n"
 
 		prompt = f"""You are a recursive planner decomposing work for parallel execution.
 

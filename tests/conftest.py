@@ -8,7 +8,6 @@ import pytest
 
 from mission_control.config import MissionConfig, TargetConfig, VerificationConfig
 from mission_control.db import Database
-from mission_control.models import Plan, Session, WorkUnit
 
 
 @pytest.fixture()
@@ -28,35 +27,3 @@ def config(tmp_path: Any) -> MissionConfig:
 		verification=VerificationConfig(command="pytest -q"),
 	)
 	return cfg
-
-
-def make_work_unit(**overrides: Any) -> WorkUnit:
-	"""Create a WorkUnit with sensible defaults, overridable via kwargs."""
-	defaults: dict[str, Any] = {
-		"id": "wu1",
-		"plan_id": "p1",
-		"title": "Test task",
-	}
-	defaults.update(overrides)
-	return WorkUnit(**defaults)
-
-
-def make_session(**overrides: Any) -> Session:
-	"""Create a Session with sensible defaults, overridable via kwargs."""
-	defaults: dict[str, Any] = {
-		"id": "s1",
-		"target_name": "test-proj",
-		"task_description": "Test session",
-	}
-	defaults.update(overrides)
-	return Session(**defaults)
-
-
-def make_plan(**overrides: Any) -> Plan:
-	"""Create a Plan with sensible defaults, overridable via kwargs."""
-	defaults: dict[str, Any] = {
-		"id": "p1",
-		"objective": "Test objective",
-	}
-	defaults.update(overrides)
-	return Plan(**defaults)

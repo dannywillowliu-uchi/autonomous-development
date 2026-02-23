@@ -501,6 +501,94 @@ class TestMissionSummary:
 		assert summary["epochs"] == []
 
 
+class TestEpochDB:
+	def _insert_mission(self, db: Database, mission_id: str = "m1") -> None:
+		db.insert_mission(Mission(id=mission_id, objective="test"))
+
+	def test_insert_and_get(self, db: Database) -> None:
+		self._insert_mission(db)
+		e = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(e)
+		result = db.get_epoch("ep1")
+		assert result is not None
+		assert result.id == "ep1"
+		assert result.mission_id == "m1"
+		assert result.number == 1
+
+	def test_update(self, db: Database) -> None:
+		self._insert_mission(db)
+		e = Epoch(id="ep2", mission_id="m1", number=1)
+		db.insert_epoch(e)
+		e.units_completed = 3
+		e.score_at_end = 0.75
+		e.finished_at = "2025-01-01T00:00:00"
+		db.update_epoch(e)
+		result = db.get_epoch("ep2")
+		assert result is not None
+		assert result.units_completed == 3
+		assert result.score_at_end == 0.75
+		assert result.finished_at == "2025-01-01T00:00:00"
+
+	def test_get_epochs_for_mission(self, db: Database) -> None:
+		self._insert_mission(db, "m1")
+		self._insert_mission(db, "m2")
+		db.insert_epoch(Epoch(id="ep1", mission_id="m1", number=1))
+		db.insert_epoch(Epoch(id="ep2", mission_id="m1", number=2))
+		db.insert_epoch(Epoch(id="ep3", mission_id="m2", number=1))
+		epochs = db.get_epochs_for_mission("m1")
+		assert len(epochs) == 2
+		assert epochs[0].number == 1
+		assert epochs[1].number == 2
+
+
+class TestUnitEventDB:
+	def _make_deps(self, db: Database) -> tuple[str, str, str]:
+		"""Create prerequisite rows for FK constraints."""
+		mission = Mission(id="m1", objective="test")
+		db.insert_mission(mission)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		wu = WorkUnit(id="wu1", plan_id="p1")
+		db.insert_work_unit(wu)
+		return "m1", "ep1", "wu1"
+
+	def test_insert_and_get(self, db: Database) -> None:
+		m_id, ep_id, wu_id = self._make_deps(db)
+		ue = UnitEvent(
+			id="ue1", mission_id=m_id, epoch_id=ep_id,
+			work_unit_id=wu_id, event_type="completed", score_after=0.6,
+		)
+		db.insert_unit_event(ue)
+		events = db.get_unit_events_for_mission(m_id)
+		assert len(events) == 1
+		assert events[0].id == "ue1"
+		assert events[0].event_type == "completed"
+		assert events[0].score_after == 0.6
+
+	def test_get_events_for_epoch(self, db: Database) -> None:
+		m_id, ep_id, wu_id = self._make_deps(db)
+		db.insert_unit_event(UnitEvent(
+			id="ue1", mission_id=m_id, epoch_id=ep_id,
+			work_unit_id=wu_id, event_type="dispatched",
+		))
+		db.insert_unit_event(UnitEvent(
+			id="ue2", mission_id=m_id, epoch_id=ep_id,
+			work_unit_id=wu_id, event_type="completed",
+		))
+		events = db.get_unit_events_for_epoch(ep_id)
+		assert len(events) == 2
+
+
+class TestMigrationIdempotency:
+	def test_double_create_tables(self) -> None:
+		"""Calling _create_tables twice should not error (idempotent)."""
+		db = Database(":memory:")
+		db._create_tables()
+		db._create_tables()
+
+
 class TestBusyTimeout:
 	def test_busy_timeout_set_on_file_db(self, tmp_path: Any) -> None:
 		"""busy_timeout pragma should be set to 5000 for file-based DBs."""

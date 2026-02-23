@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -44,10 +45,12 @@ class CircuitBreakerManager:
 		self,
 		max_failures: int = 3,
 		cooldown_seconds: float = 120.0,
+		on_state_change: Callable[[str, str, str], None] | None = None,
 	) -> None:
 		self._max_failures = max_failures
 		self._cooldown_seconds = cooldown_seconds
 		self._breakers: dict[str, CircuitBreaker] = {}
+		self._on_state_change = on_state_change
 
 	def _get_or_create(self, workspace_id: str) -> CircuitBreaker:
 		if workspace_id not in self._breakers:
@@ -86,6 +89,8 @@ class CircuitBreakerManager:
 			cb.state = CircuitBreakerState.OPEN
 			cb.opened_at = time.monotonic()
 			cb._half_open_probes = 0
+			if self._on_state_change:
+				self._on_state_change(workspace_id, "half_open", "open")
 		elif cb.state == CircuitBreakerState.CLOSED and cb.failure_count >= cb.max_failures:
 			logger.warning(
 				"Circuit breaker %s: CLOSED -> OPEN (%d consecutive failures)",
@@ -93,6 +98,8 @@ class CircuitBreakerManager:
 			)
 			cb.state = CircuitBreakerState.OPEN
 			cb.opened_at = time.monotonic()
+			if self._on_state_change:
+				self._on_state_change(workspace_id, "closed", "open")
 
 	def can_dispatch(self, workspace_id: str) -> bool:
 		"""Check if a workspace is available for dispatch.
@@ -114,6 +121,8 @@ class CircuitBreakerManager:
 				)
 				cb.state = CircuitBreakerState.HALF_OPEN
 				cb._half_open_probes = 0
+				if self._on_state_change:
+					self._on_state_change(workspace_id, "open", "half_open")
 				# Allow this probe
 				cb._half_open_probes += 1
 				return True

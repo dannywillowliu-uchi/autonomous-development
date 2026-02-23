@@ -308,6 +308,43 @@ def test_models_dataclass_defaults() -> None:
 	assert mc.architect_editor_mode is False
 
 
+class TestContinuousConfig:
+	def test_defaults(self) -> None:
+		cc = ContinuousConfig()
+		assert cc.max_wall_time_seconds == 7200
+		assert cc.stall_threshold_units == 10
+		assert cc.stall_score_epsilon == 0.01
+		assert cc.replan_interval_units == 5
+		assert cc.verify_before_merge is True
+		assert cc.backlog_min_size == 2
+		assert cc.cooldown_between_units == 0
+
+	def test_toml_parsing(self, tmp_path: Path) -> None:
+		toml = tmp_path / "mission-control.toml"
+		toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[continuous]
+max_wall_time_seconds = 3600
+stall_threshold_units = 5
+stall_score_epsilon = 0.02
+replan_interval_units = 3
+verify_before_merge = false
+backlog_min_size = 4
+cooldown_between_units = 10
+""")
+		config = load_config(toml)
+		assert config.continuous.max_wall_time_seconds == 3600
+		assert config.continuous.stall_threshold_units == 5
+		assert config.continuous.stall_score_epsilon == 0.02
+		assert config.continuous.replan_interval_units == 3
+		assert config.continuous.verify_before_merge is False
+		assert config.continuous.backlog_min_size == 4
+		assert config.continuous.cooldown_between_units == 10
+
+
 def test_continuous_cleanup_defaults() -> None:
 	"""ContinuousConfig has correct defaults for cleanup fields."""
 	cc = ContinuousConfig()
