@@ -34,13 +34,13 @@ Add a test that: (1) starts dispatch with num_workers=2, (2) sends an adjust sig
 
 ## Completed
 - [x] eaa30c18 (2026-02-23T06:44:37.961939+00:00) -- Added backlog staleness detection with time-based and divergence-based eviction to ContinuousPlanner (files: src/mission_control/config.py, src/mission_control/continuous_planner.py, tests/test_continuous_planner.py)
+- [x] 5b1ead03 (2026-02-23T06:50:43.164605+00:00) -- Added end-to-end integration test for the dispatch-merge-complete cycle in tests/test_integration_cy (files: tests/test_integration_cycle.py)
 
 ## In-Flight (DO NOT duplicate)
-- [ ] 5b1ead03 -- Add end-to-end integration test for dispatch-merge-complete cycle (files: tests/test_integration_cycle.py)
 - [ ] 4ddb94e3 -- Fix semaphore recreation bug that silently breaks worker count adjustment (files: src/mission_control/continuous_controller.py,tests/test_continuous_controller.py)
 
 ## Files Modified
-src/mission_control/config.py, src/mission_control/continuous_planner.py, tests/test_continuous_planner.py
+src/mission_control/config.py, src/mission_control/continuous_planner.py, tests/test_continuous_planner.py, tests/test_integration_cycle.py
 
 ## System Health
 Degradation level: FULL_CAPACITY
@@ -51,3 +51,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 
 ## Changelog
 - 2026-02-23T06:44:37.961939+00:00 | eaa30c18 merged (commit: 2468ca9) -- Added backlog staleness detection with time-based and divergence-based eviction 
+- 2026-02-23T06:50:43.164605+00:00 | 5b1ead03 merged (commit: 22dfc82) -- Added end-to-end integration test for the dispatch-merge-complete cycle in tests
