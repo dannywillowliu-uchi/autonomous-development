@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -176,3 +177,184 @@ class TestMCPToolHandlers:
 		from mission_control.mcp_server import _dispatch
 		result = _dispatch("nonexistent", {}, registry)
 		assert "error" in result
+
+	def test_web_research_dispatch(self, registry):
+		from mission_control.mcp_server import _dispatch
+		with patch("mission_control.mcp_server._tool_web_research") as mock_wr:
+			mock_wr.return_value = {"query": "test", "results": []}
+			result = _dispatch("web_research", {"query": "test"}, registry)
+			mock_wr.assert_called_once_with({"query": "test"})
+			assert result["query"] == "test"
+
+
+def _mock_urlopen(data: dict | str, content_type: str = "application/json"):
+	"""Create a mock urllib response context manager."""
+	if isinstance(data, dict):
+		body = json.dumps(data).encode()
+	else:
+		body = data.encode()
+	resp = MagicMock()
+	resp.read.return_value = body
+	resp.headers = {"Content-Type": content_type}
+	resp.__enter__ = lambda s: s
+	resp.__exit__ = MagicMock(return_value=False)
+	return resp
+
+
+class TestWebResearch:
+	"""Tests for web_research tool and its search backends."""
+
+	def test_general_search_with_abstract(self):
+		from mission_control.mcp_server import _tool_web_research
+		ddg_response = {
+			"Heading": "Python",
+			"Abstract": "Python is a programming language.",
+			"AbstractURL": "https://python.org",
+			"AbstractSource": "Wikipedia",
+			"RelatedTopics": [],
+			"Answer": "",
+		}
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=_mock_urlopen(ddg_response)):
+			result = _tool_web_research({"query": "python programming"})
+		assert result["search_type"] == "general"
+		assert len(result["results"]) == 1
+		assert result["results"][0]["title"] == "Python"
+		assert result["results"][0]["snippet"] == "Python is a programming language."
+
+	def test_general_search_with_related_topics(self):
+		from mission_control.mcp_server import _tool_web_research
+		ddg_response = {
+			"Heading": "",
+			"Abstract": "",
+			"RelatedTopics": [
+				{"Text": "Topic one about Python", "FirstURL": "https://example.com/1"},
+				{"Text": "Topic two about asyncio", "FirstURL": "https://example.com/2"},
+			],
+			"Answer": "",
+		}
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=_mock_urlopen(ddg_response)):
+			result = _tool_web_research({"query": "python asyncio"})
+		assert len(result["results"]) == 2
+
+	def test_general_search_with_subtopics(self):
+		from mission_control.mcp_server import _tool_web_research
+		ddg_response = {
+			"Heading": "",
+			"Abstract": "",
+			"RelatedTopics": [
+				{"Topics": [
+					{"Text": "Sub topic A", "FirstURL": "https://example.com/a"},
+				]},
+			],
+			"Answer": "",
+		}
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=_mock_urlopen(ddg_response)):
+			result = _tool_web_research({"query": "something"})
+		assert len(result["results"]) == 1
+		assert result["results"][0]["snippet"] == "Sub topic A"
+
+	def test_general_search_answer_fallback(self):
+		from mission_control.mcp_server import _tool_web_research
+		ddg_response = {
+			"Heading": "",
+			"Abstract": "",
+			"RelatedTopics": [],
+			"Answer": "42",
+		}
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=_mock_urlopen(ddg_response)):
+			result = _tool_web_research({"query": "answer to everything"})
+		assert len(result["results"]) == 1
+		assert result["results"][0]["snippet"] == "42"
+
+	def test_pypi_search(self):
+		from mission_control.mcp_server import _tool_web_research
+		pypi_response = {
+			"info": {
+				"name": "requests",
+				"version": "2.31.0",
+				"summary": "HTTP library",
+				"home_page": "https://requests.readthedocs.io",
+				"requires_python": ">=3.7",
+				"license": "Apache 2.0",
+				"project_urls": {"Homepage": "https://requests.readthedocs.io"},
+			},
+		}
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=_mock_urlopen(pypi_response)):
+			result = _tool_web_research({"query": "requests", "search_type": "pypi"})
+		assert result["search_type"] == "pypi"
+		assert result["results"][0]["name"] == "requests"
+		assert result["results"][0]["version"] == "2.31.0"
+
+	def test_github_search(self):
+		from mission_control.mcp_server import _tool_web_research
+		gh_response = {
+			"items": [
+				{
+					"full_name": "pallets/flask",
+					"description": "Micro web framework",
+					"html_url": "https://github.com/pallets/flask",
+					"stargazers_count": 60000,
+					"language": "Python",
+					"updated_at": "2024-01-01T00:00:00Z",
+				},
+			],
+		}
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=_mock_urlopen(gh_response)):
+			result = _tool_web_research({"query": "flask", "search_type": "github", "max_results": 3})
+		assert result["search_type"] == "github"
+		assert len(result["results"]) == 1
+		assert result["results"][0]["name"] == "pallets/flask"
+		assert result["results"][0]["stars"] == 60000
+
+	def test_url_fetch_html(self):
+		from mission_control.mcp_server import _tool_web_research
+		html = "<html><head><style>body{}</style></head><body><p>Hello world</p></body></html>"
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=_mock_urlopen(html, "text/html")):
+			result = _tool_web_research({"query": "https://example.com", "search_type": "url_fetch"})
+		assert result["search_type"] == "url_fetch"
+		assert "Hello world" in result["results"][0]["content"]
+		assert "<style>" not in result["results"][0]["content"]
+
+	def test_url_fetch_json(self):
+		from mission_control.mcp_server import _tool_web_research
+		data = {"key": "value"}
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=_mock_urlopen(data)):
+			result = _tool_web_research({"query": "https://api.example.com/data", "search_type": "url_fetch"})
+		assert '"key"' in result["results"][0]["content"]
+
+	def test_url_fetch_truncation(self):
+		from mission_control.mcp_server import _tool_web_research
+		long_text = "x" * 10000
+		mock_resp = _mock_urlopen(long_text, "text/plain")
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=mock_resp):
+			result = _tool_web_research({"query": "https://example.com/big", "search_type": "url_fetch"})
+		assert result["results"][0]["truncated"] is True
+		assert len(result["results"][0]["content"]) == 8000
+
+	def test_unit_id_passthrough(self):
+		from mission_control.mcp_server import _tool_web_research
+		ddg_response = {"Heading": "", "Abstract": "", "RelatedTopics": [], "Answer": ""}
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=_mock_urlopen(ddg_response)):
+			result = _tool_web_research({"query": "test", "unit_id": "abc123"})
+		assert result["unit_id"] == "abc123"
+
+	def test_unit_id_absent_when_not_provided(self):
+		from mission_control.mcp_server import _tool_web_research
+		ddg_response = {"Heading": "", "Abstract": "", "RelatedTopics": [], "Answer": ""}
+		with patch("mission_control.mcp_server.urllib.request.urlopen", return_value=_mock_urlopen(ddg_response)):
+			result = _tool_web_research({"query": "test"})
+		assert "unit_id" not in result
+
+	def test_network_error(self):
+		import urllib.error
+
+		from mission_control.mcp_server import _tool_web_research
+		with patch("mission_control.mcp_server.urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")):
+			result = _tool_web_research({"query": "fail"})
+		assert "error" in result
+		assert "Network error" in result["error"]
+
+	def test_tool_in_tools_list(self):
+		from mission_control.mcp_server import TOOLS
+		names = [t.name for t in TOOLS]
+		assert "web_research" in names

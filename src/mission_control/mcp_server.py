@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from mcp.server import Server
@@ -123,6 +127,47 @@ TOOLS = [
 			"required": ["project_name"],
 		},
 	),
+	Tool(
+		name="web_research",
+		description=(
+			"Search the web for documentation, library versions, GitHub issues, "
+			"and best practices. Workers and strategist use this for research "
+			"during implementation. The planner can flag units with needs_research=true "
+			"to indicate they should use this tool."
+		),
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"query": {
+					"type": "string",
+					"description": "Search query string, package name, or URL to fetch",
+				},
+				"search_type": {
+					"type": "string",
+					"enum": ["general", "pypi", "github", "url_fetch"],
+					"description": (
+						"Type of search: 'general' for web search via DuckDuckGo, "
+						"'pypi' for Python package info, 'github' for GitHub repo/issue "
+						"search, 'url_fetch' to fetch and extract text from a URL"
+					),
+					"default": "general",
+				},
+				"max_results": {
+					"type": "integer",
+					"description": "Maximum number of results to return (default 5)",
+					"default": 5,
+				},
+				"unit_id": {
+					"type": "string",
+					"description": (
+						"Optional work unit ID to associate research with. "
+						"Set by planner via the needs_research flag on units."
+					),
+				},
+			},
+			"required": ["query"],
+		},
+	),
 ]
 
 
@@ -162,6 +207,8 @@ def _dispatch(name: str, args: dict, registry: ProjectRegistry) -> dict:
 		return _tool_register_project(registry, args)
 	elif name == "get_round_details":
 		return _tool_get_round_details(registry, args)
+	elif name == "web_research":
+		return _tool_web_research(args)
 	else:
 		return {"error": f"Unknown tool: {name}"}
 
@@ -373,6 +420,147 @@ def _tool_get_round_details(registry: ProjectRegistry, args: dict) -> dict:
 		}
 	finally:
 		db.close()
+
+
+_WEB_TIMEOUT = 15
+
+
+def _tool_web_research(args: dict) -> dict:
+	query = args["query"]
+	search_type = args.get("search_type", "general")
+	max_results = args.get("max_results", 5)
+	unit_id = args.get("unit_id")
+
+	try:
+		if search_type == "pypi":
+			results = _search_pypi(query)
+		elif search_type == "github":
+			results = _search_github(query, max_results)
+		elif search_type == "url_fetch":
+			results = _fetch_url(query)
+		else:
+			results = _search_duckduckgo(query)
+	except urllib.error.URLError as e:
+		return {"error": f"Network error: {e}", "query": query, "search_type": search_type}
+	except Exception as e:
+		return {"error": str(e), "query": query, "search_type": search_type}
+
+	response: dict = {"query": query, "search_type": search_type, "results": results}
+	if unit_id:
+		response["unit_id"] = unit_id
+	return response
+
+
+def _search_duckduckgo(query: str) -> list[dict]:
+	"""Search via DuckDuckGo instant answer API."""
+	params = urllib.parse.urlencode({
+		"q": query, "format": "json", "no_html": "1", "skip_disambig": "1",
+	})
+	url = f"https://api.duckduckgo.com/?{params}"
+	req = urllib.request.Request(url, headers={"User-Agent": "mission-control/1.0"})
+
+	with urllib.request.urlopen(req, timeout=_WEB_TIMEOUT) as resp:
+		data = json.loads(resp.read().decode())
+
+	results: list[dict] = []
+
+	if data.get("Abstract"):
+		results.append({
+			"title": data.get("Heading", ""),
+			"snippet": data["Abstract"],
+			"url": data.get("AbstractURL", ""),
+			"source": data.get("AbstractSource", ""),
+		})
+
+	for topic in data.get("RelatedTopics", []):
+		if "Text" in topic:
+			results.append({
+				"title": topic.get("Text", "")[:100],
+				"snippet": topic.get("Text", ""),
+				"url": topic.get("FirstURL", ""),
+			})
+		elif "Topics" in topic:
+			for sub in topic["Topics"]:
+				if "Text" in sub:
+					results.append({
+						"title": sub.get("Text", "")[:100],
+						"snippet": sub.get("Text", ""),
+						"url": sub.get("FirstURL", ""),
+					})
+
+	if not results and data.get("Answer"):
+		results.append({"title": "Answer", "snippet": data["Answer"], "url": ""})
+
+	return results
+
+
+def _search_pypi(package_name: str) -> list[dict]:
+	"""Look up Python package info from PyPI JSON API."""
+	url = f"https://pypi.org/pypi/{urllib.parse.quote(package_name)}/json"
+	req = urllib.request.Request(url, headers={"User-Agent": "mission-control/1.0"})
+
+	with urllib.request.urlopen(req, timeout=_WEB_TIMEOUT) as resp:
+		data = json.loads(resp.read().decode())
+
+	info = data.get("info", {})
+	return [{
+		"name": info.get("name", ""),
+		"version": info.get("version", ""),
+		"summary": info.get("summary", ""),
+		"home_page": info.get("home_page", "") or info.get("project_url", ""),
+		"requires_python": info.get("requires_python", ""),
+		"license": info.get("license", ""),
+		"project_urls": info.get("project_urls", {}),
+	}]
+
+
+def _search_github(query: str, max_results: int = 5) -> list[dict]:
+	"""Search GitHub repositories via public API."""
+	params = urllib.parse.urlencode({"q": query, "per_page": max_results})
+	url = f"https://api.github.com/search/repositories?{params}"
+	req = urllib.request.Request(url, headers={
+		"User-Agent": "mission-control/1.0",
+		"Accept": "application/vnd.github.v3+json",
+	})
+
+	with urllib.request.urlopen(req, timeout=_WEB_TIMEOUT) as resp:
+		data = json.loads(resp.read().decode())
+
+	return [
+		{
+			"type": "repository",
+			"name": item.get("full_name", ""),
+			"description": item.get("description", "") or "",
+			"url": item.get("html_url", ""),
+			"stars": item.get("stargazers_count", 0),
+			"language": item.get("language", ""),
+			"updated_at": item.get("updated_at", ""),
+		}
+		for item in data.get("items", [])[:max_results]
+	]
+
+
+def _fetch_url(url: str) -> list[dict]:
+	"""Fetch content from a URL and return extracted text."""
+	req = urllib.request.Request(url, headers={"User-Agent": "mission-control/1.0"})
+
+	with urllib.request.urlopen(req, timeout=_WEB_TIMEOUT) as resp:
+		content_type = resp.headers.get("Content-Type", "")
+		raw = resp.read()
+
+	text = raw.decode("utf-8", errors="replace")
+
+	if "html" in content_type:
+		text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL)
+		text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
+		text = re.sub(r"<[^>]+>", " ", text)
+		text = re.sub(r"\s+", " ", text).strip()
+
+	max_len = 8000
+	truncated = len(text) > max_len
+	text = text[:max_len]
+
+	return [{"url": url, "content_type": content_type, "content": text, "truncated": truncated}]
 
 
 def run_mcp_server() -> None:
