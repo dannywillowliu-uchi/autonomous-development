@@ -58,12 +58,14 @@ Fix:
 - [x] 036ba2a1 (2026-02-23T05:58:54.375332+00:00) -- Merged TestWeightTuples and TestDefaultLimits from test_constants.py into test_models.py, and TestEx (files: tests/test_constants.py, tests/test_json_utils.py, tests/test_models.py, tests/test_session.py)
 - [x] b4843e16 (2026-02-23T06:00:10.003769+00:00) -- Merged TestEventStream into test_event_sourcing.py, moved TestReviewSession/TestComputeDecomposition (files: tests/test_event_sourcing.py, tests/test_evaluator.py, tests/test_event_stream.py, tests/test_reviewer.py, tests/test_grading.py)
 - [x] d9fdb434 (2026-02-23T06:01:55.974307+00:00) -- Wired diff_reviewer low scores into build_planner_context. Reviews with alignment, approach, or test (files: src/mission_control/planner_context.py, tests/test_planner_context.py)
+- [x] f1dfeff6 (2026-02-23T06:08:52.877080+00:00) -- Fixed dir() check bug by initializing failed_summaries before try block, wired insert_experience() i (files: src/mission_control/continuous_controller.py, tests/test_continuous_controller.py)
 
 ## In-Flight (DO NOT duplicate)
-- [ ] f1dfeff6 -- Fix dir() check bug and wire insert_experience() in continuous_controller (files: src/mission_control/continuous_controller.py,tests/test_continuous_controller.py)
+- [ ] 5f121c38 -- Merge test_continuous_foundation.py into test_db.py and test_config.py (files: tests/test_continuous_foundation.py,tests/test_db.py,tests/test_config.py,tests/conftest.py)
+- [ ] f052912b -- Add public APIs to circuit_breaker and recursive_planner (files: src/mission_control/circuit_breaker.py, src/mission_control/recursive_planner.py, src/mission_control/continuous_planner.py)
 
 ## Files Modified
-src/mission_control/circuit_breaker.py, src/mission_control/continuous_controller.py, src/mission_control/continuous_planner.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/planner_context.py, src/mission_control/recursive_planner.py, tests/test_ambition_scoring.py, tests/test_circuit_breaker.py, tests/test_constants.py, tests/test_continuous_planner.py, tests/test_dag_planner.py, tests/test_db.py, tests/test_evaluator.py, tests/test_event_sourcing.py, tests/test_event_stream.py, tests/test_fixup.py, tests/test_grading.py, tests/test_json_utils.py, tests/test_models.py, tests/test_overlap.py, tests/test_planner_context.py, tests/test_recursive_planner.py, tests/test_reviewer.py, tests/test_session.py, tests/test_signals.py, tests/test_strategic_context_db.py, tests/test_strategist.py, tests/test_strategist_integration.py, tests/test_zfc.py
+src/mission_control/circuit_breaker.py, src/mission_control/continuous_controller.py, src/mission_control/continuous_planner.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/planner_context.py, src/mission_control/recursive_planner.py, tests/test_ambition_scoring.py, tests/test_circuit_breaker.py, tests/test_constants.py, tests/test_continuous_controller.py, tests/test_continuous_planner.py, tests/test_dag_planner.py, tests/test_db.py, tests/test_evaluator.py, tests/test_event_sourcing.py, tests/test_event_stream.py, tests/test_fixup.py, tests/test_grading.py, tests/test_json_utils.py, tests/test_models.py, tests/test_overlap.py, tests/test_planner_context.py, tests/test_recursive_planner.py, tests/test_reviewer.py, tests/test_session.py, tests/test_signals.py, tests/test_strategic_context_db.py, tests/test_strategist.py, tests/test_strategist_integration.py, tests/test_zfc.py
 
 ## System Health
 Degradation level: FULL_CAPACITY
@@ -84,3 +86,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 - 2026-02-23T05:58:54.375332+00:00 | 036ba2a1 merged (commit: e38f26d) -- Merged TestWeightTuples and TestDefaultLimits from test_constants.py into test_m
 - 2026-02-23T06:00:10.003769+00:00 | b4843e16 merged (commit: e4ded89) -- Merged TestEventStream into test_event_sourcing.py, moved TestReviewSession/Test
 - 2026-02-23T06:01:55.974307+00:00 | d9fdb434 merged (commit: deeaf35) -- Wired diff_reviewer low scores into build_planner_context. Reviews with alignmen
+- 2026-02-23T06:08:52.877080+00:00 | f1dfeff6 merged (commit: b443f9e) -- Fixed dir() check bug by initializing failed_summaries before try block, wired i
