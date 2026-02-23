@@ -437,10 +437,10 @@ class TestSyncToSource:
 		assert len(calls) == 2
 		# First call: fetch mc/green
 		assert calls[0][0] == "/tmp/test"  # source repo path
-		assert calls[0][1] == ("fetch", "/tmp/test-workspace", "mc/green:mc/green")
+		assert calls[0][1] == ("fetch", "/tmp/test-workspace", "+mc/green:mc/green")
 		# Second call: fetch mc/working
 		assert calls[1][0] == "/tmp/test"
-		assert calls[1][1] == ("fetch", "/tmp/test-workspace", "mc/working:mc/working")
+		assert calls[1][1] == ("fetch", "/tmp/test-workspace", "+mc/working:mc/working")
 
 
 class TestParallelMergeConflicts:
