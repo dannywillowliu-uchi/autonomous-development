@@ -1133,6 +1133,68 @@ class TestPlanBlockParsing:
 		assert result.units[0]["title"] == "A"
 
 
+# -- set_causal_context / set_project_snapshot tests --
+
+
+class TestCausalContextAndSnapshot:
+	def test_set_causal_context(self) -> None:
+		"""set_causal_context stores the value in _causal_risks."""
+		planner = _planner()
+		assert planner._causal_risks == ""
+		planner.set_causal_context("model=opus: 9% failure")
+		assert planner._causal_risks == "model=opus: 9% failure"
+
+	def test_set_project_snapshot(self) -> None:
+		"""set_project_snapshot stores the value in _project_snapshot."""
+		planner = _planner()
+		assert planner._project_snapshot == ""
+		planner.set_project_snapshot("src/ has 20 files")
+		assert planner._project_snapshot == "src/ has 20 files"
+
+	@pytest.mark.asyncio
+	async def test_causal_risks_included_in_prompt(self) -> None:
+		"""When _causal_risks is set, the prompt at depth 0 includes it."""
+		planner = _planner()
+		planner.set_causal_context("## Causal Risk\nmodel=opus: 9% failure")
+		node = PlanNode(depth=0, scope="Root", node_type="branch")
+
+		response = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch("mission_control.recursive_planner.asyncio.create_subprocess_exec", return_value=mock_proc):
+			await planner._invoke_planner_llm(node, "obj", "hash", [])
+
+		prompt = mock_proc.communicate.call_args[1]["input"].decode()
+		assert "model=opus: 9% failure" in prompt
+
+	@pytest.mark.asyncio
+	async def test_project_snapshot_included_in_prompt(self) -> None:
+		"""When _project_snapshot is set, the prompt at depth 0 includes it."""
+		planner = _planner()
+		planner.set_project_snapshot("src/ has 20 files")
+		node = PlanNode(depth=0, scope="Root", node_type="branch")
+
+		response = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch("mission_control.recursive_planner.asyncio.create_subprocess_exec", return_value=mock_proc):
+			await planner._invoke_planner_llm(node, "obj", "hash", [])
+
+		prompt = mock_proc.communicate.call_args[1]["input"].decode()
+		assert "src/ has 20 files" in prompt
+		assert "## Project Structure" in prompt
+
+
 # -- Per-component model usage tests --
 
 

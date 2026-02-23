@@ -22,6 +22,24 @@ def _mission() -> Mission:
 	return Mission(id="m1", objective="Build a production API")
 
 
+class TestCausalContextAndSnapshotDelegation:
+	def test_set_causal_context_delegates(self) -> None:
+		"""set_causal_context delegates to inner planner."""
+		config = _config()
+		db = Database(":memory:")
+		planner = ContinuousPlanner(config, db)
+		planner.set_causal_context("model=opus: 9% failure")
+		assert planner._inner._causal_risks == "model=opus: 9% failure"
+
+	def test_set_project_snapshot_delegates(self) -> None:
+		"""set_project_snapshot delegates to inner planner."""
+		config = _config()
+		db = Database(":memory:")
+		planner = ContinuousPlanner(config, db)
+		planner.set_project_snapshot("src/ has 20 files")
+		assert planner._inner._project_snapshot == "src/ has 20 files"
+
+
 class TestIngestHandoff:
 	def test_accumulates_discoveries(self) -> None:
 		config = _config()
