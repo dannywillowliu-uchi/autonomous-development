@@ -35,6 +35,8 @@ dev = [
 	"ruff>=0.1.0",
 	"mypy>=1.0.0",
 	"bandit>=1.7.0",
+	"fastapi>=0.109.0",
+	"uvicorn[standard]>=0.27.0",
 ]
 dashboard = [
 	"textual>=0.47.0",

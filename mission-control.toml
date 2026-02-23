@@ -7,6 +7,8 @@ objective = "Improve the system's ability to autonomously orchestrate agents tow
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
 timeout = 300
+setup_command = "uv sync --extra dev"
+setup_timeout = 120
 
 [scheduler]
 session_timeout = 900
