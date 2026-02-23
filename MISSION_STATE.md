@@ -53,13 +53,13 @@ Fix:
 - [x] ab961ee5 (2026-02-23T05:46:51.162355+00:00) -- Removed duplicate specialist field from WorkUnit dataclass in models.py. The first declaration (with (files: src/mission_control/models.py)
 - [x] cd8a6db3 (2026-02-23T05:48:11.309034+00:00) -- Added set_causal_context() public API to RecursivePlanner and ContinuousPlanner, replacing private a (files: src/mission_control/recursive_planner.py, src/mission_control/continuous_planner.py, src/mission_control/continuous_controller.py, tests/test_recursive_planner.py, tests/test_continuous_planner.py)
 - [x] 1406b949 (2026-02-23T05:49:08.060148+00:00) -- Consolidated test_ambition_scoring.py into strategist test files. Moved TestEvaluateAmbition, TestZF (files: tests/test_ambition_scoring.py, tests/test_strategist.py, tests/test_strategist_integration.py)
+- [x] 4de7bee9 (2026-02-23T05:50:59.554887+00:00) -- Merged 13 tests (TestTopologicalLayers, TestPlanNodeMultiParent, TestOverlapWithLayers) from test_da (files: tests/test_overlap.py, tests/test_dag_planner.py)
 
 ## In-Flight (DO NOT duplicate)
-- [ ] 4de7bee9 -- Merge test_dag_planner.py into test_overlap.py (files: tests/test_dag_planner.py,tests/test_overlap.py)
 - [ ] 0fa9364a -- Merge test_strategic_context_db.py and test_signals.py into test_db.py (files: tests/test_strategic_context_db.py,tests/test_signals.py,tests/test_db.py)
 
 ## Files Modified
-src/mission_control/circuit_breaker.py, src/mission_control/continuous_controller.py, src/mission_control/continuous_planner.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/recursive_planner.py, tests/test_ambition_scoring.py, tests/test_circuit_breaker.py, tests/test_continuous_planner.py, tests/test_db.py, tests/test_fixup.py, tests/test_recursive_planner.py, tests/test_strategist.py, tests/test_strategist_integration.py, tests/test_zfc.py
+src/mission_control/circuit_breaker.py, src/mission_control/continuous_controller.py, src/mission_control/continuous_planner.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/recursive_planner.py, tests/test_ambition_scoring.py, tests/test_circuit_breaker.py, tests/test_continuous_planner.py, tests/test_dag_planner.py, tests/test_db.py, tests/test_fixup.py, tests/test_overlap.py, tests/test_recursive_planner.py, tests/test_strategist.py, tests/test_strategist_integration.py, tests/test_zfc.py
 
 ## System Health
 Degradation level: FULL_CAPACITY
@@ -71,3 +71,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 ## Changelog
 - 2026-02-23T05:46:25.957198+00:00 | 3f8d13b1 merged (commit: 622f3ec) -- Merged TestZFCFixupPrompts from test_zfc.py into test_fixup.py, unified factory 
 - 2026-02-23T05:46:30.443223+00:00 | 02cdec96 merged (commit: 31681db) -- Added on_state_change callback parameter to CircuitBreakerManager.__init__. Call
+- 2026-02-23T05:46:51.064821+00:00 | 1bb6ad0f merged (commit: ee1b1c7) -- Removed _migrate_unit_type_column (duplicate of migration in _migrate_token_colu
