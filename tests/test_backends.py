@@ -14,7 +14,7 @@ from mission_control.backends.base import WorkerHandle
 from mission_control.backends.container import ContainerBackend
 from mission_control.backends.local import _MB, LocalBackend
 from mission_control.backends.ssh import SSHBackend
-from mission_control.config import ContainerConfig, SSHHostConfig
+from mission_control.config import ContainerConfig, MissionConfig, SSHHostConfig
 
 # ---------------------------------------------------------------------------
 # WorkerHandle dataclass
@@ -276,6 +276,24 @@ class TestLocalBackend:
 		assert "ANTHROPIC_API_KEY" not in call_kwargs["env"]
 		assert "w1" in backend._processes
 		assert backend._stdout_bufs["w1"] == b""
+
+	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")
+	@patch("mission_control.backends.local.claude_subprocess_env")
+	async def test_spawn_passes_config_to_claude_subprocess_env(
+		self, mock_env: MagicMock, mock_exec: AsyncMock,
+	) -> None:
+		"""spawn passes stored config to claude_subprocess_env."""
+		config = MagicMock(spec=MissionConfig)
+		with patch("mission_control.backends.local.WorkspacePool"):
+			b = LocalBackend(source_repo="/repo", pool_dir="/pool", config=config)
+		mock_env.return_value = {"PATH": "/usr/bin"}
+		mock_proc = AsyncMock()
+		mock_proc.pid = 1234
+		mock_exec.return_value = mock_proc
+
+		await b.spawn("w1", "/ws", ["claude"], 60)
+
+		mock_env.assert_called_once_with(config)
 
 	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")
 	async def test_spawn_clears_stdout_collected(self, mock_exec: AsyncMock, backend: LocalBackend) -> None:
@@ -1144,6 +1162,26 @@ class TestContainerBackend:
 		assert "HOME=/home/test" in cmd_str or "HOME=/home/mcworker" in cmd_str
 		# ANTHROPIC_API_KEY must NOT be passed
 		assert "sk-secret" not in cmd_str
+
+	@patch("mission_control.backends.container.claude_subprocess_env")
+	def test_build_docker_command_passes_config_to_claude_subprocess_env(
+		self, mock_env: MagicMock,
+	) -> None:
+		"""_build_docker_command passes stored config to claude_subprocess_env."""
+		config = MagicMock(spec=MissionConfig)
+		cc = ContainerConfig(claude_config_dir="")
+		with patch("mission_control.backends.container.WorkspacePool"):
+			b = ContainerBackend(
+				source_repo="/repo", pool_dir="/pool",
+				container_config=cc, config=config,
+			)
+		mock_env.return_value = {"PATH": "/usr/bin"}
+		with patch.dict("os.environ", {}, clear=True):
+			import os
+			os.environ.pop("CLAUDE_CONFIG_DIR", None)
+			b._build_docker_command("w1", "/host/ws", ["echo"])
+
+		mock_env.assert_called_once_with(config)
 
 	def test_build_docker_command_skips_claude_config_when_empty(self) -> None:
 		"""No claude config volume when claude_config_dir is empty and env unset."""

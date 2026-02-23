@@ -836,6 +836,7 @@ class ContinuousController:
 				max_clones=num_workers + 1,
 				base_branch=self.config.target.branch,
 				max_output_mb=self.config.backend.max_output_mb,
+				config=self.config,
 			)
 			await backend.initialize(
 				warm_count=self.config.scheduler.parallel.warm_clones,
@@ -852,6 +853,7 @@ class ContinuousController:
 				pool_dir=pool_dir,
 				max_clones=num_workers + 1,
 				base_branch=self.config.target.branch,
+				config=self.config,
 			)
 			await backend.initialize(
 				warm_count=self.config.scheduler.parallel.warm_clones,
@@ -2435,7 +2437,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				stdin=asyncio.subprocess.PIPE,
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.PIPE,
-				env=claude_subprocess_env(),
+				env=claude_subprocess_env(self.config),
 				cwd=str(self.config.target.resolved_path),
 			)
 			stdout, _ = await asyncio.wait_for(
