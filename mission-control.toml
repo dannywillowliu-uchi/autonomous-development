@@ -2,7 +2,7 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = "Improve autonomous development capabilities"
+objective = "Improve the system's ability to autonomously orchestrate agents toward a north star objective with higher quality outcomes"
 
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
@@ -25,9 +25,9 @@ max_per_session_usd = 10.0
 max_per_run_usd = 200.0
 
 [scheduler.parallel]
-num_workers = 2
+num_workers = 8
 pool_dir = "/Users/dannyliu/personal_projects/.mc-pool-ads"
-warm_clones = 2
+warm_clones = 4
 
 [rounds]
 max_rounds = 20

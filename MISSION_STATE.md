@@ -1,14 +1,25 @@
 # Mission State
-Objective: Implement the top-priority improvements discovered via codebase analysis:
+Objective: Enable parallel worker dispatch within epochs: wire continuous_controller dispatch loop to concurrently spawn workers on independent units (same topological layer, no file overlap), gated by workspace pool capacity and circuit breakers
 
-1. DEPENDENCY-AWARE DISPATCH: The dispatch loop in continuous_controller.py dispatches all units in parallel without checking depends_on. Modify the dispatch logic to respect dependency ordering -- units with unresolved dependencies must wait until their blockers complete. Add tests.
+## Completed
+- [x] d0a742f4 (2026-02-23T03:57:39.198603+00:00) -- Added available_slots property to WorkspacePool returning max_clones minus in-use count, with test c (files: src/mission_control/workspace.py, tests/test_workspace.py)
+- [x] 6ef550cd (2026-02-23T03:59:30.773057+00:00) -- Added get_summary() method to CircuitBreakerManager that returns counts per circuit breaker state: { (files: src/mission_control/circuit_breaker.py, tests/test_circuit_breaker.py)
+- [x] 2c05f680 (2026-02-23T04:05:59.118908+00:00) -- Refactored _dispatch_loop to layer-by-layer concurrent dispatch with asyncio.gather barriers between (files: src/mission_control/continuous_controller.py, tests/test_continuous_controller.py)
+- [x] c3b20faa (2026-02-23T04:07:35.250964+00:00) -- Added 4 test classes (11 tests) to test_continuous_controller.py: TestLayerOrderedDispatch (layer-0  (files: tests/test_continuous_controller.py)
+- [x] c850cf46 (2026-02-23T04:08:25.410397+00:00) -- Added available_capacity() method to WorkerBackend ABC (default 999_999), LocalBackend and Container (files: src/mission_control/backends/base.py, src/mission_control/backends/local.py, src/mission_control/backends/container.py, tests/test_backends.py)
 
-2. SMOKE-TEST VERIFICATION BEFORE MERGE: GreenBranchManager.merge_unit() merges directly to mc/green without verification. Add a lightweight smoke-test step (run the verification command) BEFORE merging to mc/green. Only merge if verification passes. Add tests.
+## Files Modified
+src/mission_control/backends/base.py, src/mission_control/backends/container.py, src/mission_control/backends/local.py, src/mission_control/circuit_breaker.py, src/mission_control/continuous_controller.py, src/mission_control/workspace.py, tests/test_backends.py, tests/test_circuit_breaker.py, tests/test_continuous_controller.py, tests/test_workspace.py
 
-3. SANDBOX TOOL SYNTHESIS: tool_synthesis.py writes arbitrary Python scripts from worker output directly to disk with no validation. Add content validation (no imports of dangerous modules, no file system access outside project), and restrict execution to a sandboxed subprocess. Add tests.
-
-Each feature: implement, add tests, ensure all existing tests pass.
+## System Health
+Degradation level: FULL_CAPACITY
 
 ## Remaining
 The planner should focus on what hasn't been done yet.
 Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
+
+## Changelog
+- 2026-02-23T03:57:39.198603+00:00 | d0a742f4 merged (commit: 9559a4e) -- Added available_slots property to WorkspacePool returning max_clones minus in-us
+- 2026-02-23T03:59:30.773057+00:00 | 6ef550cd merged (commit: a598e7a) -- Added get_summary() method to CircuitBreakerManager that returns counts per circ
+- 2026-02-23T04:05:59.118908+00:00 | 2c05f680 merged (commit: abd75f3) -- Refactored _dispatch_loop to layer-by-layer concurrent dispatch with asyncio.gat
+- 2026-02-23T04:07:35.250964+00:00 | c3b20faa merged (commit: e325558) -- Added 4 test classes (11 tests) to test_continuous_controller.py: TestLayerOrder
