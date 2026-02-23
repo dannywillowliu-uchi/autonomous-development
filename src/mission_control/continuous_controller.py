@@ -288,13 +288,10 @@ class ContinuousController:
 				},
 			)
 		try:
-			self.db.conn.execute(
-				"UPDATE missions SET degradation_level = ? WHERE status = 'running'",
-				(transition.to_level.name,),
-			)
-			self.db.conn.commit()
-		except Exception as exc:
-			logger.debug("Failed to persist degradation level: %s", exc)
+			loop = asyncio.get_running_loop()
+			loop.create_task(self.db.locked_call("update_degradation_level", transition.to_level.name))
+		except RuntimeError:
+			self.db.update_degradation_level(transition.to_level.name)
 
 	def _log_unit_event(
 		self,
@@ -393,19 +390,12 @@ class ContinuousController:
 		# Clean up orphaned work units from previously killed missions.
 		# When a mission is killed, units with status='running' are never
 		# updated. New missions see them as in-flight and defer everything.
-		try:
-			orphaned = self.db.conn.execute(
-				"UPDATE work_units SET status='failed' "
-				"WHERE status='running' OR status='pending'",
+		orphaned_count = await self.db.locked_call("reset_orphaned_units")
+		if orphaned_count:
+			logger.info(
+				"Cleaned up %d orphaned work units from prior missions",
+				orphaned_count,
 			)
-			if orphaned.rowcount:
-				self.db.conn.commit()
-				logger.info(
-					"Cleaned up %d orphaned work units from prior missions",
-					orphaned.rowcount,
-				)
-		except Exception as exc:
-			logger.warning("Failed to clean orphaned work units: %s", exc)
 
 		# Generate initial MISSION_STATE.md with objective and empty sections
 		try:
@@ -944,24 +934,18 @@ class ContinuousController:
 			enable_recovery=hb.enable_recovery,
 		)
 
-	def _get_locked_files(self) -> dict[str, list[str]]:
+	async def _get_locked_files(self) -> dict[str, list[str]]:
 		"""Return files locked by running units and already merged.
 
 		Keys are file paths, values are lists of reasons (e.g. "in-flight: Build API").
 		"""
 		locked: dict[str, list[str]] = {}
 		# In-flight files
-		try:
-			rows = self.db.conn.execute(
-				"SELECT * FROM work_units WHERE status='running'",
-			).fetchall()
-			for r in rows:
-				unit = Database._row_to_work_unit(r)
-				files = _parse_files_hint(unit.files_hint)
-				for f in files:
-					locked.setdefault(f, []).append(f"in-flight: {unit.title}")
-		except Exception as exc:
-			logger.warning("Could not query running units for locked files: %s", exc)
+		running_units = await self.db.locked_call("get_running_units")
+		for ru in running_units:
+			files = _parse_files_hint(ru.files_hint)
+			for f in files:
+				locked.setdefault(f, []).append(f"in-flight: {ru.title}")
 		# Merged files
 		for f in self._merged_files:
 			locked.setdefault(f, []).append("already merged")
@@ -980,20 +964,12 @@ class ContinuousController:
 		# Drop if all of this unit's files are already covered by merged work
 		return unit_files <= self._merged_files
 
-	def _check_in_flight_overlap(self, unit: WorkUnit) -> bool:
+	async def _check_in_flight_overlap(self, unit: WorkUnit) -> bool:
 		"""Check if a unit overlaps with any currently running units.
 
 		Returns True if the unit should be deferred (overlap detected).
 		"""
-		try:
-			rows = self.db.conn.execute(
-				"SELECT * FROM work_units WHERE status='running' AND id != ?",
-				(unit.id,),
-			).fetchall()
-			running_units = [Database._row_to_work_unit(r) for r in rows]
-		except Exception as exc:
-			logger.warning("Could not query running units for overlap check: %s", exc)
-			return False
+		running_units = await self.db.locked_call("get_running_units", unit.id)
 
 		unit_files = _parse_files_hint(unit.files_hint)
 
@@ -1039,7 +1015,7 @@ class ContinuousController:
 			if not self._check_dependencies_met(unit):
 				still_deferred.append((unit, epoch, mission_ref))
 				continue
-			if self._check_in_flight_overlap(unit):
+			if await self._check_in_flight_overlap(unit):
 				still_deferred.append((unit, epoch, mission_ref))
 				continue
 
@@ -1161,7 +1137,7 @@ class ContinuousController:
 			feedback_context = build_planner_context(self.db, mission.id)
 
 			# Gather locked files for the planner
-			locked_files = self._get_locked_files()
+			locked_files = await self._get_locked_files()
 
 			# Compute causal risk table for planner
 			try:
@@ -1399,7 +1375,7 @@ class ContinuousController:
 						continue
 
 					# Cross-epoch overlap check: defer if overlapping with in-flight work
-					if self._check_in_flight_overlap(unit):
+					if await self._check_in_flight_overlap(unit):
 						logger.warning(
 							"Deferring unit %s: overlaps with in-flight work",
 							unit.id[:12],
@@ -2801,25 +2777,18 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 
 			# Compute overlap warnings from other running units
 			overlap_warnings = ""
-			try:
-				rows = self.db.conn.execute(
-					"SELECT * FROM work_units WHERE status='running' AND id != ?",
-					(unit.id,),
-				).fetchall()
-				running_units = [Database._row_to_work_unit(r) for r in rows]
-				current_files = _parse_files_hint(unit.files_hint)
-				if current_files:
-					conflicts: list[str] = []
-					for other in running_units:
-						other_files = _parse_files_hint(other.files_hint)
-						overlap = current_files & other_files
-						if overlap:
-							for f in sorted(overlap):
-								conflicts.append(f"- {f} (also targeted by unit {other.id[:8]}: {other.title})")
-					if conflicts:
-						overlap_warnings = "\n".join(conflicts)
-			except Exception as exc:
-				logger.warning("Could not compute overlap warnings: %s", exc)
+			running_units = await self.db.locked_call("get_running_units", unit.id)
+			current_files = _parse_files_hint(unit.files_hint)
+			if current_files:
+				conflicts: list[str] = []
+				for other in running_units:
+					other_files = _parse_files_hint(other.files_hint)
+					overlap = current_files & other_files
+					if overlap:
+						for f in sorted(overlap):
+							conflicts.append(f"- {f} (also targeted by unit {other.id[:8]}: {other.title})")
+				if conflicts:
+					overlap_warnings = "\n".join(conflicts)
 
 			if self._is_cleanup_mission and not unit.specialist:
 				unit.specialist = "simplifier"

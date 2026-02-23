@@ -785,3 +785,69 @@ class TestDecompositionGrades:
 	def test_empty_grades(self, db: Database) -> None:
 		self._setup(db)
 		assert db.get_decomposition_grades_for_mission("m1") == []
+
+
+class TestUpdateDegradationLevel:
+	def test_updates_running_mission(self, db: Database) -> None:
+		db.insert_mission(Mission(id="m1", objective="Test", status="running"))
+		db.update_degradation_level("REDUCED")
+		row = db.conn.execute("SELECT degradation_level FROM missions WHERE id='m1'").fetchone()
+		assert row["degradation_level"] == "REDUCED"
+
+	def test_skips_non_running_missions(self, db: Database) -> None:
+		db.insert_mission(Mission(id="m1", objective="Test", status="completed"))
+		db.update_degradation_level("REDUCED")
+		row = db.conn.execute("SELECT degradation_level FROM missions WHERE id='m1'").fetchone()
+		assert row["degradation_level"] == "FULL_CAPACITY"
+
+
+class TestResetOrphanedUnits:
+	def _setup(self, db: Database) -> None:
+		db.insert_plan(Plan(id="p1", objective="test"))
+
+	def test_resets_running_and_pending(self, db: Database) -> None:
+		self._setup(db)
+		db.insert_work_unit(WorkUnit(id="a", plan_id="p1", status="running"))
+		db.insert_work_unit(WorkUnit(id="b", plan_id="p1", status="pending"))
+		db.insert_work_unit(WorkUnit(id="c", plan_id="p1", status="completed"))
+		count = db.reset_orphaned_units()
+		assert count == 2
+		assert db.get_work_unit("a").status == "failed"
+		assert db.get_work_unit("b").status == "failed"
+		assert db.get_work_unit("c").status == "completed"
+
+	def test_returns_zero_when_none(self, db: Database) -> None:
+		self._setup(db)
+		db.insert_work_unit(WorkUnit(id="a", plan_id="p1", status="completed"))
+		assert db.reset_orphaned_units() == 0
+
+
+class TestGetRunningUnits:
+	def _setup(self, db: Database) -> None:
+		db.insert_plan(Plan(id="p1", objective="test"))
+
+	def test_returns_running_units(self, db: Database) -> None:
+		self._setup(db)
+		db.insert_work_unit(WorkUnit(id="a", plan_id="p1", status="running", title="A"))
+		db.insert_work_unit(WorkUnit(id="b", plan_id="p1", status="running", title="B"))
+		db.insert_work_unit(WorkUnit(id="c", plan_id="p1", status="completed", title="C"))
+		units = db.get_running_units()
+		assert len(units) == 2
+		ids = {u.id for u in units}
+		assert ids == {"a", "b"}
+
+	def test_excludes_by_id(self, db: Database) -> None:
+		self._setup(db)
+		db.insert_work_unit(WorkUnit(id="a", plan_id="p1", status="running"))
+		db.insert_work_unit(WorkUnit(id="b", plan_id="p1", status="running"))
+		units = db.get_running_units(exclude_id="a")
+		assert len(units) == 1
+		assert units[0].id == "b"
+
+	def test_returns_work_unit_objects(self, db: Database) -> None:
+		self._setup(db)
+		db.insert_work_unit(WorkUnit(id="a", plan_id="p1", status="running", title="Task A"))
+		units = db.get_running_units()
+		assert len(units) == 1
+		assert units[0].title == "Task A"
+		assert isinstance(units[0], WorkUnit)

@@ -1346,6 +1346,37 @@ class Database:
 			speculation_parent_id=row["speculation_parent_id"] if "speculation_parent_id" in keys else "",
 		)
 
+	def update_degradation_level(self, level: str) -> None:
+		"""Update degradation_level for running missions."""
+		self.conn.execute(
+			"UPDATE missions SET degradation_level = ? WHERE status = 'running'",
+			(level,),
+		)
+		self.conn.commit()
+
+	def reset_orphaned_units(self) -> int:
+		"""Fail all running/pending work units (orphan cleanup). Returns count."""
+		cur = self.conn.execute(
+			"UPDATE work_units SET status='failed' "
+			"WHERE status='running' OR status='pending'",
+		)
+		if cur.rowcount:
+			self.conn.commit()
+		return cur.rowcount
+
+	def get_running_units(self, exclude_id: str = "") -> list[WorkUnit]:
+		"""Return all running work units, optionally excluding one by id."""
+		if exclude_id:
+			rows = self.conn.execute(
+				"SELECT * FROM work_units WHERE status='running' AND id != ?",
+				(exclude_id,),
+			).fetchall()
+		else:
+			rows = self.conn.execute(
+				"SELECT * FROM work_units WHERE status='running'",
+			).fetchall()
+		return [self._row_to_work_unit(r) for r in rows]
+
 	# -- Workers --
 
 	def insert_worker(self, worker: Worker) -> None:
