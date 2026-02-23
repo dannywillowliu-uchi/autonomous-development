@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from mission_control.config import MissionConfig
 from mission_control.db import Database
@@ -10,6 +11,13 @@ from mission_control.models import BacklogItem, Epoch, Handoff, Mission, Plan, W
 from mission_control.recursive_planner import RecursivePlanner
 
 log = logging.getLogger(__name__)
+
+
+def _parse_files_hint(files_hint: str) -> set[str]:
+	"""Parse comma-separated files_hint into a set of file paths."""
+	if not files_hint:
+		return set()
+	return {f.strip() for f in files_hint.split(",") if f.strip()}
 
 
 class ContinuousPlanner:
@@ -31,6 +39,9 @@ class ContinuousPlanner:
 		self._epoch_count: int = 0
 		self._unit_to_backlog: dict[str, str] = {}
 		self._backlog_items: list[BacklogItem] = []
+		self._backlog_queued_at: dict[str, float] = {}
+		self._merged_files: set[str] = set()
+		self._stale_context: list[str] = []
 
 	def set_causal_context(self, risks: str) -> None:
 		"""Set causal risk factors, delegating to the inner planner."""
@@ -51,6 +62,10 @@ class ContinuousPlanner:
 		"""Store backlog items as context for planning prompts."""
 		self._backlog_items = list(items)
 
+	def set_merged_files(self, files: set[str]) -> None:
+		"""Update the set of files already covered by merged units."""
+		self._merged_files = set(files)
+
 	@property
 	def backlog_size(self) -> int:
 		return len(self._backlog)
@@ -58,6 +73,57 @@ class ContinuousPlanner:
 	def get_backlog_mapping(self) -> dict[str, str]:
 		"""Return a copy of the unit-to-backlog-item mapping."""
 		return dict(self._unit_to_backlog)
+
+	def _evict_stale_units(self) -> None:
+		"""Remove stale units from the backlog based on age and file divergence.
+
+		Units are evicted if:
+		- They are older than backlog_max_age_seconds (time-based staleness)
+		- More than 50% of their files_hint overlaps with already-merged files
+
+		Evicted unit descriptions are collected into _stale_context so the next
+		replan can regenerate updated versions.
+		"""
+		if not self._backlog:
+			return
+
+		now = time.monotonic()
+		max_age = self._config.continuous.backlog_max_age_seconds
+		surviving: list[WorkUnit] = []
+
+		for unit in self._backlog:
+			queued_at = self._backlog_queued_at.get(unit.id)
+
+			# Time-based eviction
+			if queued_at is not None and (now - queued_at) > max_age:
+				log.warning(
+					"Evicting stale unit %s (%s): age %.0fs exceeds threshold %ds",
+					unit.id, unit.title, now - queued_at, max_age,
+				)
+				self._stale_context.append(unit.description or unit.title)
+				self._backlog_queued_at.pop(unit.id, None)
+				continue
+
+			# File divergence eviction
+			if self._merged_files:
+				unit_files = _parse_files_hint(unit.files_hint)
+				if unit_files:
+					overlap = unit_files & self._merged_files
+					if len(overlap) > len(unit_files) * 0.5:
+						log.warning(
+							"Evicting diverged unit %s (%s): %d/%d files already merged",
+							unit.id, unit.title, len(overlap), len(unit_files),
+						)
+						self._stale_context.append(unit.description or unit.title)
+						self._backlog_queued_at.pop(unit.id, None)
+						continue
+
+			surviving.append(unit)
+
+		evicted_count = len(self._backlog) - len(surviving)
+		if evicted_count:
+			log.info("Evicted %d stale units from backlog", evicted_count)
+		self._backlog = surviving
 
 	async def get_next_units(
 		self,
@@ -83,6 +149,9 @@ class ContinuousPlanner:
 		Returns:
 			(plan, units, epoch) -- the plan, selected work units, and the epoch.
 		"""
+		# Evict stale units before any serving
+		self._evict_stale_units()
+
 		min_size = self._config.continuous.backlog_min_size
 
 		# Merge decomposition feedback into the feedback context
@@ -177,6 +246,16 @@ class ContinuousPlanner:
 			)
 			enriched_context = (enriched_context + items_section) if enriched_context else items_section
 
+		# Add stale context from evicted units so planner can regenerate
+		if self._stale_context:
+			stale_section = (
+				"\nPreviously planned units were evicted as stale "
+				"(codebase has diverged). Consider regenerating updated versions:\n"
+				+ "\n".join(f"- {desc}" for desc in self._stale_context)
+			)
+			enriched_context = (enriched_context + stale_section) if enriched_context else stale_section
+			self._stale_context = []
+
 		plan, root_node = await self._inner.plan_round(
 			objective=mission.objective,
 			snapshot_hash="",  # continuous mode doesn't use snapshot hash
@@ -205,7 +284,11 @@ class ContinuousPlanner:
 		# Split: serve up to max_units, rest goes to backlog
 		serve_count = min(max_units, len(units))
 		serve_units = units[:serve_count]
-		self._backlog.extend(units[serve_count:])
+		backlogged = units[serve_count:]
+		now = time.monotonic()
+		for unit in backlogged:
+			self._backlog_queued_at[unit.id] = now
+		self._backlog.extend(backlogged)
 
 		epoch.units_planned = len(units)
 

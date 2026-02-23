@@ -146,6 +146,7 @@ class ContinuousConfig:
 	max_objective_checks: int = 2  # max verification attempts before accepting
 	cleanup_enabled: bool = True  # run periodic cleanup missions
 	cleanup_interval: int = 3  # run cleanup mission every N missions
+	backlog_max_age_seconds: int = 1800
 	circuit_breaker_enabled: bool = True
 	circuit_breaker_max_failures: int = 3
 	circuit_breaker_cooldown_seconds: int = 120
@@ -605,6 +606,8 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 		cc.verify_before_merge = bool(data["verify_before_merge"])
 	if "timeout_multiplier" in data:
 		cc.timeout_multiplier = float(data["timeout_multiplier"])
+	if "backlog_max_age_seconds" in data:
+		cc.backlog_max_age_seconds = int(data["backlog_max_age_seconds"])
 	for key in (
 		"retry_base_delay_seconds", "retry_max_delay_seconds", "chain_max_depth",
 		"max_consecutive_failures", "failure_backoff_seconds",
