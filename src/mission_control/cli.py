@@ -1209,6 +1209,15 @@ def main(argv: list[str] | None = None) -> int:
 		parser.print_help()
 		return 0
 
+	if hasattr(args, "config"):
+		from mission_control.path_security import validate_config_path
+
+		try:
+			validate_config_path(args.config, [Path.home()])
+		except ValueError as e:
+			print(f"Error: {e}")
+			return 1
+
 	handler = COMMANDS.get(args.command)
 	if handler is None:
 		print(f"Unknown command: {args.command}")

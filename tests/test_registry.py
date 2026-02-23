@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from mission_control.registry import ProjectRegistry
@@ -10,7 +12,7 @@ from mission_control.registry import ProjectRegistry
 @pytest.fixture
 def registry(tmp_path):
 	db_path = tmp_path / "test_registry.db"
-	reg = ProjectRegistry(db_path=db_path)
+	reg = ProjectRegistry(db_path=db_path, allowed_bases=[tmp_path, Path.home()])
 	yield reg
 	reg.close()
 
@@ -105,6 +107,20 @@ class TestProjectRegistry:
 		status = registry.get_project_status("test")
 		assert status is not None
 		assert status.mission_status == "idle"
+
+	def test_register_rejects_traversal_path(self, registry):
+		with pytest.raises(ValueError, match="path outside allowed directories"):
+			registry.register(
+				name="evil",
+				config_path="../../../../etc/passwd",
+			)
+
+	def test_register_rejects_null_byte_path(self, registry):
+		with pytest.raises(ValueError, match="invalid path"):
+			registry.register(
+				name="evil",
+				config_path="/home/user/config\x00.toml",
+			)
 
 	def test_get_project_status_with_mission(self, registry, sample_config, tmp_path):
 		# Create a project DB with a mission

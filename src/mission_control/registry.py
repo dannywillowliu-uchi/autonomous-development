@@ -55,11 +55,16 @@ class ProjectRegistry:
 	Stores data in ~/.mission-control/registry.db.
 	"""
 
-	def __init__(self, db_path: str | Path | None = None) -> None:
+	def __init__(
+		self,
+		db_path: str | Path | None = None,
+		allowed_bases: list[Path] | None = None,
+	) -> None:
 		if db_path is None:
 			db_path = DEFAULT_REGISTRY_DB
 		self._db_path = Path(db_path)
 		self._db_path.parent.mkdir(parents=True, exist_ok=True)
+		self._allowed_bases = allowed_bases if allowed_bases is not None else [Path.home()]
 		self.conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
 		self.conn.row_factory = sqlite3.Row
 		self.conn.execute("PRAGMA journal_mode=WAL")
@@ -77,6 +82,9 @@ class ProjectRegistry:
 		description: str = "",
 	) -> ProjectInfo:
 		"""Register a project. Derives db_path from config_path if not provided."""
+		from mission_control.path_security import validate_config_path
+
+		validate_config_path(config_path, self._allowed_bases)
 		config = Path(config_path).resolve()
 		if not db_path:
 			db_path = str(config.parent / "mission-control.db")

@@ -41,6 +41,24 @@ class TestArgParsing:
 		assert result == 0
 
 
+class TestConfigPathValidation:
+	def test_traversal_path_rejected(self) -> None:
+		result = main(["status", "--config", "../../../../etc/passwd"])
+		assert result == 1
+
+	def test_null_byte_path_rejected(self) -> None:
+		result = main(["status", "--config", "/home/user/config\x00.toml"])
+		assert result == 1
+
+	def test_traversal_in_register_rejected(self) -> None:
+		result = main(["register", "--config", "../../../../etc/passwd"])
+		assert result == 1
+
+	def test_traversal_in_mission_rejected(self) -> None:
+		result = main(["mission", "--config", "../../../../etc/passwd"])
+		assert result == 1
+
+
 class TestCmdInit:
 	def test_creates_config(self, tmp_path: Path) -> None:
 		parser = build_parser()
