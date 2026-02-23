@@ -156,6 +156,29 @@ class TestWorkspacePool:
 		await pool.cleanup()
 
 
+	async def test_available_slots(
+		self, source_repo: Path, pool_dir: Path,
+	) -> None:
+		"""available_slots returns max_clones minus in-use count."""
+		pool = WorkspacePool(source_repo, pool_dir, max_clones=4)
+		await pool.initialize()
+
+		assert pool.available_slots == 4
+
+		w1 = await pool.acquire()
+		assert w1 is not None
+		assert pool.available_slots == 3
+
+		w2 = await pool.acquire()
+		assert w2 is not None
+		assert pool.available_slots == 2
+
+		await pool.release(w1)
+		assert pool.available_slots == 3
+
+		await pool.cleanup()
+
+
 class TestWorkspacePoolConcurrency:
 	"""Integration tests for concurrent workspace access."""
 

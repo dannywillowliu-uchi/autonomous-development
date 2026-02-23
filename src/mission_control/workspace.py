@@ -37,6 +37,11 @@ class WorkspacePool:
 		"""Total number of clones (available + in use)."""
 		return len(self._available) + len(self._in_use)
 
+	@property
+	def available_slots(self) -> int:
+		"""Number of pool slots not currently in use (including ones not yet created)."""
+		return self.max_clones - len(self._in_use)
+
 	async def initialize(self, warm_count: int = 0) -> None:
 		"""Create pool directory and optionally pre-warm clones."""
 		self.pool_dir.mkdir(parents=True, exist_ok=True)
