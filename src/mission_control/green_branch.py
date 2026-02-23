@@ -299,16 +299,7 @@ class GreenBranchManager:
 							)
 						hitl_decision = "large_merge_approved"
 
-				# Commit MISSION_STATE.md into mc/green if it exists
-				state_path = Path(self.config.target.resolved_path) / "MISSION_STATE.md"
-				if state_path.exists():
-					try:
-						content = state_path.read_text()
-						await self.commit_state_file(content)
-					except Exception as exc:
-						logger.warning("Failed to commit MISSION_STATE.md: %s", exc)
-
-				sync_ok = await self._sync_to_source()
+					sync_ok = await self._sync_to_source()
 
 				# Auto-push if configured
 				if gb.auto_push:
@@ -595,19 +586,6 @@ class GreenBranchManager:
 							total += int(digits)
 				return total
 		return 0
-
-	async def commit_state_file(self, content: str) -> bool:
-		"""Write MISSION_STATE.md to the green branch workspace, stage, and commit it."""
-		workspace_path = Path(self.workspace) / "MISSION_STATE.md"
-		workspace_path.write_text(content)
-		await self._run_git("add", "MISSION_STATE.md")
-		ok, output = await self._run_git("commit", "-m", "Update MISSION_STATE.md")
-		if not ok:
-			if "nothing to commit" in output:
-				return True
-			logger.warning("Failed to commit MISSION_STATE.md: %s", output)
-			return False
-		return True
 
 	async def _sync_to_source(self) -> bool:
 		"""Sync mc/green and mc/working refs from workspace clone to source repo.
