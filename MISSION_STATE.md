@@ -55,15 +55,15 @@ Fix:
 - [x] 1406b949 (2026-02-23T05:49:08.060148+00:00) -- Consolidated test_ambition_scoring.py into strategist test files. Moved TestEvaluateAmbition, TestZF (files: tests/test_ambition_scoring.py, tests/test_strategist.py, tests/test_strategist_integration.py)
 - [x] 4de7bee9 (2026-02-23T05:50:59.554887+00:00) -- Merged 13 tests (TestTopologicalLayers, TestPlanNodeMultiParent, TestOverlapWithLayers) from test_da (files: tests/test_overlap.py, tests/test_dag_planner.py)
 - [x] 0fa9364a (2026-02-23T05:52:45.416911+00:00) -- Merged TestStrategicContextTable and TestSignalCRUD into test_db.py, absorbed TestMissionNewFields i (files: tests/test_db.py, tests/test_strategic_context_db.py, tests/test_signals.py)
+- [x] 036ba2a1 (2026-02-23T05:58:54.375332+00:00) -- Merged TestWeightTuples and TestDefaultLimits from test_constants.py into test_models.py, and TestEx (files: tests/test_constants.py, tests/test_json_utils.py, tests/test_models.py, tests/test_session.py)
 
 ## In-Flight (DO NOT duplicate)
 - [ ] b4843e16 -- Merge test_event_stream.py into test_event_sourcing.py and test_reviewer.py + test_grading.py into test_evaluator.py (files: tests/test_event_stream.py,tests/test_event_sourcing.py,tests/test_reviewer.py,tests/test_grading.py,tests/test_evaluator.py)
 - [ ] d9fdb434 -- Wire diff_reviewer scores into build_planner_context() (files: src/mission_control/planner_context.py,tests/test_planner_context.py)
-- [ ] 036ba2a1 -- Merge test_constants.py into test_models.py and test_json_utils.py into test_session.py (files: tests/test_constants.py,tests/test_models.py,tests/test_json_utils.py,tests/test_session.py)
 - [ ] f1dfeff6 -- Fix dir() check bug and wire insert_experience() in continuous_controller (files: src/mission_control/continuous_controller.py,tests/test_continuous_controller.py)
 
 ## Files Modified
-src/mission_control/circuit_breaker.py, src/mission_control/continuous_controller.py, src/mission_control/continuous_planner.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/recursive_planner.py, tests/test_ambition_scoring.py, tests/test_circuit_breaker.py, tests/test_continuous_planner.py, tests/test_dag_planner.py, tests/test_db.py, tests/test_fixup.py, tests/test_overlap.py, tests/test_recursive_planner.py, tests/test_signals.py, tests/test_strategic_context_db.py, tests/test_strategist.py, tests/test_strategist_integration.py, tests/test_zfc.py
+src/mission_control/circuit_breaker.py, src/mission_control/continuous_controller.py, src/mission_control/continuous_planner.py, src/mission_control/db.py, src/mission_control/models.py, src/mission_control/recursive_planner.py, tests/test_ambition_scoring.py, tests/test_circuit_breaker.py, tests/test_constants.py, tests/test_continuous_planner.py, tests/test_dag_planner.py, tests/test_db.py, tests/test_fixup.py, tests/test_json_utils.py, tests/test_models.py, tests/test_overlap.py, tests/test_recursive_planner.py, tests/test_session.py, tests/test_signals.py, tests/test_strategic_context_db.py, tests/test_strategist.py, tests/test_strategist_integration.py, tests/test_zfc.py
 
 ## System Health
 Degradation level: FULL_CAPACITY
@@ -79,3 +79,4 @@ Do NOT re-target files in the 'Files Modified' list unless fixing a failure.
 - 2026-02-23T05:46:51.162355+00:00 | ab961ee5 merged (commit: 3b6c598) -- Removed duplicate specialist field from WorkUnit dataclass in models.py. The fir
 - 2026-02-23T05:48:11.309034+00:00 | cd8a6db3 merged (commit: cca704e) -- Added set_causal_context() public API to RecursivePlanner and ContinuousPlanner,
 - 2026-02-23T05:49:08.060148+00:00 | 1406b949 merged (commit: d065112) -- Consolidated test_ambition_scoring.py into strategist test files. Moved TestEval
+- 2026-02-23T05:50:59.554887+00:00 | 4de7bee9 merged (commit: 48d2e2b) -- Merged 13 tests (TestTopologicalLayers, TestPlanNodeMultiParent, TestOverlapWith
