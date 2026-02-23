@@ -15,9 +15,12 @@ from mission_control.models import Mission
 
 @pytest.fixture
 def registry(tmp_path):
+	from pathlib import Path
+
 	from mission_control.registry import ProjectRegistry
+
 	db_path = tmp_path / "test_registry.db"
-	reg = ProjectRegistry(db_path=db_path)
+	reg = ProjectRegistry(db_path=db_path, allowed_bases=[tmp_path, Path.home()])
 	yield reg
 	reg.close()
 
@@ -149,6 +152,26 @@ class TestMCPToolHandlers:
 			registry,
 		)
 		assert "error" in result
+
+	def test_register_rejects_traversal_path(self, registry):
+		from mission_control.mcp_server import _dispatch
+		result = _dispatch(
+			"register_project",
+			{"config_path": "../../../../etc/passwd", "name": "evil"},
+			registry,
+		)
+		assert "error" in result
+		assert "path outside allowed directories" in result["error"]
+
+	def test_register_rejects_null_byte_path(self, registry):
+		from mission_control.mcp_server import _dispatch
+		result = _dispatch(
+			"register_project",
+			{"config_path": "/home/user/config\x00.toml", "name": "evil"},
+			registry,
+		)
+		assert "error" in result
+		assert "invalid path" in result["error"]
 
 	def test_get_round_details_no_project(self, registry):
 		from mission_control.mcp_server import _dispatch

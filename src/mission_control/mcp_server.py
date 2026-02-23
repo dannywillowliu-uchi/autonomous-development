@@ -336,6 +336,12 @@ def _tool_register_project(registry: ProjectRegistry, args: dict) -> dict:
 	name = args.get("name")
 	description = args.get("description", "")
 
+	try:
+		from mission_control.path_security import validate_config_path
+		validate_config_path(config_path, registry._allowed_bases)
+	except ValueError as e:
+		return {"error": str(e)}
+
 	if not name:
 		try:
 			from mission_control.config import load_config
