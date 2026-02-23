@@ -1133,9 +1133,6 @@ class TestContainerBackend:
 
 	def test_build_docker_command_env_vars(self, backend: ContainerBackend, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""docker run passes allowlisted env vars, not secrets."""
-		import mission_control.config as config_mod
-
-		monkeypatch.setattr(config_mod, "_extra_env_keys", set())
 		monkeypatch.setenv("HOME", "/home/test")
 		monkeypatch.setenv("PATH", "/usr/bin")
 		monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
