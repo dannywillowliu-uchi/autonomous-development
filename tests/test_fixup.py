@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from mission_control.config import (
 	GreenBranchConfig,
@@ -548,3 +548,89 @@ class TestRunFixupSession:
 		assert "text" in cmd
 		assert "-p" in cmd
 		assert "fix the bug" in cmd
+
+
+class TestZFCFixupPrompts:
+	def _zfc_manager(self, zfc_fixup: bool = False) -> GreenBranchManager:
+		mgr = _manager()
+		mgr.config.zfc.zfc_fixup_prompts = zfc_fixup
+		mgr.config.zfc.llm_timeout = 5
+		return mgr
+
+	async def test_zfc_disabled_uses_static_prompts(self) -> None:
+		"""toggle off -> FIXUP_PROMPTS used."""
+		mgr = self._zfc_manager(zfc_fixup=False)
+
+		mgr._run_fixup_candidate = AsyncMock(return_value=MagicMock(
+			verification_passed=False, branch="mc/fixup-0",
+		))
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+
+		with patch.object(mgr, "_zfc_generate_fixup_strategies") as mock_zfc:
+			await mgr.run_fixup("test failure")
+			mock_zfc.assert_not_called()
+
+	async def test_zfc_enabled_calls_llm(self) -> None:
+		"""toggle on -> _zfc_generate_fixup_strategies called."""
+		mgr = self._zfc_manager(zfc_fixup=True)
+
+		mgr._run_fixup_candidate = AsyncMock(return_value=MagicMock(
+			verification_passed=False, branch="mc/fixup-0",
+		))
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+
+		with patch.object(
+			mgr, "_zfc_generate_fixup_strategies",
+			return_value=["Fix A", "Fix B", "Fix C"],
+		) as mock_zfc:
+			await mgr.run_fixup("test failure")
+			mock_zfc.assert_called_once_with("test failure", 3)
+
+	async def test_zfc_llm_failure_falls_back(self) -> None:
+		"""LLM returns None -> static prompts used as fallback."""
+		mgr = self._zfc_manager(zfc_fixup=True)
+
+		mgr._run_fixup_candidate = AsyncMock(return_value=MagicMock(
+			verification_passed=False, branch="mc/fixup-0",
+		))
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+
+		with patch.object(mgr, "_zfc_generate_fixup_strategies", return_value=None):
+			result = await mgr.run_fixup("test failure")
+			assert result is not None
+
+	async def test_zfc_parse_strategies_output(self) -> None:
+		"""Correct FIXUP_STRATEGIES marker is parsed."""
+		mgr = self._zfc_manager(zfc_fixup=True)
+
+		output = (
+			'Some reasoning about fixes.\n'
+			'FIXUP_STRATEGIES:{"strategies": ["Fix the import", "Update the mock", "Rewrite test"]}'
+		)
+
+		mock_proc = AsyncMock()
+		mock_proc.communicate.return_value = (output.encode(), b"")
+		mock_proc.returncode = 0
+
+		with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+			strategies = await mgr._zfc_generate_fixup_strategies("test failure", 3)
+
+		assert strategies is not None
+		assert len(strategies) == 3
+		assert "Fix the import" in strategies[0]
+
+	async def test_zfc_timeout_returns_none(self) -> None:
+		"""Subprocess timeout -> returns None."""
+		mgr = self._zfc_manager(zfc_fixup=True)
+		mgr.config.zfc.llm_timeout = 0
+
+		mock_proc = AsyncMock()
+		mock_proc.communicate.side_effect = TimeoutError()
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+
+		with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+			with patch("asyncio.wait_for", side_effect=TimeoutError()):
+				strategies = await mgr._zfc_generate_fixup_strategies("test failure", 3)
+
+		assert strategies is None
