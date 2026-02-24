@@ -195,7 +195,7 @@ class TestMissionChainLoop:
 
 		mock_controller_cls = MagicMock()
 
-		def make_controller(config: object, db: object) -> MagicMock:
+		def make_controller(config: object, db: object, **kwargs: object) -> MagicMock:
 			controller = MagicMock()
 			res = next(result_iter)
 			call_log.append(res)
@@ -301,7 +301,7 @@ class TestMissionChainLoop:
 		mock_controller_cls = MagicMock()
 		call_count = [0]
 
-		def make_controller(cfg: object, db: object) -> MagicMock:
+		def make_controller(cfg: object, db: object, **kwargs: object) -> MagicMock:
 			objectives_seen.append(config.target.objective)
 			controller = MagicMock()
 			call_count[0] += 1

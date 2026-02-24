@@ -269,6 +269,7 @@ class Mission:
 	ambition_score: int = 0
 	next_objective: str = ""
 	proposed_by_strategist: bool = False
+	chain_id: str = ""
 
 
 @dataclass

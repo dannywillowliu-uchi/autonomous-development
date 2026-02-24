@@ -650,6 +650,7 @@ class Database:
 		self._migrate_specialist_column()
 		self._migrate_degradation_level_column()
 		self._migrate_speculation_columns()
+		self._migrate_chain_id_column()
 
 	def _migrate_degradation_level_column(self) -> None:
 		"""Add degradation_level column to missions table (idempotent)."""
@@ -831,6 +832,20 @@ class Database:
 				else:
 					logger.warning("Migration failed for %s.%s: %s", table, column, exc)
 					raise
+
+	def _migrate_chain_id_column(self) -> None:
+		"""Add chain_id column to missions table (idempotent)."""
+		try:
+			self.conn.execute(
+				"ALTER TABLE missions ADD COLUMN chain_id TEXT NOT NULL DEFAULT ''",
+			)
+			logger.debug("Migration: added column missions.chain_id")
+		except sqlite3.OperationalError as exc:
+			if "duplicate column name" in str(exc):
+				pass
+			else:
+				logger.warning("Migration failed for missions.chain_id: %s", exc)
+				raise
 
 	def close(self) -> None:
 		logger.debug("Closing database connection")
@@ -1562,15 +1577,15 @@ class Database:
 			"""INSERT INTO missions
 			(id, objective, status, started_at, finished_at,
 			 total_rounds, total_cost_usd, final_score, stopped_reason,
-			 ambition_score, next_objective, proposed_by_strategist)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			 ambition_score, next_objective, proposed_by_strategist, chain_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				mission.id, mission.objective, mission.status,
 				mission.started_at, mission.finished_at,
 				mission.total_rounds, mission.total_cost_usd,
 				mission.final_score, mission.stopped_reason,
 				mission.ambition_score, mission.next_objective,
-				int(mission.proposed_by_strategist),
+				int(mission.proposed_by_strategist), mission.chain_id,
 			),
 		)
 		self.conn.commit()
@@ -1581,7 +1596,7 @@ class Database:
 			"""UPDATE missions SET
 			objective=?, status=?, started_at=?, finished_at=?,
 			total_rounds=?, total_cost_usd=?, final_score=?, stopped_reason=?,
-			ambition_score=?, next_objective=?, proposed_by_strategist=?
+			ambition_score=?, next_objective=?, proposed_by_strategist=?, chain_id=?
 			WHERE id=?""",
 			(
 				mission.objective, mission.status, mission.started_at,
@@ -1589,7 +1604,7 @@ class Database:
 				mission.total_cost_usd, mission.final_score,
 				mission.stopped_reason, mission.ambition_score,
 				mission.next_objective, int(mission.proposed_by_strategist),
-				mission.id,
+				mission.chain_id, mission.id,
 			),
 		)
 		self.conn.commit()
@@ -1611,6 +1626,14 @@ class Database:
 	def get_all_missions(self, limit: int = 20) -> list[Mission]:
 		rows = self.conn.execute(
 			"SELECT * FROM missions ORDER BY started_at DESC LIMIT ?", (limit,)
+		).fetchall()
+		return [self._row_to_mission(r) for r in rows]
+
+	def get_missions_for_chain(self, chain_id: str) -> list[Mission]:
+		"""Get all missions sharing a chain_id, ordered by started_at ascending."""
+		rows = self.conn.execute(
+			"SELECT * FROM missions WHERE chain_id = ? ORDER BY started_at ASC",
+			(chain_id,),
 		).fetchall()
 		return [self._row_to_mission(r) for r in rows]
 
@@ -1696,6 +1719,7 @@ class Database:
 			ambition_score=row["ambition_score"] if "ambition_score" in keys else 0,
 			next_objective=row["next_objective"] if "next_objective" in keys else "",
 			proposed_by_strategist=bool(row["proposed_by_strategist"]) if "proposed_by_strategist" in keys else False,
+			chain_id=row["chain_id"] if "chain_id" in keys else "",
 		)
 
 	# -- Rounds --

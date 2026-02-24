@@ -462,6 +462,51 @@ class TestDeriveWorkersFromPlan:
 		assert titles == {"Building API", "Writing tests"}
 
 
+class TestChainAggregation:
+	def test_provider_single_mission_no_chain(self) -> None:
+		"""Non-chained mission (chain_id='') works identically to before."""
+		db = _make_db()
+		_insert_mission(db, "m1", chain_id="")
+		_insert_plan(db, "plan1")
+		_insert_round(db, "m1", "r1", number=1, plan_id="plan1", objective_score=50.0)
+
+		provider = _make_provider(db)
+		snap = provider.refresh()
+		assert snap.mission is not None
+		assert snap.mission.id == "m1"
+		assert snap.score_history == [(1, 50.0)]
+
+	def test_provider_chain_aggregates_rounds(self) -> None:
+		"""Chained missions aggregate rounds across all chain members."""
+		db = _make_db()
+		_insert_mission(db, "m1", chain_id="chain-1", started_at="2025-01-01T00:00:00")
+		_insert_mission(db, "m2", chain_id="chain-1", started_at="2025-01-02T00:00:00")
+		_insert_plan(db, "plan1")
+		_insert_plan(db, "plan2")
+		_insert_round(db, "m1", "r1", number=1, plan_id="plan1", objective_score=30.0, cost_usd=0.50)
+		_insert_round(db, "m2", "r2", number=1, plan_id="plan2", objective_score=70.0, cost_usd=1.00)
+
+		provider = _make_provider(db)
+		snap = provider.refresh()
+		# m2 is latest mission, so it's the current mission
+		assert snap.mission is not None
+		assert snap.mission.id == "m2"
+		# Rounds renumbered sequentially: m1's round=1, m2's round=2
+		assert len(snap.score_history) == 2
+		assert snap.score_history[0] == (1, 30.0)
+		assert snap.score_history[1] == (2, 70.0)
+
+	def test_provider_chain_aggregates_cost(self) -> None:
+		"""Total cost sums across all chain missions."""
+		db = _make_db()
+		_insert_mission(db, "m1", chain_id="chain-1", total_cost_usd=1.50, started_at="2025-01-01T00:00:00")
+		_insert_mission(db, "m2", chain_id="chain-1", total_cost_usd=2.50, started_at="2025-01-02T00:00:00")
+
+		provider = _make_provider(db)
+		snap = provider.refresh()
+		assert snap.total_cost == 4.00
+
+
 class TestLiveUIPath:
 	def test_ui_path_uses_importlib_resources(self) -> None:
 		"""_UI_PATH resolves via importlib.resources, not __file__."""

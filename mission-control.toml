@@ -2,7 +2,7 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = "Improve the system's ability to autonomously orchestrate agents toward a north star objective with higher quality outcomes"
+objective = "Add browser automation capability so workers can validate web UIs after building them. Integrate Playwright MCP or Claude computer use so that: (1) workers can launch a browser and interact with built web apps, (2) verification can include visual/functional browser checks beyond unit tests, (3) the system catches issues that only manifest in a real browser. Add config options for browser verification, wire into worker prompts and verification pipeline."
 
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"

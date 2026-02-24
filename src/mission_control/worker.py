@@ -54,7 +54,6 @@ You are a parallel worker agent for {target_name} at {workspace_path}.
 {description}
 
 ## Scope
-ONLY modify files related to this task.
 Files likely involved: {files_hint}
 
 ## Current Project State
@@ -70,12 +69,10 @@ Files likely involved: {files_hint}
 {context_block}
 
 ## Instructions
-1. Implement the task described above
-2. ONLY modify files listed in the scope (or closely related files)
-3. Run verification: {verification_command}
-4. If verification passes, commit with a descriptive message
-5. If verification fails after 3 attempts, stop and report what went wrong
-6. Do NOT modify unrelated files or tests
+1. Implement the task described above. Modify any files necessary to complete it well.
+2. Run verification: {verification_command}
+3. If verification passes, commit with a descriptive message
+4. If verification fails, diagnose the issue and fix it. Stop and report if truly stuck.
 - Do NOT run `pip install`, `uv pip install`, or modify the Python environment -- it is pre-configured via symlink
 
 ## Output
@@ -218,12 +215,9 @@ You are working on {target_name} at {workspace_path}.
 
 {description}
 {acceptance_criteria_block}
-## Constraints
-- ONLY modify files in scope: {files_hint}
+## Guidelines
 - No TODOs, no partial implementations
-- No modifications to unrelated files
-- No refactoring beyond the task scope
-- Add tests to existing test files (tests/test_<module>.py), not new files.
+- Modify any files necessary to complete the task well, including creating new files if needed
 - Do NOT run `pip install`, `uv pip install`, or modify the Python environment -- it is pre-configured via symlink
 - Commit when done or explain why blocked
 
@@ -287,13 +281,10 @@ The following analysis describes exactly what changes to make:
 
 {architect_output}
 
-## Constraints
-- ONLY modify files in scope: {files_hint}
+## Guidelines
 - Follow the architect's analysis above precisely
 - No TODOs, no partial implementations
-- No modifications to unrelated files
-- No refactoring beyond the task scope
-- Add tests to existing test files (tests/test_<module>.py), not new files.
+- Modify any files necessary to complete the task well, including creating new files if needed
 - Do NOT run `pip install`, `uv pip install`, or modify the Python environment -- it is pre-configured via symlink
 - Commit when done or explain why blocked
 

@@ -172,6 +172,15 @@ class DashboardProvider:
 				log.exception("Dashboard poll error")
 			time.sleep(interval)
 
+	@staticmethod
+	def _get_chain_mission_ids(db: Database, mission: Mission) -> list[str]:
+		"""Return mission IDs for the chain, or just [mission.id] if not chained."""
+		if mission.chain_id:
+			chain_missions = db.get_missions_for_chain(mission.chain_id)
+			if chain_missions:
+				return [m.id for m in chain_missions]
+		return [mission.id]
+
 	def _build_snapshot(self) -> DashboardSnapshot:
 		"""Build a complete snapshot from the database."""
 		db = self._get_db()
@@ -185,8 +194,15 @@ class DashboardProvider:
 		if mission is None:
 			return snap
 
-		# Rounds
-		rounds = db.get_rounds_for_mission(mission.id)
+		chain_mids = self._get_chain_mission_ids(db, mission)
+
+		# Rounds (aggregated across chain)
+		rounds: list[Round] = []
+		for mid in chain_mids:
+			rounds.extend(db.get_rounds_for_mission(mid))
+		# Renumber sequentially across chain
+		for i, r in enumerate(rounds, 1):
+			r.number = i
 		if rounds:
 			snap.current_round = rounds[-1]
 			snap.phase = _round_status_to_phase(rounds[-1].status)
@@ -206,7 +222,9 @@ class DashboardProvider:
 		]
 
 		# Test trend from reflections: (round, passed, failed)
-		reflections = db.get_recent_reflections(mission.id, limit=50)
+		reflections = []
+		for mid in chain_mids:
+			reflections.extend(db.get_recent_reflections(mid, limit=50))
 		reflections.sort(key=lambda r: r.round_number)
 		snap.test_trend = [
 			(
@@ -225,13 +243,13 @@ class DashboardProvider:
 			snap.workers_idle = sum(1 for w in all_workers if w.status == "idle")
 			snap.workers_dead = sum(1 for w in all_workers if w.status == "dead")
 		else:
-			# No Worker rows -- derive from running/claimed work units directly.
-			# round_controller never inserts Worker records, so this is the
-			# primary path for rounds mode. Falls back to epoch-based derive
-			# for continuous mode if no plan-based units are found.
 			snap.workers, snap.workers_active = _derive_workers_from_plan(db, snap.current_round)
 			if not snap.workers:
-				snap.workers, snap.workers_active = _derive_workers_from_units(db, mission.id)
+				# Try deriving from units across all chain missions
+				for mid in chain_mids:
+					derived, active = _derive_workers_from_units(db, mid)
+					snap.workers.extend(derived)
+					snap.workers_active += active
 			snap.workers_idle = 0
 			snap.workers_dead = 0
 
@@ -255,20 +273,31 @@ class DashboardProvider:
 			# Recent events from work units + merge requests
 			snap.recent_events = _build_events(units, merge_requests)
 
-		# Token usage per epoch
+		# Token usage per epoch (aggregated across chain)
 		try:
-			epoch_tokens = db.get_token_usage_by_epoch(mission.id)
-			snap.token_usage = [
-				(t["epoch"], t["input_tokens"], t["output_tokens"])
-				for t in epoch_tokens
-			]
+			all_token_data: list[tuple[int, int, int]] = []
+			epoch_offset = 0
+			for mid in chain_mids:
+				epoch_tokens = db.get_token_usage_by_epoch(mid)
+				for t in epoch_tokens:
+					all_token_data.append((
+						t["epoch"] + epoch_offset,
+						t["input_tokens"],
+						t["output_tokens"],
+					))
+				if epoch_tokens:
+					epoch_offset += max(t["epoch"] for t in epoch_tokens)
+			snap.token_usage = all_token_data
 		except Exception:
 			pass
 
-		# Cost
+		# Cost (sum across chain)
 		if current_round:
 			snap.round_cost = current_round.cost_usd
-		snap.total_cost = mission.total_cost_usd
+		snap.total_cost = sum(
+			(db.get_mission(mid) or mission).total_cost_usd
+			for mid in chain_mids
+		)
 
 		return snap
 

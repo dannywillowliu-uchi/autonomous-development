@@ -640,6 +640,56 @@ class TestValidateIdentifier:
 				Database._validate_identifier(attempt)
 
 
+class TestMissionChainId:
+	def test_insert_mission_with_chain_id(self, db: Database) -> None:
+		"""Mission with chain_id round-trips through insert/get."""
+		m = Mission(id="m1", objective="Build new system", chain_id="chain-abc")
+		db.insert_mission(m)
+		result = db.get_mission("m1")
+		assert result is not None
+		assert result.chain_id == "chain-abc"
+
+	def test_default_chain_id_is_empty(self, db: Database) -> None:
+		"""Mission without chain_id defaults to empty string."""
+		m = Mission(id="m1", objective="Solo mission")
+		db.insert_mission(m)
+		result = db.get_mission("m1")
+		assert result is not None
+		assert result.chain_id == ""
+
+	def test_update_mission_chain_id(self, db: Database) -> None:
+		"""chain_id can be updated after insert."""
+		m = Mission(id="m1", objective="Mission")
+		db.insert_mission(m)
+		m.chain_id = "chain-xyz"
+		db.update_mission(m)
+		result = db.get_mission("m1")
+		assert result is not None
+		assert result.chain_id == "chain-xyz"
+
+	def test_get_missions_for_chain(self, db: Database) -> None:
+		"""get_missions_for_chain returns correct missions ordered by started_at."""
+		db.insert_mission(Mission(id="m1", objective="First", chain_id="chain-1", started_at="2025-01-01T00:00:00"))
+		db.insert_mission(Mission(id="m2", objective="Second", chain_id="chain-1", started_at="2025-01-02T00:00:00"))
+		db.insert_mission(Mission(
+			id="m3", objective="Other chain", chain_id="chain-2", started_at="2025-01-01T12:00:00",
+		))
+		db.insert_mission(Mission(id="m4", objective="Third", chain_id="chain-1", started_at="2025-01-03T00:00:00"))
+
+		chain1 = db.get_missions_for_chain("chain-1")
+		assert len(chain1) == 3
+		assert [m.id for m in chain1] == ["m1", "m2", "m4"]
+
+		chain2 = db.get_missions_for_chain("chain-2")
+		assert len(chain2) == 1
+		assert chain2[0].id == "m3"
+
+	def test_get_missions_for_chain_empty(self, db: Database) -> None:
+		"""get_missions_for_chain returns empty list for non-existent chain."""
+		result = db.get_missions_for_chain("no-such-chain")
+		assert result == []
+
+
 class TestMissionAmbitionScore:
 	def test_insert_mission_with_ambition_score(self, db: Database) -> None:
 		"""Mission with ambition_score round-trips through insert/get."""

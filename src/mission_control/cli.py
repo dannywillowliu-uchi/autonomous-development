@@ -518,6 +518,9 @@ def cmd_mission(args: argparse.Namespace) -> int:
 			db_path, args.dashboard_port,
 		)
 
+	from mission_control.models import _new_id
+	chain_id = _new_id() if args.chain else ""
+
 	chain_depth = 0
 	max_chain_depth = getattr(args, "max_chain_depth", 3)
 	last_result = None
@@ -535,7 +538,7 @@ def cmd_mission(args: argparse.Namespace) -> int:
 						print(f"Objective: {cleanup_obj}")
 
 			with Database(db_path) as db:
-				controller = ContinuousController(config, db)
+				controller = ContinuousController(config, db, chain_id=chain_id)
 				if args.strategist:
 					controller.proposed_by_strategist = True
 				result = asyncio.run(controller.run())

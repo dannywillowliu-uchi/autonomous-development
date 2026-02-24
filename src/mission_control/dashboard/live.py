@@ -125,6 +125,14 @@ class LiveDashboard:
 		"""Return the active mission, falling back to the latest."""
 		return self.db.get_active_mission() or self.db.get_latest_mission()
 
+	def _get_chain_mission_ids(self, mission: Any) -> list[str]:
+		"""Return mission IDs for the chain, or just [mission.id] if not chained."""
+		if mission.chain_id:
+			chain_missions = self.db.get_missions_for_chain(mission.chain_id)
+			if chain_missions:
+				return [m.id for m in chain_missions]
+		return [mission.id]
+
 	def _verify_token(self, credentials: HTTPAuthorizationCredentials) -> None:
 		if self.auth_token and credentials.credentials != self.auth_token:
 			raise HTTPException(status_code=401, detail="Invalid token")
@@ -218,7 +226,10 @@ class LiveDashboard:
 			mission = self._current_mission()
 			if mission is None:
 				return []
-			units = self.db.get_work_units_for_mission(mission.id)
+			chain_mids = self._get_chain_mission_ids(mission)
+			units: list[Any] = []
+			for mid in chain_mids:
+				units.extend(self.db.get_work_units_for_mission(mid))
 			return [_serialize_unit(u) for u in units]
 
 		@self.app.get("/api/events", dependencies=[Depends(verify_token)])
@@ -226,15 +237,20 @@ class LiveDashboard:
 			mission = self._current_mission()
 			if mission is None:
 				return []
-			events = self.db.get_unit_events_for_mission(mission.id, limit=200)
-			return [_serialize_event(e) for e in events]
+			chain_mids = self._get_chain_mission_ids(mission)
+			events: list[Any] = []
+			for mid in chain_mids:
+				events.extend(self.db.get_unit_events_for_mission(mid, limit=200))
+			events.sort(key=lambda e: e.timestamp)
+			return [_serialize_event(e) for e in events[-200:]]
 
 		@self.app.get("/api/plan-tree", dependencies=[Depends(verify_token)])
 		async def get_plan_tree() -> list[dict[str, Any]]:
 			mission = self._current_mission()
 			if mission is None:
 				return []
-			return self._build_plan_tree(mission.id)
+			chain_mids = self._get_chain_mission_ids(mission)
+			return self._build_plan_tree(chain_mids)
 
 		@self.app.get("/api/workers", dependencies=[Depends(verify_token)])
 		async def get_workers() -> list[dict[str, Any]]:
@@ -246,7 +262,8 @@ class LiveDashboard:
 			mission = self._current_mission()
 			if mission is None:
 				return {"status": "no_mission"}
-			return self._build_summary(mission)
+			chain_mids = self._get_chain_mission_ids(mission)
+			return self._build_summary(mission, chain_mids)
 
 		@self.app.get("/api/history", dependencies=[Depends(verify_token)])
 		async def get_history() -> list[dict[str, Any]]:
@@ -385,28 +402,29 @@ class LiveDashboard:
 				"unit_backlog_map": {},
 			}
 
-		units = self.db.get_work_units_for_mission(mission.id)
-		events = self.db.get_unit_events_for_mission(mission.id, limit=100)
-		workers = self.db.get_all_workers()
+		chain_mids = self._get_chain_mission_ids(mission)
 
-		# Include trajectory ratings
-		ratings = self.db.get_trajectory_ratings_for_mission(mission.id)
-		rating_data = [
-			{"rating": r.rating, "feedback": r.feedback, "timestamp": r.timestamp}
-			for r in ratings
-		]
-
-		# Include per-unit review scores
-		reviews = self.db.get_unit_reviews_for_mission(mission.id)
+		units: list[Any] = []
+		events: list[Any] = []
+		rating_data: list[dict[str, Any]] = []
 		review_by_unit: dict[str, dict[str, Any]] = {}
-		for r in reviews:
-			review_by_unit[r.work_unit_id] = {
-				"alignment": r.alignment_score,
-				"approach": r.approach_score,
-				"tests": r.test_score,
-				"avg": r.avg_score,
-				"rationale": r.rationale[:200],
-			}
+		for mid in chain_mids:
+			units.extend(self.db.get_work_units_for_mission(mid))
+			events.extend(self.db.get_unit_events_for_mission(mid, limit=100))
+			for r in self.db.get_trajectory_ratings_for_mission(mid):
+				rating_data.append({"rating": r.rating, "feedback": r.feedback, "timestamp": r.timestamp})
+			for r in self.db.get_unit_reviews_for_mission(mid):
+				review_by_unit[r.work_unit_id] = {
+					"alignment": r.alignment_score,
+					"approach": r.approach_score,
+					"tests": r.test_score,
+					"avg": r.avg_score,
+					"rationale": r.rationale[:200],
+				}
+		events.sort(key=lambda e: e.timestamp)
+		events = events[-100:]
+
+		workers = self.db.get_all_workers()
 
 		# Include backlog queue
 		backlog_items = self.db.list_backlog_items(limit=100)
@@ -416,7 +434,7 @@ class LiveDashboard:
 		# Build unit->backlog mapping
 		unit_backlog_map = self._build_unit_backlog_mapping(units, backlog_items)
 
-		plan_tree = self._build_plan_tree(mission.id)
+		plan_tree = self._build_plan_tree(chain_mids)
 
 		# Extract current (last) epoch's units for the mission statement section
 		current_epoch_units: list[dict[str, Any]] = []
@@ -430,7 +448,7 @@ class LiveDashboard:
 			"events": [_serialize_event(e) for e in events],
 			"plan_tree": plan_tree,
 			"workers": [_serialize_worker(w) for w in workers],
-			"summary": self._build_summary(mission),
+			"summary": self._build_summary(mission, chain_mids),
 			"history": self._build_history(),
 			"ratings": rating_data,
 			"unit_reviews": review_by_unit,
@@ -440,10 +458,13 @@ class LiveDashboard:
 			"current_epoch_units": current_epoch_units,
 		}
 
-	def _build_plan_tree(self, mission_id: str) -> list[dict[str, Any]]:
-		"""Build plan tree from epochs and their plan nodes."""
-		epochs = self.db.get_epochs_for_mission(mission_id)
-		all_units = self.db.get_work_units_for_mission(mission_id)
+	def _build_plan_tree(self, mission_ids: list[str]) -> list[dict[str, Any]]:
+		"""Build plan tree from epochs and their plan nodes across chain missions."""
+		all_epochs: list[Any] = []
+		all_units: list[Any] = []
+		for mid in mission_ids:
+			all_epochs.extend(self.db.get_epochs_for_mission(mid))
+			all_units.extend(self.db.get_work_units_for_mission(mid))
 
 		# Index units by epoch for O(1) lookup instead of repeated DB queries
 		units_by_epoch: dict[str, list[Any]] = defaultdict(list)
@@ -452,11 +473,11 @@ class LiveDashboard:
 				units_by_epoch[u.epoch_id].append(u)
 
 		tree: list[dict[str, Any]] = []
-		for epoch in epochs:
+		for seq, epoch in enumerate(all_epochs, 1):
 			tree.append({
 				"type": "epoch",
 				"id": epoch.id,
-				"number": epoch.number,
+				"number": seq,
 				"units_planned": epoch.units_planned,
 				"units_completed": epoch.units_completed,
 				"units_failed": epoch.units_failed,
@@ -476,19 +497,33 @@ class LiveDashboard:
 
 		return tree
 
-	def _build_summary(self, mission: Any) -> dict[str, Any]:
+	def _build_summary(self, mission: Any, chain_mids: list[str]) -> dict[str, Any]:
 		"""Build lightweight summary stats for the dashboard stats bar."""
-		agg = self.db.get_mission_summary(mission.id)
-		units = agg["units_by_status"]
-		epochs = agg["epochs"]
+		total_cost = 0.0
+		merged = 0
+		failed = 0
+		running = 0
+		pending = 0
+		all_epochs: list[dict[str, Any]] = []
+		for mid in chain_mids:
+			agg = self.db.get_mission_summary(mid)
+			units = agg["units_by_status"]
+			merged += units.get("completed", 0)
+			failed += units.get("failed", 0)
+			running += units.get("running", 0) + units.get("claimed", 0)
+			pending += units.get("pending", 0)
+			total_cost += agg["total_cost_usd"]
+			all_epochs.extend(agg["epochs"])
+		# Use first mission's started_at (chain_mids ordered by started_at)
+		first_mission = self.db.get_mission(chain_mids[0]) if chain_mids else mission
 		return {
-			"total_cost_usd": mission.total_cost_usd,
-			"units_merged": units.get("completed", 0),
-			"units_failed": units.get("failed", 0),
-			"units_running": units.get("running", 0) + units.get("claimed", 0),
-			"units_pending": units.get("pending", 0),
-			"current_epoch": max((e["number"] for e in epochs), default=0),
-			"started_at": mission.started_at,
+			"total_cost_usd": total_cost,
+			"units_merged": merged,
+			"units_failed": failed,
+			"units_running": running,
+			"units_pending": pending,
+			"current_epoch": len(all_epochs),
+			"started_at": first_mission.started_at if first_mission else mission.started_at,
 		}
 
 	@staticmethod
