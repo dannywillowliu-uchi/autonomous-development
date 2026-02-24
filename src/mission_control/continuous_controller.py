@@ -205,6 +205,7 @@ class ContinuousController:
 		self._deferred_units: list[tuple[WorkUnit, Epoch, Mission]] = []
 		self._merged_files: set[str] = set()  # files covered by merged units
 		self._completed_unit_ids: set[str] = set()  # units that completed/merged successfully
+		self._retrying_unit_files: dict[str, set[str]] = {}  # unit_id -> files for units awaiting retry
 		self._last_reconcile_count: int = 0
 		self.ambition_score: float = 0.0
 		self.proposed_by_strategist: bool = False
@@ -991,7 +992,7 @@ class ContinuousController:
 		return unit_files <= self._merged_files
 
 	async def _check_in_flight_overlap(self, unit: WorkUnit) -> bool:
-		"""Check if a unit overlaps with any currently running units.
+		"""Check if a unit overlaps with any currently running or retrying units.
 
 		Returns True if the unit should be deferred (overlap detected).
 		"""
@@ -1003,13 +1004,20 @@ class ContinuousController:
 			other_files = _parse_files_hint(other.files_hint)
 
 			if unit_files and other_files:
-				# Both have populated hints -- check file overlap
 				if unit_files & other_files:
 					return True
 			elif not unit_files and not other_files:
-				# Both unknown scope -- block concurrent execution
 				return True
-			# One empty, one populated -- allow (can't determine overlap)
+
+		# Also check units awaiting retry (pending status but logically in-flight)
+		for retry_id, retry_files in self._retrying_unit_files.items():
+			if retry_id == unit.id:
+				continue
+			if unit_files and retry_files:
+				if unit_files & retry_files:
+					return True
+			elif not unit_files and not retry_files:
+				return True
 
 		return False
 
@@ -2730,6 +2738,9 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			unit.id, unit.attempt, unit.max_attempts, delay,
 		)
 
+		# Track retrying unit's files so overlap detection blocks new units
+		self._retrying_unit_files[unit.id] = _parse_files_hint(unit.files_hint)
+
 		# Schedule delayed re-dispatch
 		task = asyncio.create_task(
 			self._retry_unit(unit, epoch, mission, delay),
@@ -2746,6 +2757,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 	) -> None:
 		"""Wait for backoff delay, then re-dispatch a failed unit."""
 		await asyncio.sleep(delay)
+		self._retrying_unit_files.pop(unit.id, None)
 		if not self.running:
 			return
 		if self._semaphore is None:
