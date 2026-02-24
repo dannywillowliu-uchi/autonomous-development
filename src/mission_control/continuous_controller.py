@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shlex
 import sqlite3
 import time
@@ -34,7 +35,7 @@ from mission_control.diff_reviewer import DiffReviewer
 from mission_control.ema import ExponentialMovingAverage
 from mission_control.event_stream import EventStream
 from mission_control.feedback import get_worker_context
-from mission_control.green_branch import GreenBranchManager
+from mission_control.green_branch import GreenBranchManager, UnitMergeResult
 from mission_control.heartbeat import Heartbeat
 from mission_control.json_utils import extract_json_from_text
 from mission_control.models import (
@@ -1807,32 +1808,66 @@ class ContinuousController:
 							unit.id, merge_result.failure_output[-200:],
 						)
 
-						# Log merge_failed event
-						_fail_details = {
-							"failure_output": merge_result.failure_output[-2000:],
-							"failure_stage": merge_result.failure_stage,
-						}
-						self._log_unit_event(
-							mission_id=mission.id,
-							epoch_id=epoch.id,
-							work_unit_id=unit.id,
-							event_type=UNIT_EVENT_MERGE_FAILED,
-							details=json.dumps(_fail_details),
-							stream_details=_fail_details,
-						)
+						# Worker-side fixup: if verification or acceptance criteria
+						# failed, let the worker fix its own code in-place and re-merge
+						# before falling through to a full retry.
+						fixup_stages = ("pre_merge_verification", "acceptance_criteria")
+						if (
+							merge_result.failure_stage in fixup_stages
+							and workspace
+						):
+							fixed = await self._worker_fixup_and_remerge(
+								unit, workspace, merge_result, cont,
+							)
+							if fixed:
+								merge_result = fixed
+								merged = True
+								logger.info("Unit %s merged after worker fixup", unit.id)
+								self._total_merged += 1
+								self._completed_unit_ids.add(unit.id)
+								if merge_result.changed_files:
+									self._merged_files |= set(merge_result.changed_files)
+								else:
+									mf = _parse_files_hint(unit.files_hint)
+									if mf:
+										self._merged_files |= mf
+								self._log_unit_event(
+									mission_id=mission.id,
+									epoch_id=epoch.id,
+									work_unit_id=unit.id,
+									event_type=UNIT_EVENT_MERGED,
+									input_tokens=unit.input_tokens,
+									output_tokens=unit.output_tokens,
+									cost_usd=unit.cost_usd,
+								)
 
-						# Append merge failure to handoff concerns
-						if handoff:
-							handoff.concerns.append(
-								f"Merge failed: {merge_result.failure_output[-500:]}",
+						if not merged:
+							# Log merge_failed event
+							_fail_details = {
+								"failure_output": merge_result.failure_output[-2000:],
+								"failure_stage": merge_result.failure_stage,
+							}
+							self._log_unit_event(
+								mission_id=mission.id,
+								epoch_id=epoch.id,
+								work_unit_id=unit.id,
+								event_type=UNIT_EVENT_MERGE_FAILED,
+								details=json.dumps(_fail_details),
+								stream_details=_fail_details,
 							)
 
-						failure_reason = merge_result.failure_output[-1000:]
+							# Append merge failure to handoff concerns
+							if handoff:
+								handoff.concerns.append(
+									f"Merge failed: {merge_result.failure_output[-500:]}",
+								)
+
+							failure_reason = merge_result.failure_output[-1000:]
 
 						# Check if retryable
-						if unit.attempt < unit.max_attempts:
+						if not merged and unit.attempt < unit.max_attempts:
 							self._schedule_retry(unit, epoch, mission, failure_reason, cont)
-						else:
+						elif not merged:
 							self._total_failed += 1
 							# Log rejection event
 							self._log_unit_event(
@@ -2686,6 +2721,95 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				)
 		except Exception as exc:
 			logger.warning("Review failed for unit %s: %s", unit.id, exc)
+
+	async def _worker_fixup_and_remerge(
+		self,
+		unit: WorkUnit,
+		workspace: str,
+		merge_result: UnitMergeResult,
+		cont: ContinuousConfig,
+		max_fixup_attempts: int = 2,
+	) -> UnitMergeResult | None:
+		"""Spawn a fix session in the worker's workspace and re-attempt merge.
+
+		Returns a successful UnitMergeResult if fixup worked, None otherwise.
+		The worker's workspace still has full context (git history, changes).
+		"""
+		from mission_control.config import claude_subprocess_env
+
+		for attempt in range(max_fixup_attempts):
+			logger.info(
+				"Worker fixup attempt %d/%d for unit %s in %s",
+				attempt + 1, max_fixup_attempts, unit.id[:12], workspace,
+			)
+
+			prompt = (
+				f"Your previous work on this task failed verification after merging.\n\n"
+				f"## Original Task\n{unit.title}\n{unit.description}\n\n"
+				f"## Failure Stage\n{merge_result.failure_stage}\n\n"
+				f"## Failure Output\n{merge_result.failure_output}\n\n"
+				f"## Verification Command\n{self.config.target.verification.command}\n\n"
+				f"Fix the issues in your code so verification passes. "
+				f"Run the verification command to confirm, then commit your fix."
+			)
+			if unit.acceptance_criteria and merge_result.failure_stage == "acceptance_criteria":
+				prompt += f"\n\n## Acceptance Criteria\n{unit.acceptance_criteria}"
+
+			models_cfg = getattr(self.config, "models", None)
+			model = getattr(models_cfg, "fixup_model", None) or self.config.scheduler.model
+			cmd = [
+				"claude", "-p",
+				"--output-format", "text",
+				"--permission-mode", "bypassPermissions",
+				"--model", model,
+				"--max-turns", "5",
+				prompt,
+			]
+			try:
+				env = claude_subprocess_env(self.config)
+			except Exception:
+				env = {}
+			full_env = {**os.environ, **env}
+
+			try:
+				proc = await asyncio.create_subprocess_exec(
+					*cmd,
+					cwd=workspace,
+					stdout=asyncio.subprocess.PIPE,
+					stderr=asyncio.subprocess.PIPE,
+					env=full_env,
+				)
+				await asyncio.wait_for(proc.communicate(), timeout=cont.worker_fixup_timeout)
+			except asyncio.TimeoutError:
+				logger.warning("Worker fixup timed out for unit %s", unit.id[:12])
+				try:
+					proc.kill()
+					await proc.wait()
+				except ProcessLookupError:
+					pass
+				continue
+			except (FileNotFoundError, OSError) as exc:
+				logger.warning("Worker fixup failed to spawn for unit %s: %s", unit.id[:12], exc)
+				break
+
+			# Re-attempt merge with the fixed code
+			if self._green_branch is None:
+				break
+			new_result = await self._green_branch.merge_unit(
+				workspace, unit.branch_name,
+				acceptance_criteria=unit.acceptance_criteria,
+			)
+			if new_result.merged:
+				return new_result
+
+			# Update failure info for next attempt
+			merge_result = new_result
+			logger.warning(
+				"Worker fixup attempt %d failed for unit %s: %s",
+				attempt + 1, unit.id[:12], new_result.failure_output[-200:],
+			)
+
+		return None
 
 	def _schedule_retry(
 		self,

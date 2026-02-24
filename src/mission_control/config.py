@@ -137,6 +137,7 @@ class ContinuousConfig:
 	timeout_multiplier: float = 1.2  # applied to session_timeout for poll deadline
 	retry_base_delay_seconds: int = 30
 	retry_max_delay_seconds: int = 300
+	worker_fixup_timeout: int = 300
 	chain_max_depth: int = 3
 	max_consecutive_failures: int = 3
 	failure_backoff_seconds: int = 60
