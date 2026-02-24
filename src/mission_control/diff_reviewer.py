@@ -120,21 +120,19 @@ class DiffReviewer:
 
 		prompt = _build_review_prompt(unit, diff, objective, project_snapshot=project_snapshot)
 		model = self._review_config.model
-		budget = self._review_config.budget_per_review_usd
 
 		try:
 			proc = await asyncio.create_subprocess_exec(
-				"claude", "-p",
-				"--output-format", "text",
-				"--max-budget-usd", str(budget),
+				"claude", "--print", "--output-format", "text",
 				"--model", model,
-				stdin=asyncio.subprocess.PIPE,
+				"--max-turns", "1",
+				"-p", prompt,
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.PIPE,
 				env=claude_subprocess_env(),
 			)
 			stdout, stderr = await asyncio.wait_for(
-				proc.communicate(input=prompt.encode()),
+				proc.communicate(),
 				timeout=120,
 			)
 			output = stdout.decode() if stdout else ""
