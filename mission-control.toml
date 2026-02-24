@@ -2,7 +2,33 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = "Add browser automation capability so workers can validate web UIs after building them. Integrate Playwright MCP or Claude computer use so that: (1) workers can launch a browser and interact with built web apps, (2) verification can include visual/functional browser checks beyond unit tests, (3) the system catches issues that only manifest in a real browser. Add config options for browser verification, wire into worker prompts and verification pipeline."
+objective = """Expand the MCP server (src/mission_control/mcp_server.py) so an external agent can fully delegate work to mission control, monitor progress, understand failures, and steer mid-flight. Currently only 8 shallow tools exist (launch/stop/status). Add these new tools, each following the existing pattern (_tool_* function, Tool() definition in TOOLS list, dispatch case, tests in tests/test_mcp_server.py):
+
+Tier 1 (observability -- essential for delegation):
+- get_mission_log: Return recent unit events for the active mission (unit started/completed/failed, merges, verification results). Uses db.get_unit_events_for_mission(). Parameters: project_name (required), limit (optional, default 50). Return: list of {unit_id, event_type, timestamp, detail}.
+- get_plan_tree: Return the current epoch's plan decomposition tree. Uses db.get_epochs_for_mission() and db.get_work_units_for_mission(). Parameters: project_name (required). Return: list of epochs with nested units (id, title, status, acceptance_criteria).
+- get_unit_detail: Full detail for a single work unit. Uses db.get_work_unit(). Parameters: project_name (required), unit_id (required). Return: all WorkUnit fields including status, diff summary (output_summary), acceptance_criteria, review scores, failure output, cost_usd, attempt count.
+- get_cost_summary: Budget spent and remaining. Uses db.get_mission_summary(). Parameters: project_name (required). Return: {total_cost_usd, budget_max_usd (from config), budget_remaining_usd, units_by_status, cost_per_epoch list}.
+- get_mission_result: Final outcome after mission ends. Read latest mission + its result fields. Parameters: project_name (required). Return: {objective, status, objective_met, final_score, evaluator_passed, evaluator_evidence, evaluator_gaps, stopped_reason, total_cost_usd, total_rounds, next_objective}.
+
+Tier 2 (steering -- course correction mid-flight):
+- inject_work_unit: Add a work unit to the current mission's active plan. Create a WorkUnit with status=pending, insert via db.insert_work_unit(). Parameters: project_name (required), title (required), description (required), files_hint (optional), acceptance_criteria (optional), depends_on (optional). Return: {status, unit_id}.
+- update_objective: Send a signal to change the mission objective. Uses the existing signal mechanism (insert Signal with signal_type="update_objective", payload=new_objective). Parameters: project_name (required), objective (required). Return: {status, project}.
+- force_replan: Send a signal to trigger replanning. Insert Signal with signal_type="force_replan". Parameters: project_name (required), reason (optional). Return: {status, project}.
+- approve_push: Respond to a HITL approval gate. Insert Signal with signal_type="approve", payload=gate_id. Parameters: project_name (required), gate_id (required). Return: {status, project, gate_id}.
+
+Tier 3 (lifecycle -- project management):
+- unregister_project: Remove project from registry. Uses registry.unregister(). Parameters: project_name (required). Return: {status, project}.
+- list_missions: Historical missions with outcomes. Uses db.get_all_missions(). Parameters: project_name (required), limit (optional, default 10). Return: list of {id, objective, status, final_score, total_cost_usd, total_rounds, started_at, finished_at, stopped_reason}.
+- get_verification_report: Latest verification output from the active mission. Read the most recent verification event or merge result. Parameters: project_name (required). Return: {passed, raw_output (truncated to 2000 chars), timestamp}.
+
+Implementation notes:
+- Follow the exact pattern in mcp_server.py: add Tool() to TOOLS list, add elif to _dispatch(), add _tool_* handler function
+- Each handler opens the project DB via registry.get_project() -> Database(db_path), wraps in try/finally db.close()
+- All new tools need tests in tests/test_mcp_server.py following existing mock patterns
+- For signal-based tools (update_objective, force_replan, approve_push), the controller does NOT need to handle these signals yet -- just insert them. Signal handling can be wired later.
+- Do NOT modify continuous_controller.py or any file outside mcp_server.py and test_mcp_server.py unless truly necessary
+"""
 
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
