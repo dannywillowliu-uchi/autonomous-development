@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1001,91 +1002,7 @@ class TestLockedFilesInPlannerPrompt:
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Rebase-before-retry
-# ---------------------------------------------------------------------------
-
-
-class TestRebaseRetry:
-	"""merge_unit() retries rebase once before failing."""
-
-	async def test_rebase_retry_succeeds(self) -> None:
-		"""First rebase fails, retry succeeds -- merge completes."""
-		mgr = _conflict_manager()
-		rebase_count = 0
-
-		async def mock_git(*args: str) -> tuple[bool, str]:
-			nonlocal rebase_count
-			if args[0] == "rebase" and len(args) > 1 and args[1] == "mc/green":
-				rebase_count += 1
-				if rebase_count == 1:
-					return (False, "CONFLICT")
-				return (True, "")
-			if args[0] == "rebase" and "--abort" in args:
-				return (True, "")
-			if args[0] == "diff" and args[1] == "--name-only":
-				return (True, "file.py\n")
-			if args[0] == "rev-list" and "--count" in args:
-				return (True, "1")
-			return (True, "")
-
-		mgr._run_git = AsyncMock(side_effect=mock_git)
-		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
-		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
-
-		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
-
-		assert result.merged is True
-		assert result.rebase_ok is True
-		assert rebase_count == 2  # first attempt + retry
-
-	async def test_rebase_retry_also_fails(self) -> None:
-		"""Both rebase attempts fail -- returns rebase_conflict failure."""
-		mgr = _conflict_manager()
-
-		async def mock_git(*args: str) -> tuple[bool, str]:
-			if args[0] == "rebase" and len(args) > 1 and args[1] == "mc/green":
-				return (False, "CONFLICT in file.py")
-			if args[0] == "rebase" and "--abort" in args:
-				return (True, "")
-			return (True, "")
-
-		mgr._run_git = AsyncMock(side_effect=mock_git)
-
-		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
-
-		assert result.merged is False
-		assert result.rebase_ok is False
-		assert result.failure_stage == "rebase_conflict"
-		assert "after retry" in result.failure_output
-
-	async def test_rebase_succeeds_first_time_no_retry(self) -> None:
-		"""When rebase succeeds first time, no retry is attempted."""
-		mgr = _conflict_manager()
-		rebase_count = 0
-
-		async def mock_git(*args: str) -> tuple[bool, str]:
-			nonlocal rebase_count
-			if args[0] == "rebase" and len(args) > 1 and args[1] == "mc/green":
-				rebase_count += 1
-				return (True, "")
-			if args[0] == "diff" and args[1] == "--name-only":
-				return (True, "")
-			if args[0] == "rev-list" and "--count" in args:
-				return (True, "1")
-			return (True, "")
-
-		mgr._run_git = AsyncMock(side_effect=mock_git)
-		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
-		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
-
-		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
-
-		assert result.merged is True
-		assert rebase_count == 1
-
-
-# ---------------------------------------------------------------------------
-# Phase 3: Real git rebase retry integration test
+# Real git integration tests
 # ---------------------------------------------------------------------------
 
 
@@ -1341,3 +1258,138 @@ class TestReconcilerSweep:
 
 		# Reconciler should have run once (after first merge) but not again for the failure
 		assert mock_gbm.run_reconciliation_check.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Merge conflict auto-resolution via LLM
+# ---------------------------------------------------------------------------
+
+
+class TestResolveMergeConflict:
+	"""Tests for _resolve_merge_conflict() LLM-based conflict resolution."""
+
+	async def test_resolve_gets_conflicted_files(self) -> None:
+		"""Prompt includes filenames from git diff --diff-filter=U."""
+		mgr = _conflict_manager()
+		captured_cmd: list[str] = []
+
+		async def mock_git(*args: str) -> tuple[bool, str]:
+			if args[0] == "diff" and "--diff-filter=U" in args:
+				return (True, "src/app.py\nsrc/utils.py\n")
+			if args[0] == "status" and "--porcelain" in args:
+				return (True, "")
+			return (True, "")
+
+		async def mock_run_command(cmd: str | list[str]) -> tuple[bool, str]:
+			if isinstance(cmd, list):
+				captured_cmd.extend(cmd)
+			return (True, "resolved")
+
+		mgr._run_git = AsyncMock(side_effect=mock_git)
+		mgr._run_command = AsyncMock(side_effect=mock_run_command)  # type: ignore[method-assign]
+		mgr._run_verification = AsyncMock(  # type: ignore[method-assign]
+			return_value=MagicMock(overall_passed=True),
+		)
+
+		# Create fake conflicted files in workspace
+		with tempfile.TemporaryDirectory() as td:
+			mgr.workspace = td
+			(Path(td) / "src").mkdir()
+			(Path(td) / "src" / "app.py").write_text("<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>>\n")
+			(Path(td) / "src" / "utils.py").write_text("<<<<<<< HEAD\nA\n=======\nB\n>>>>>>>\n")
+
+			ok, output = await mgr._resolve_merge_conflict("feat/branch", "Merge feat/branch")
+
+		assert ok is True
+		# The prompt (last arg to claude) should mention both files
+		prompt = captured_cmd[-1]
+		assert "src/app.py" in prompt
+		assert "src/utils.py" in prompt
+
+	async def test_resolve_fails_when_no_conflicted_files(self) -> None:
+		"""Empty diff --diff-filter=U returns False."""
+		mgr = _conflict_manager()
+
+		async def mock_git(*args: str) -> tuple[bool, str]:
+			if args[0] == "diff" and "--diff-filter=U" in args:
+				return (True, "")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=mock_git)
+
+		ok, output = await mgr._resolve_merge_conflict("feat/branch", "Merge msg")
+
+		assert ok is False
+		assert "No conflicted files" in output
+
+	async def test_resolve_fails_when_session_fails(self) -> None:
+		"""Claude session returning failure returns False."""
+		mgr = _conflict_manager()
+
+		async def mock_git(*args: str) -> tuple[bool, str]:
+			if args[0] == "diff" and "--diff-filter=U" in args:
+				return (True, "src/app.py\n")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=mock_git)
+		mgr._run_command = AsyncMock(return_value=(False, "session error"))  # type: ignore[method-assign]
+
+		with tempfile.TemporaryDirectory() as td:
+			mgr.workspace = td
+			(Path(td) / "src").mkdir()
+			(Path(td) / "src" / "app.py").write_text("conflict markers")
+
+			ok, output = await mgr._resolve_merge_conflict("feat/branch", "Merge msg")
+
+		assert ok is False
+
+	async def test_resolve_fails_when_working_tree_dirty(self) -> None:
+		"""Incomplete resolution (dirty working tree) returns False."""
+		mgr = _conflict_manager()
+
+		async def mock_git(*args: str) -> tuple[bool, str]:
+			if args[0] == "diff" and "--diff-filter=U" in args:
+				return (True, "src/app.py\n")
+			if args[0] == "status" and "--porcelain" in args:
+				return (True, "UU src/app.py\n")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=mock_git)
+		mgr._run_command = AsyncMock(return_value=(True, "attempted resolution"))  # type: ignore[method-assign]
+
+		with tempfile.TemporaryDirectory() as td:
+			mgr.workspace = td
+			(Path(td) / "src").mkdir()
+			(Path(td) / "src" / "app.py").write_text("conflict markers")
+
+			ok, output = await mgr._resolve_merge_conflict("feat/branch", "Merge msg")
+
+		assert ok is False
+		assert "dirty" in output.lower()
+
+	async def test_resolve_fails_when_verification_fails(self) -> None:
+		"""Bad resolution caught by verification returns False."""
+		mgr = _conflict_manager()
+
+		async def mock_git(*args: str) -> tuple[bool, str]:
+			if args[0] == "diff" and "--diff-filter=U" in args:
+				return (True, "src/app.py\n")
+			if args[0] == "status" and "--porcelain" in args:
+				return (True, "")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=mock_git)
+		mgr._run_command = AsyncMock(return_value=(True, "resolved"))  # type: ignore[method-assign]
+		mgr._run_verification = AsyncMock(  # type: ignore[method-assign]
+			return_value=MagicMock(overall_passed=False, raw_output="3 tests failed"),
+		)
+
+		with tempfile.TemporaryDirectory() as td:
+			mgr.workspace = td
+			(Path(td) / "src").mkdir()
+			(Path(td) / "src" / "app.py").write_text("conflict markers")
+
+			ok, output = await mgr._resolve_merge_conflict("feat/branch", "Merge msg")
+
+		assert ok is False
+		assert "Verification failed" in output

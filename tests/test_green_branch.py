@@ -46,37 +46,24 @@ def _manager() -> GreenBranchManager:
 	return mgr
 
 
-def _git_mock_ok(*args: str) -> tuple[bool, str]:
-	"""Default git mock that handles rev-list --count for empty-rebase check."""
-	if args[0] == "rev-list" and "--count" in args:
-		return (True, "1")
-	return (True, "")
-
-
 class TestMergeUnit:
-	"""Tests for merge_unit() -- merge with smoke-test verification."""
+	"""Tests for merge_unit() -- fetch, merge, push."""
 
 	async def test_successful_merge(self) -> None:
-		"""Successful merge: merged=True, verification passes."""
 		mgr = _manager()
-		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
-		mgr._run_command = AsyncMock(return_value=(True, "all tests passed"))  # type: ignore[method-assign]
+		mgr._run_git = AsyncMock(return_value=(True, ""))
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
 		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
 
 		assert result.merged is True
-		assert result.rebase_ok is True
-		assert result.verification_passed is True
-		mgr._run_command.assert_awaited_once_with("pytest -q")
 		mgr._sync_to_source.assert_awaited_once()
 
 	async def test_merge_conflict(self) -> None:
-		"""Rebase conflict returns rebase_ok=False with failure output."""
 		mgr = _manager()
 
 		async def side_effect(*args: str) -> tuple[bool, str]:
-			if args[0] == "rebase" and args[1] == "mc/green":
+			if args[0] == "merge" and "--no-ff" in args:
 				return (False, "CONFLICT (content): Merge conflict in file.py")
 			return (True, "")
 
@@ -85,63 +72,29 @@ class TestMergeUnit:
 		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
 
 		assert result.merged is False
-		assert result.rebase_ok is False
-		assert result.failure_stage == "rebase_conflict"
-		assert "Rebase conflict" in result.failure_output
+		assert result.failure_stage == "merge_conflict"
 
-	async def test_rebase_conflict_returns_failure(self) -> None:
-		"""Rebase conflict returns rebase_ok=False with failure stage and calls abort."""
-		mgr = _manager()
-
-		async def side_effect(*args: str) -> tuple[bool, str]:
-			if args[0] == "rebase" and args[1] == "mc/green":
-				return (False, "CONFLICT (content): Merge conflict in file.py")
-			return (True, "")
-
-		mgr._run_git = AsyncMock(side_effect=side_effect)
-
-		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
-
-		assert result.merged is False
-		assert result.rebase_ok is False
-		assert result.failure_stage == "rebase_conflict"
-		# Verify rebase --abort was called
-		abort_calls = [
-			c for c in mgr._run_git.call_args_list
-			if c[0][0] == "rebase" and "--abort" in c[0]
-		]
-		assert len(abort_calls) >= 1
-
-	async def test_merge_uses_rebased_branch_not_remote(self) -> None:
-		"""Merge --no-ff targets the rebase branch, not the remote branch."""
+	async def test_merge_target_is_fetched_remote(self) -> None:
 		mgr = _manager()
 		git_calls: list[tuple[str, ...]] = []
 
 		async def tracking_git(*args: str) -> tuple[bool, str]:
 			git_calls.append(args)
-			if args[0] == "rev-list" and "--count" in args:
-				return (True, "1")
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=tracking_git)
-		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
 		await mgr.merge_unit("/tmp/worker", "feat/branch")
 
-		# Find the merge --no-ff call
-		merge_calls = [c for c in git_calls if c[0] == "merge" and len(c) > 1 and c[1] == "--no-ff"]
+		merge_calls = [c for c in git_calls if c[0] == "merge" and "--no-ff" in c]
 		assert len(merge_calls) == 1
-		merge_target = merge_calls[0][2]
-		assert merge_target == "mc/rebase-feat/branch"
-		assert "worker-" not in merge_target
+		assert "worker-feat/branch/feat/branch" in merge_calls[0][2]
 
 	async def test_auto_push(self) -> None:
-		"""When auto_push is configured, push_green_to_main is called."""
 		mgr = _manager()
 		mgr.config.green_branch.auto_push = True
-		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
-		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
+		mgr._run_git = AsyncMock(return_value=(True, ""))
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 		mgr.push_green_to_main = AsyncMock(return_value=True)  # type: ignore[method-assign]
 
@@ -150,87 +103,97 @@ class TestMergeUnit:
 		assert result.merged is True
 		mgr.push_green_to_main.assert_awaited_once()
 
-
-class TestMergeUnitVerification:
-	"""Tests for smoke-test verification in merge_unit()."""
-
-	async def test_verification_pass_allows_merge(self) -> None:
-		"""When verification passes, merge succeeds with verification_passed=True."""
+	async def test_fetch_failure(self) -> None:
 		mgr = _manager()
-		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
-		mgr._run_command = AsyncMock(return_value=(True, "12 passed"))  # type: ignore[method-assign]
-		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 
-		result = await mgr.merge_unit("/tmp/worker", "feat/verified")
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "fetch":
+				return (False, "fatal: remote not found")
+			return (True, "")
 
-		assert result.merged is True
-		assert result.verification_passed is True
-		assert result.failure_output == ""
-		assert result.failure_stage == ""
-		mgr._run_command.assert_awaited_once_with("pytest -q")
+		mgr._run_git = AsyncMock(side_effect=side_effect)
 
-	async def test_verification_fail_blocks_merge(self) -> None:
-		"""When verification fails, merge is blocked with failure details."""
-		mgr = _manager()
-		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
-		mgr._run_command = AsyncMock(return_value=(False, "FAILED test_foo.py::test_bar - AssertionError"))  # type: ignore[method-assign]
-		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
-
-		result = await mgr.merge_unit("/tmp/worker", "feat/broken")
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
 
 		assert result.merged is False
-		assert result.verification_passed is False
-		assert result.failure_stage == "verification"
-		assert "FAILED" in result.failure_output
-		mgr._sync_to_source.assert_not_awaited()
+		assert result.failure_stage == "fetch"
 
-	async def test_verification_failure_output_preserved(self) -> None:
-		"""Full verification output is captured in failure_output."""
-		mgr = _manager()
-		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
-		failure_text = "FAILED tests/test_api.py::test_auth\nERROR tests/test_db.py::test_connect\n2 failed, 1 error"
-		mgr._run_command = AsyncMock(return_value=(False, failure_text))  # type: ignore[method-assign]
-
-		result = await mgr.merge_unit("/tmp/worker", "feat/multi-fail")
-
-		assert result.failure_output == failure_text
-
-	async def test_verification_runs_configured_command(self) -> None:
-		"""Verification uses the command from config.target.verification.command."""
-		mgr = _manager()
-		mgr.config.target.verification.command = "make test && make lint"
-		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
-		mgr._run_command = AsyncMock(return_value=(True, "ok"))  # type: ignore[method-assign]
-		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
-
-		await mgr.merge_unit("/tmp/worker", "feat/custom-cmd")
-
-		mgr._run_command.assert_awaited_once_with("make test && make lint")
-
-	async def test_verification_failure_cleans_up(self) -> None:
-		"""On verification failure, temp branch and remote are cleaned up."""
+	async def test_cleanup_on_failure(self) -> None:
 		mgr = _manager()
 		git_calls: list[tuple[str, ...]] = []
 
 		async def tracking_git(*args: str) -> tuple[bool, str]:
 			git_calls.append(args)
-			if args[0] == "rev-list" and "--count" in args:
-				return (True, "1")
+			if args[0] == "merge" and "--no-ff" in args:
+				return (False, "conflict")
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=tracking_git)
-		mgr._run_command = AsyncMock(return_value=(False, "tests failed"))  # type: ignore[method-assign]
 
-		result = await mgr.merge_unit("/tmp/worker", "feat/cleanup-test")
+		await mgr.merge_unit("/tmp/worker", "feat/branch")
 
-		assert result.merged is False
-		# Verify cleanup happened (finally block runs): branch -D and remote remove
-		cleanup_cmds = [c for c in git_calls if c[0] == "branch" and c[1] == "-D" and "mc/merge-" in c[2]]
-		assert len(cleanup_cmds) >= 1
-		rebase_cleanup = [c for c in git_calls if c[0] == "branch" and c[1] == "-D" and "mc/rebase-" in c[2]]
-		assert len(rebase_cleanup) >= 1
 		remote_removes = [c for c in git_calls if c[0] == "remote" and c[1] == "remove"]
 		assert len(remote_removes) >= 1
+
+
+	async def test_merge_conflict_resolved_by_llm(self) -> None:
+		"""When conflict resolution succeeds, result.merged=True and conflict_resolved=True."""
+		mgr = _manager()
+
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "merge" and "--no-ff" in args:
+				return (False, "CONFLICT (content): Merge conflict in file.py")
+			if args[0] == "rev-parse" and args[1] == "HEAD":
+				return (True, "abc123\n")
+			if args[0] == "diff" and args[1] == "--name-only" and "HEAD~1" in args:
+				return (True, "file.py\n")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=side_effect)
+		mgr._resolve_merge_conflict = AsyncMock(return_value=(True, "resolved"))  # type: ignore[method-assign]
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
+
+		assert result.merged is True
+		assert result.conflict_resolved is True
+		mgr._resolve_merge_conflict.assert_awaited_once()
+
+	async def test_merge_conflict_resolution_fails_falls_back(self) -> None:
+		"""When conflict resolution fails, merge aborts as before."""
+		mgr = _manager()
+
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "merge" and "--no-ff" in args:
+				return (False, "CONFLICT (content): Merge conflict in file.py")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=side_effect)
+		mgr._resolve_merge_conflict = AsyncMock(return_value=(False, "failed"))  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
+
+		assert result.merged is False
+		assert result.failure_stage == "merge_conflict"
+
+	async def test_merge_conflict_resolution_disabled(self) -> None:
+		"""When conflict_resolution is disabled, skips resolution attempt."""
+		mgr = _manager()
+		mgr.config.green_branch.conflict_resolution = False
+
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "merge" and "--no-ff" in args:
+				return (False, "CONFLICT (content): Merge conflict in file.py")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=side_effect)
+		mgr._resolve_merge_conflict = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
+
+		assert result.merged is False
+		assert result.failure_stage == "merge_conflict"
+		mgr._resolve_merge_conflict.assert_not_awaited()
 
 
 class TestPushGreenToMain:
@@ -463,31 +426,22 @@ class TestParallelMergeConflicts:
 		"""3 workers modify the same file; only 1 merge succeeds, 2 get conflicts."""
 		mgr = _manager()
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
-		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 
-		# Track mc/green state: first rebase succeeds, subsequent ones conflict
-		# because the green branch has advanced.
-		rebase_count = 0
+		merge_count = 0
 
 		async def stateful_git(*args: str) -> tuple[bool, str]:
-			nonlocal rebase_count
-			# The rebase command: "rebase mc/green"
-			if args[0] == "rebase" and len(args) > 1 and not args[1].startswith("--"):
-				rebase_count += 1
-				if rebase_count == 1:
+			nonlocal merge_count
+			if args[0] == "merge" and "--no-ff" in args:
+				merge_count += 1
+				if merge_count == 1:
 					return (True, "")
 				return (False, "CONFLICT (content): Merge conflict in shared.py")
-			# rebase --abort is fine
-			if args[0] == "rebase" and "--abort" in args:
+			if args[0] == "merge" and "--abort" in args:
 				return (True, "")
-			if args[0] == "rev-list" and "--count" in args:
-				return (True, "1")
-			# All other git commands succeed
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=stateful_git)
 
-		# Launch 3 concurrent merge_unit calls
 		results = await asyncio.gather(
 			mgr.merge_unit("/tmp/w1", "feat/unit-1"),
 			mgr.merge_unit("/tmp/w2", "feat/unit-2"),
@@ -500,42 +454,32 @@ class TestParallelMergeConflicts:
 		assert len(succeeded) == 1
 		assert len(failed) == 2
 		for r in failed:
-			assert r.rebase_ok is False
-			assert "Rebase conflict" in r.failure_output
+			assert r.failure_stage == "merge_conflict"
 
 	async def test_concurrent_merge_lock_serialization(self) -> None:
-		"""_merge_lock serializes concurrent merge attempts (no true parallelism)."""
+		"""_merge_lock serializes concurrent merge attempts."""
 		mgr = _manager()
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
-		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 
 		execution_order: list[str] = []
 
 		async def ordered_git(*args: str) -> tuple[bool, str]:
-			if args[0] == "merge" and len(args) > 1 and args[1] == "--no-ff":
-				# Extract branch name from the remote/branch arg
+			if args[0] == "merge" and "--no-ff" in args:
 				branch = args[2].split("/")[-1] if len(args) > 2 else "unknown"
 				execution_order.append(branch)
-				# Small sleep to verify that other tasks don't interleave
 				await asyncio.sleep(0.01)
-			if args[0] == "rev-list" and "--count" in args:
-				return (True, "1")
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=ordered_git)
 
-		# Launch 3 concurrent merges
 		await asyncio.gather(
 			mgr.merge_unit("/tmp/w1", "unit-a"),
 			mgr.merge_unit("/tmp/w2", "unit-b"),
 			mgr.merge_unit("/tmp/w3", "unit-c"),
 		)
 
-		# All 3 merges should have executed (serialized by the lock)
 		assert len(execution_order) == 3
-		# Since asyncio.Lock serializes, no two merges ran simultaneously.
-		# Verify all branches were processed (order may vary due to asyncio scheduling)
-		assert set(execution_order) == {"rebase-unit-a", "rebase-unit-b", "rebase-unit-c"}
+		assert set(execution_order) == {"unit-a", "unit-b", "unit-c"}
 
 
 class TestRunDeploy:
@@ -616,8 +560,7 @@ class TestRunDeploy:
 		db = Database(":memory:")
 		mgr = GreenBranchManager(config, db)
 		mgr.workspace = "/tmp/test-workspace"
-		mgr._run_git = AsyncMock(side_effect=_git_mock_ok)
-		mgr._run_command = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
+		mgr._run_git = AsyncMock(return_value=(True, ""))
 		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
 		mgr.push_green_to_main = AsyncMock(return_value=True)  # type: ignore[method-assign]
 		mgr.run_deploy = AsyncMock(return_value=(True, "ok"))  # type: ignore[method-assign]
@@ -833,11 +776,10 @@ class TestGreenBranchRealGit:
 		result1 = await mgr.merge_unit(str(worker1), "unit/change-1")
 		assert result1.merged is True
 
-		# Second merge should fail with rebase conflict
+		# Second merge should fail with merge conflict
 		result2 = await mgr.merge_unit(str(worker2), "unit/change-2")
 		assert result2.merged is False
-		assert result2.rebase_ok is False
-		assert result2.failure_stage == "rebase_conflict"
+		assert result2.failure_stage == "merge_conflict"
 		assert "conflict" in result2.failure_output.lower()
 
 		# Verify mc/green still has worker 1's content (not corrupted)

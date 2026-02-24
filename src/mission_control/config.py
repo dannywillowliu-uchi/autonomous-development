@@ -179,6 +179,7 @@ class GreenBranchConfig:
 	reset_on_init: bool = True
 	auto_push: bool = False
 	push_branch: str = "main"
+	conflict_resolution: bool = True
 
 
 @dataclass

@@ -62,6 +62,7 @@ class UnitMergeResult:
 	merge_commit_hash: str = ""
 	changed_files: list[str] = field(default_factory=list)
 	sync_ok: bool = True
+	conflict_resolved: bool = False
 	verification_report: VerificationReport | None = None
 	hitl_decision: str = ""
 
@@ -170,22 +171,13 @@ class GreenBranchManager:
 		worker_workspace: str,
 		branch_name: str,
 	) -> UnitMergeResult:
-		"""Merge a unit branch into mc/green with smoke-test verification.
+		"""Merge a unit branch into mc/green.
 
-		Flow:
-		1. Fetch the unit branch from the worker workspace
-		2. Create a temp branch from mc/green, merge unit into it
-		3. If merge conflict -> fail
-		4. Run verification command on the merged result
-		5. If verification fails -> abort
-		6. Fast-forward mc/green to the merge commit
-		7. If auto_push -> push mc/green to main
+		Simple flow: fetch, merge, push. Worker already ran tests.
 		"""
 		async with self._merge_lock:
 			gb = self.config.green_branch
 			remote_name = f"worker-{branch_name}"
-			temp_branch = f"mc/merge-{branch_name}"
-			rebase_branch = f"mc/rebase-{branch_name}"
 
 			# Fetch the unit branch from worker workspace
 			await self._run_git("remote", "add", remote_name, worker_workspace)
@@ -195,97 +187,40 @@ class GreenBranchManager:
 				return UnitMergeResult(failure_output="Failed to fetch unit branch", failure_stage="fetch")
 
 			try:
-				# Rebase unit branch onto current mc/green
-				await self._run_git("branch", "-D", rebase_branch)  # clean stale
-				await self._run_git("checkout", "-b", rebase_branch, f"{remote_name}/{branch_name}")
-
-				rebase_ok, rebase_output = await self._run_git("rebase", gb.green_branch)
-				if not rebase_ok:
-					# Retry rebase once: green may have advanced since we fetched
-					logger.info("Rebase conflict for %s, retrying after brief wait", branch_name)
-					await self._run_git("rebase", "--abort")
-					await asyncio.sleep(2)
-					# Re-checkout the unit branch and retry rebase onto latest green
-					await self._run_git("checkout", rebase_branch)
-					rebase_ok, rebase_output = await self._run_git("rebase", gb.green_branch)
-					if not rebase_ok:
-						logger.warning("Rebase retry also failed for %s: %s", branch_name, rebase_output)
-						await self._run_git("rebase", "--abort")
-						return UnitMergeResult(
-							rebase_ok=False,
-							failure_output=f"Rebase conflict (after retry): {rebase_output[:500]}",
-							failure_stage="rebase_conflict",
-						)
-					logger.info("Rebase retry succeeded for %s", branch_name)
-				logger.info("Rebased %s onto %s", branch_name, gb.green_branch)
-
-				# Sanity check: ensure the rebased branch actually has commits
-				# ahead of mc/green. If the worker workspace was released and
-				# reset before we fetched, the unit branch ref gets destroyed
-				# and the rebase collapses to a no-op.
-				_, ahead_count = await self._run_git(
-					"rev-list", "--count", f"{gb.green_branch}..{rebase_branch}",
-				)
-				if ahead_count.strip() in ("", "0"):
-					logger.error(
-						"Rebased %s has 0 commits ahead of %s -- "
-						"unit branch was likely destroyed by workspace reset",
-						branch_name, gb.green_branch,
-					)
-					return UnitMergeResult(
-						failure_output="Unit branch empty after rebase (workspace reset race)",
-						failure_stage="empty_rebase",
-					)
-
-				# Create temp branch from mc/green
+				# Clean slate
 				await self._run_git("checkout", gb.green_branch)
-				await self._run_git("branch", "-D", temp_branch)  # clean up stale
-				await self._run_git("checkout", "-b", temp_branch)
+				await self._run_git("reset", "--hard", "HEAD")
 
-				# Merge unit branch into temp
+				# Merge
 				ok, output = await self._run_git(
-					"merge", "--no-ff", rebase_branch,
+					"merge", "--no-ff", f"{remote_name}/{branch_name}",
 					"-m", f"Merge {branch_name} into {gb.green_branch}",
 				)
+				conflict_resolved = False
 				if not ok:
 					logger.warning("Merge conflict for %s: %s", branch_name, output)
-					await self._run_git("merge", "--abort")
-					return UnitMergeResult(
-						failure_output=f"Merge conflict: {output[:500]}",
-						failure_stage="merge_conflict",
-					)
+					resolved = False
+					if gb.conflict_resolution:
+						merge_msg = f"Merge {branch_name} into {gb.green_branch}"
+						resolved, _ = await self._resolve_merge_conflict(
+							branch_name, merge_msg,
+						)
+						if resolved:
+							conflict_resolved = True
+							logger.info(
+								"LLM resolved merge conflict for %s", branch_name,
+							)
+					if not resolved:
+						await self._run_git("merge", "--abort")
+						return UnitMergeResult(
+							failure_output=f"Merge conflict: {output[:500]}",
+							failure_stage="merge_conflict",
+						)
 
-				# Run smoke-test verification before promoting to mc/green
-				report = await self._run_verification()
-				if not report.overall_passed:
-					logger.warning("Verification failed for %s: %s", branch_name, report.raw_output[-500:])
-					await self._run_git("checkout", gb.green_branch)
-					return UnitMergeResult(
-						verification_passed=False,
-						failure_output=report.raw_output,
-						failure_stage="verification",
-						verification_report=report,
-					)
-
-				# Fast-forward mc/green to the merge commit
-				await self._run_git("checkout", gb.green_branch)
-				merge_ok, merge_out = await self._run_git(
-					"merge", "--ff-only", temp_branch,
-				)
-				if not merge_ok:
-					logger.error(
-						"Failed to ff mc/green to merge temp: %s", merge_out,
-					)
-					return UnitMergeResult(
-						failure_output="ff-only merge failed",
-						failure_stage="fast_forward",
-					)
-
-				# Capture the merge commit hash and actual changed files
+				# Capture merge info
 				_, merge_hash = await self._run_git("rev-parse", "HEAD")
 				merge_commit_hash = merge_hash.strip()
 
-				# Get actual files changed via git diff (not files_hint)
 				_, diff_output = await self._run_git(
 					"diff", "--name-only", "HEAD~1", "HEAD",
 				)
@@ -293,81 +228,17 @@ class GreenBranchManager:
 					f.strip() for f in diff_output.splitlines() if f.strip()
 				]
 
-				logger.info("Merged %s directly into %s", branch_name, gb.green_branch)
-
-				hitl_decision = ""
-
-				# Gate A: Large merge HITL check
-				large_gate = self.config.hitl.large_merge_gate
-				if large_gate.enabled and self._hitl_gate is not None:
-					# Compute lines changed
-					_, stat_output = await self._run_git(
-						"diff", "--stat", "HEAD~1", "HEAD",
-					)
-					lines_changed = self._count_diff_lines(stat_output)
-					files_count = len(changed_files)
-
-					if (
-						lines_changed >= large_gate.large_merge_threshold_lines
-						or files_count >= large_gate.large_merge_threshold_files
-					):
-						from mission_control.hitl import ApprovalRequest
-						req = ApprovalRequest(
-							gate_type="large_merge",
-							timeout_seconds=large_gate.timeout_seconds,
-							timeout_action=large_gate.timeout_action,
-							context={
-								"branch": branch_name,
-								"lines_changed": lines_changed,
-								"files_changed": files_count,
-								"changed_files": changed_files[:20],
-							},
-						)
-						approved = await self._hitl_gate.request_approval(req)
-						if not approved:
-							hitl_decision = "large_merge_denied"
-							logger.info("HITL denied large merge for %s -- reverting", branch_name)
-							await self._run_git("reset", "--hard", "HEAD~1")
-							return UnitMergeResult(
-								failure_stage="hitl_large_merge_denied",
-								failure_output=f"HITL denied: {lines_changed} lines, {files_count} files",
-								hitl_decision=hitl_decision,
-							)
-						hitl_decision = "large_merge_approved"
+				logger.info("Merged %s into %s", branch_name, gb.green_branch)
 
 				sync_ok = await self._sync_to_source()
 
 				# Auto-push if configured
 				if gb.auto_push:
-					# Gate B: Push HITL check
-					push_gate = self.config.hitl.push_gate
-					push_approved = True
-					if push_gate.enabled and self._hitl_gate is not None:
-						from mission_control.hitl import ApprovalRequest
-						req = ApprovalRequest(
-							gate_type="push",
-							timeout_seconds=push_gate.timeout_seconds,
-							timeout_action=push_gate.timeout_action,
-							context={
-								"branch": branch_name,
-								"push_branch": gb.push_branch,
-								"merge_commit": merge_commit_hash,
-								"files_changed": len(changed_files),
-							},
-						)
-						push_approved = await self._hitl_gate.request_approval(req)
-						if not push_approved:
-							hitl_decision = hitl_decision or "push_denied"
-							logger.info("HITL denied push for %s -- merge stays, push skipped", branch_name)
+					await self.push_green_to_main()
 
-					if push_approved:
-						push_ok = await self.push_green_to_main()
-						# Deploy after push if configured
-						deploy = self.config.deploy
-						if push_ok and deploy.enabled and deploy.on_auto_push:
-							deploy_ok, deploy_out = await self.run_deploy()
-							if not deploy_ok:
-								logger.warning("Post-push deploy failed: %s", deploy_out[:200])
+					# Deploy after push if configured
+					if self.config.deploy.on_auto_push:
+						await self.run_deploy()
 
 				return UnitMergeResult(
 					merged=True,
@@ -376,14 +247,10 @@ class GreenBranchManager:
 					merge_commit_hash=merge_commit_hash,
 					changed_files=changed_files,
 					sync_ok=sync_ok,
-					verification_report=report,
-					hitl_decision=hitl_decision,
+					conflict_resolved=conflict_resolved,
 				)
 			finally:
-				# Clean up remote, temp branch, and rebase branch
 				await self._run_git("checkout", gb.green_branch)
-				await self._run_git("branch", "-D", temp_branch)
-				await self._run_git("branch", "-D", rebase_branch)
 				await self._run_git("remote", "remove", remote_name)
 
 	async def _zfc_generate_fixup_strategies(self, failure_output: str, n: int) -> list[str] | None:
@@ -599,6 +466,98 @@ class GreenBranchManager:
 			"-p", prompt,
 		]
 		return await self._run_command(cmd)
+
+	async def _resolve_merge_conflict(
+		self,
+		branch_name: str,
+		merge_message: str,
+	) -> tuple[bool, str]:
+		"""Attempt to resolve merge conflicts via a short LLM session.
+
+		Called when merge --no-ff produces conflicts. Detects conflicted files,
+		builds a prompt with conflict markers, spawns a Claude session to resolve,
+		then verifies the resolution is sound.
+
+		Returns (success, output) tuple.
+		"""
+		# 1. Detect conflicted files
+		ok, diff_output = await self._run_git(
+			"diff", "--name-only", "--diff-filter=U",
+		)
+		if not ok or not diff_output.strip():
+			logger.warning("No conflicted files detected for %s", branch_name)
+			return (False, "No conflicted files detected")
+
+		conflicted_files = [
+			f.strip() for f in diff_output.splitlines() if f.strip()
+		]
+		logger.info(
+			"Resolving %d conflicted files for %s: %s",
+			len(conflicted_files), branch_name, conflicted_files,
+		)
+
+		# 2. Read conflict markers from each file (cap at 10 files)
+		file_contents: list[str] = []
+		for cf in conflicted_files[:10]:
+			file_path = Path(self.workspace) / cf
+			if file_path.exists():
+				try:
+					text = file_path.read_text(errors="replace")
+					file_contents.append(f"### {cf}\n```\n{text[:5000]}\n```")
+				except OSError:
+					file_contents.append(f"### {cf}\n(could not read)")
+
+		# 3. Build prompt
+		prompt = (
+			"You are resolving git merge conflicts. The following files have conflict markers "
+			"(<<<<<<< / ======= / >>>>>>>) that must be resolved.\n\n"
+			f"## Merge Context\n{merge_message}\n\n"
+			f"## Conflicted Files\n" + "\n\n".join(file_contents) + "\n\n"
+			"## Instructions\n"
+			"1. Edit each conflicted file to resolve the conflicts (remove all conflict markers).\n"
+			"2. Stage the resolved files with git add.\n"
+			"3. Commit with: git commit --no-edit\n"
+			"4. Do NOT modify any files that are not conflicted.\n"
+			"5. Preserve the intent of BOTH sides of each conflict where possible.\n"
+		)
+
+		# 4. Spawn Claude session
+		model = self._get_fixup_model()
+		cmd = [
+			"claude", "--print", "--output-format", "text",
+			"--model", model,
+			"--max-turns", "3",
+			"-p", prompt,
+		]
+		try:
+			ok, output = await self._run_command(cmd)
+		except Exception as exc:
+			logger.warning("Conflict resolution session failed: %s", exc)
+			return (False, str(exc))
+
+		if not ok:
+			logger.warning("Conflict resolution session returned failure for %s", branch_name)
+			return (False, output)
+
+		# 5. Check working tree is clean (merge completed)
+		_, status_output = await self._run_git("status", "--porcelain")
+		if status_output.strip():
+			logger.warning(
+				"Working tree still dirty after conflict resolution for %s: %s",
+				branch_name, status_output[:200],
+			)
+			return (False, f"Working tree dirty: {status_output[:200]}")
+
+		# 6. Run verification
+		report = await self._run_verification()
+		if not report.overall_passed:
+			logger.warning(
+				"Verification failed after conflict resolution for %s", branch_name,
+			)
+			return (False, f"Verification failed: {report.raw_output[:500]}")
+
+		logger.info("Conflict resolution and verification succeeded for %s", branch_name)
+		return (True, output)
 
 	@staticmethod
 	def _count_diff_lines(diff_stat_output: str) -> int:
