@@ -42,6 +42,7 @@ class Heartbeat:
 		self._last_check_time: float = 0.0
 		self._last_merged_count: int = 0
 		self._consecutive_idle: int = 0
+		self._baseline_set: bool = False
 
 	async def recover(self) -> list[str]:
 		"""Attempt recovery when heartbeat detects idle stall.
@@ -124,7 +125,9 @@ class Heartbeat:
 		self._last_check_time = now
 
 		# First check: just record baseline
-		if self._last_merged_count == 0 and total_merged == 0:
+		if not self._baseline_set:
+			self._baseline_set = True
+			self._last_merged_count = total_merged
 			return ""
 
 		new_merges = total_merged - self._last_merged_count
