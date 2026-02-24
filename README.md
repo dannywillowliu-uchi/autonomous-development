@@ -6,43 +6,80 @@ Point it at a repo with an objective and a verification command. It plans, execu
 
 ## How it works
 
-```
-                    +----------------------------------+
-                    |     Continuous Controller         |
-                    |  (epoch loop, wall-time budget,   |
-                    |   ambition gate, review gate)     |
-                    +-----------------+----------------+
-                                      |
-           +--------------------------+-------------------------+
-           v                          v                         v
-    +--------------+        +----------------+        +----------------+
-    |   Planner    |        |   Workers      |        |  Green Branch  |
-    |  (recursive, |------->|  (parallel,    |------->|  (merge queue  |
-    |  adaptive,   |        |  architect/    |        |  + N-of-M      |
-    |  replan on   |        |  editor split, |        |  fixup +       |
-    |  stall)      |        |  specialist    |        |  verify +      |
-    +--------------+        |  templates)    |        |  promote)      |
-           ^                +----------------+        +-------+--------+
-           |                                                  |
-           |              +------------------+                |
-           +--------------+   Feedback       |<---------------+
-                          |  (grade, review, |
-                          |  reflect, EMA    |
-                          |  budget track)   |
-                          +------------------+
+```mermaid
+flowchart TD
+    subgraph Controller["Continuous Controller"]
+        direction TB
+        Start([Mission Start]) --> Plan
+        Plan["Recursive Planner\n(tree decomposition,\nacceptance criteria)"]
+        Plan --> Ambition{"Ambition\nGate"}
+        Ambition -- "score < threshold" --> Plan
+        Ambition -- "pass" --> Dispatch
+    end
+
+    subgraph Workers["Parallel Workers"]
+        Dispatch["Dispatch to\nworker pool"] --> W1["Worker 1\n(architect/editor)"]
+        Dispatch --> W2["Worker 2\n(architect/editor)"]
+        Dispatch --> W3["Worker N\n(architect/editor)"]
+    end
+
+    subgraph Merge["Green Branch Manager"]
+        direction TB
+        W1 & W2 & W3 --> MQ["Merge Queue"]
+        MQ --> GitMerge["Git Merge\ninto mc/working"]
+        GitMerge --> PreMerge{"Pre-merge\nVerification\n(pytest, ruff, mypy)"}
+        PreMerge -- "fail" --> Rollback["git reset HEAD~1"]
+        Rollback --> MQ
+        PreMerge -- "pass" --> AC{"Acceptance\nCriteria\n(shell commands)"}
+        AC -- "fail" --> Rollback
+        AC -- "pass" --> Promote["Promote to\nmc/green"]
+    end
+
+    subgraph Quality["Quality Gates"]
+        direction TB
+        Promote --> Review{"Diff Review\n(haiku)"}
+        Review -- "skip if criteria passed" --> Feedback
+        Review -- "score < threshold" --> Retry["Retry unit\nwith feedback"]
+        Retry --> Dispatch
+        Review -- "pass" --> Feedback["Feedback Loop\n(grade, reflect,\nEMA budget)"]
+    end
+
+    Feedback --> EpochDone{"Epoch\ncomplete?"}
+    EpochDone -- "more units" --> Plan
+    EpochDone -- "all done" --> FinalVerify
+
+    subgraph Completion["Mission Completion"]
+        direction TB
+        FinalVerify["Final Verification\n(pytest on mc/green)"]
+        FinalVerify --> Evaluator{"Evaluator Agent\n(Claude w/ tools:\nruns app, checks\nendpoints, reads files)"}
+        Evaluator -- "gaps found" --> ObjFail["objective_met = false"]
+        Evaluator -- "pass" --> ObjMet["Objective Met"]
+        ObjMet --> Strategist["Strategist proposes\nnext objective"]
+        Strategist --> Chain{"--chain?"}
+        Chain -- "yes" --> Start
+        Chain -- "no" --> Done([Mission Complete])
+        ObjFail --> Plan
+    end
+
+    style Controller fill:#1a1a2e,stroke:#e94560,color:#eee
+    style Workers fill:#1a1a2e,stroke:#0f3460,color:#eee
+    style Merge fill:#1a1a2e,stroke:#e94560,color:#eee
+    style Quality fill:#1a1a2e,stroke:#16213e,color:#eee
+    style Completion fill:#1a1a2e,stroke:#0f3460,color:#eee
 ```
 
 Each epoch:
-1. **Plan** -- Recursive planner decomposes the objective into a tree of work units with acceptance criteria, dependency ordering, and specialist assignments
+1. **Plan** -- Recursive planner decomposes the objective into a tree of work units with executable acceptance criteria (shell commands), dependency ordering, and specialist assignments
 2. **Ambition gate** -- Reject trivially scoped plans (configurable min score) and force replanning
 3. **Execute** -- Parallel Claude workers run in isolated workspace clones, optionally using architect/editor two-pass mode
 4. **Merge** -- Workers' branches queue into the merge queue and merge into `mc/working` via the green branch manager
-5. **Fixup** -- If merge conflicts or verification failures occur, N candidate fixup agents run in parallel; the best-scoring candidate wins
-6. **Verify + Promote** -- Verification runs on `mc/working`; passing code promotes to `mc/green`
-7. **Review gate** -- LLM diff review scores each unit (alignment, approach, tests). Units below the threshold are retried
-8. **Objective verification** -- LLM checks whether the overall objective is met before declaring the mission complete
-9. **Feedback** -- Record reflections, compute rewards, track costs via EMA budget tracking
-10. **Strategize** -- Strategist proposes follow-up objectives; `--chain` auto-starts the next mission
+5. **Pre-merge verification** -- pytest/ruff/mypy run on the merged code before accepting. Failures roll back the merge with `git reset --hard HEAD~1`
+6. **Acceptance criteria** -- Shell commands from the planner (e.g. `pytest tests/test_auth.py -q`) run as a second gate. Failures roll back
+7. **Fixup** -- If merge conflicts occur, N candidate fixup agents run in parallel; the best-scoring candidate wins
+8. **Review gate** -- LLM diff review (haiku) scores each unit on alignment, approach, and tests. Skipped when acceptance criteria already passed
+9. **Evaluator agent** -- At mission end, a Claude subprocess with shell/file access actually runs the software, checks endpoints, and inspects output. Flips `objective_met` to false if gaps are found
+10. **Feedback** -- Record reflections, compute rewards, track costs via EMA budget tracking
+11. **Strategize** -- Strategist proposes follow-up objectives; `--chain` auto-starts the next mission
 
 ## Quick start
 
@@ -108,9 +145,21 @@ max_replan_attempts = 2         # Replan attempts on ambition rejection
 verify_objective_completion = true  # LLM verifies objective before declaring done
 max_objective_checks = 2
 
+[continuous]
+verify_before_merge = true   # Pre-merge verification gate (default: on)
+
 [review]
 gate_completion = true       # Block low-quality units
 min_review_score = 5.0       # Minimum average review score (1-10)
+model = "haiku"              # Cheaper model for diff review
+skip_when_criteria_passed = true  # Skip review when acceptance criteria passed
+
+[evaluator]
+enabled = false              # Opt-in: evaluator agent at mission end
+model = "sonnet"             # Model for evaluator subprocess
+budget_usd = 0.50            # Max cost per evaluation
+timeout = 300                # Seconds before timeout
+max_turns = 10               # Max agentic turns
 
 [green_branch]
 auto_push = true         # Push mc/green to main after each round
@@ -227,7 +276,7 @@ src/mission_control/                    # 57 modules
 
 ## Key concepts
 
-**Green branch pattern**: Workers merge into `mc/working` via a merge queue. After merging, verification runs on `mc/working`. Passing code promotes (ff-merge) to `mc/green`. Only verified code reaches `mc/green`.
+**Green branch pattern**: Workers merge into `mc/working` via a merge queue. A pre-merge verification gate (pytest/ruff/mypy) runs immediately after merge; failures roll back with `git reset --hard HEAD~1`. Executable acceptance criteria (shell commands from the planner) run as a second gate. Only code that passes both promotes (ff-merge) to `mc/green`.
 
 **N-of-M fixup selection**: When verification fails, N=3 parallel fixup agents run with different approach hints. Each produces a candidate patch. The system selects the candidate with the best test delta, inspired by tournament-style patch selection from Agentless (UIUC).
 
@@ -237,7 +286,7 @@ src/mission_control/                    # 57 modules
 
 **Review gate**: After each unit completes, an LLM diff review scores it on alignment, approach quality, and test meaningfulness. Units below the threshold are retried with review feedback injected.
 
-**Objective verification**: Before declaring a mission complete, an LLM reads the codebase and objective to verify the goal was actually met, preventing premature completion.
+**Evaluator agent**: At mission end, a Claude subprocess with full tool access (shell, file reads) actually runs the software: executes tests, checks HTTP endpoints, inspects files. Replaces pure LLM opinion with environment-grounded verification. Disabled by default (opt in via `[evaluator] enabled = true`).
 
 **Speculation branching**: High-uncertainty units fork into N parallel branches with different approach hints. A selection gate picks the winner based on test/lint scores, allowing the system to explore multiple strategies simultaneously.
 
@@ -330,7 +379,7 @@ mc priority export
 ## Tests
 
 ```bash
-uv run pytest -q                           # 1,500+ tests
+uv run pytest -q                           # 1,690+ tests
 uv run ruff check src/ tests/              # Lint
 uv run mypy src/mission_control --ignore-missing-imports  # Types
 ```
