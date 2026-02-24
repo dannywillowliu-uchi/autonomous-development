@@ -42,6 +42,7 @@ class TestHeartbeat:
 	@pytest.mark.asyncio
 	async def test_progress_resets_idle(self, notifier: AsyncMock) -> None:
 		hb = Heartbeat(interval=0, idle_threshold=3, notifier=notifier)
+		hb._baseline_set = True
 		hb._last_merged_count = 5
 		hb._consecutive_idle = 2
 		result = await hb.check(total_merged=8, total_failed=0)
@@ -53,6 +54,7 @@ class TestHeartbeat:
 	@pytest.mark.asyncio
 	async def test_idle_increments(self, notifier: AsyncMock) -> None:
 		hb = Heartbeat(interval=0, idle_threshold=3, notifier=notifier)
+		hb._baseline_set = True
 		hb._last_merged_count = 5
 		result = await hb.check(total_merged=5, total_failed=1)
 		assert result == ""
@@ -61,6 +63,7 @@ class TestHeartbeat:
 	@pytest.mark.asyncio
 	async def test_stall_after_threshold(self, notifier: AsyncMock) -> None:
 		hb = Heartbeat(interval=0, idle_threshold=3, notifier=notifier, enable_recovery=False)
+		hb._baseline_set = True
 		hb._last_merged_count = 5
 		hb._consecutive_idle = 2  # Already 2 idle checks
 		result = await hb.check(total_merged=5, total_failed=0)
@@ -70,6 +73,7 @@ class TestHeartbeat:
 	@pytest.mark.asyncio
 	async def test_no_stall_with_merges(self) -> None:
 		hb = Heartbeat(interval=0, idle_threshold=1)
+		hb._baseline_set = True
 		hb._last_merged_count = 0
 		result = await hb.check(total_merged=1, total_failed=0)
 		assert result == ""
@@ -77,10 +81,35 @@ class TestHeartbeat:
 	@pytest.mark.asyncio
 	async def test_first_check_baseline(self) -> None:
 		hb = Heartbeat(interval=0, idle_threshold=3)
-		# Both 0 -- first check just sets baseline
+		# First check just sets baseline
 		result = await hb.check(total_merged=0, total_failed=0)
 		assert result == ""
 		assert hb.consecutive_idle == 0
+		assert hb._baseline_set is True
+		assert hb._last_merged_count == 0
+
+	@pytest.mark.asyncio
+	async def test_zero_merge_stall(self) -> None:
+		"""Heartbeat detects stuck missions when total_merged stays at 0."""
+		hb = Heartbeat(interval=0, idle_threshold=3, enable_recovery=False)
+		# First check sets baseline
+		result = await hb.check(total_merged=0, total_failed=0)
+		assert result == ""
+		assert hb.consecutive_idle == 0
+
+		# Subsequent checks with no merges should increment idle
+		result = await hb.check(total_merged=0, total_failed=0)
+		assert result == ""
+		assert hb.consecutive_idle == 1
+
+		result = await hb.check(total_merged=0, total_failed=0)
+		assert result == ""
+		assert hb.consecutive_idle == 2
+
+		# Third idle check hits threshold
+		result = await hb.check(total_merged=0, total_failed=0)
+		assert result == "heartbeat_stalled"
+		assert hb.consecutive_idle == 3
 
 
 
@@ -95,6 +124,7 @@ class TestHeartbeatRecovery:
 			interval=0, idle_threshold=3, notifier=notifier,
 			db=mock_db, enable_recovery=True,
 		)
+		hb._baseline_set = True
 		hb._last_merged_count = 5
 		hb._consecutive_idle = 2
 
@@ -122,6 +152,7 @@ class TestHeartbeatRecovery:
 			interval=0, idle_threshold=3, notifier=notifier,
 			db=mock_db, enable_recovery=False,
 		)
+		hb._baseline_set = True
 		hb._last_merged_count = 5
 		hb._consecutive_idle = 2
 
@@ -142,6 +173,7 @@ class TestHeartbeatRecovery:
 			interval=0, idle_threshold=1, notifier=notifier,
 			db=mock_db, enable_recovery=True,
 		)
+		hb._baseline_set = True
 		hb._last_merged_count = 3
 
 		result = await hb.check(total_merged=3, total_failed=0)
