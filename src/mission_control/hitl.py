@@ -51,6 +51,7 @@ class ApprovalGate:
 		self._notifier = notifier
 		self._approvals_dir = self._resolve_approvals_dir()
 		self._last_update_id: int = 0
+		self._telegram_lock = asyncio.Lock()
 		self._bot_token = config.notifications.telegram.bot_token
 		self._chat_id = config.notifications.telegram.chat_id
 
@@ -116,7 +117,8 @@ class ApprovalGate:
 
 			# Check Telegram updates if notifier is available
 			if self._notifier and self._bot_token:
-				telegram_status = await self._check_telegram_updates(req.request_id)
+				async with self._telegram_lock:
+					telegram_status = await self._check_telegram_updates(req.request_id)
 				if telegram_status == "approved":
 					self._finalize_file(approval_file, "approved")
 					return True

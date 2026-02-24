@@ -188,6 +188,71 @@ class TestTelegramPolling:
 		assert result is False
 
 
+class TestConcurrentApproval:
+	@pytest.mark.asyncio
+	async def test_concurrent_requests_each_see_own_command(self, tmp_path: Path) -> None:
+		"""Two concurrent request_approval calls each see their own /approve command."""
+		cfg = _make_config(tmp_path)
+		cfg.notifications.telegram.bot_token = "123:ABC"
+		cfg.notifications.telegram.chat_id = "42"
+		mock_notifier = MagicMock()
+		mock_notifier.send = AsyncMock()
+		gate = ApprovalGate(cfg, notifier=mock_notifier)
+
+		req1 = ApprovalRequest(gate_type="push", timeout_seconds=5, timeout_action="deny")
+		req2 = ApprovalRequest(gate_type="push", timeout_seconds=5, timeout_action="deny")
+
+		# Track how many times getUpdates has been called to sequence responses.
+		# First two calls return update_id=1 with approve for req1.
+		# After req1 resolves, the next calls return update_id=2 with approve for req2.
+		call_count = 0
+
+		def make_response(results: list[dict]) -> MagicMock:
+			resp = MagicMock()
+			resp.status_code = 200
+			resp.json.return_value = {"result": results}
+			return resp
+
+		async def fake_get(url: str, params: dict | None = None) -> MagicMock:
+			nonlocal call_count
+			call_count += 1
+			# First poll: return approve for req1 at update_id=1
+			if call_count <= 2:
+				return make_response([
+					{
+						"update_id": 1,
+						"message": {
+							"text": f"/approve_{req1.request_id}",
+							"chat": {"id": 42},
+						},
+					},
+					{
+						"update_id": 2,
+						"message": {
+							"text": f"/approve_{req2.request_id}",
+							"chat": {"id": 42},
+						},
+					},
+				])
+			# Subsequent polls: empty (both should have resolved by now)
+			return make_response([])
+
+		with patch("mission_control.hitl.httpx.AsyncClient") as mock_client_cls:
+			mock_client = AsyncMock()
+			mock_client.get = AsyncMock(side_effect=fake_get)
+			mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+			mock_client.__aexit__ = AsyncMock(return_value=None)
+			mock_client_cls.return_value = mock_client
+
+			result1, result2 = await asyncio.gather(
+				gate.request_approval(req1),
+				gate.request_approval(req2),
+			)
+
+		assert result1 is True, "req1 should be approved"
+		assert result2 is True, "req2 should be approved"
+
+
 class TestGateDisabled:
 	@pytest.mark.asyncio
 	async def test_no_gate_when_disabled(self, tmp_path: Path) -> None:
