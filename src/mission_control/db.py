@@ -1355,10 +1355,10 @@ class Database:
 		self.conn.commit()
 
 	def reset_orphaned_units(self) -> int:
-		"""Fail all running/pending work units (orphan cleanup). Returns count."""
+		"""Fail all running work units (orphan cleanup). Pending units are left intact. Returns count."""
 		cur = self.conn.execute(
 			"UPDATE work_units SET status='failed' "
-			"WHERE status='running' OR status='pending'",
+			"WHERE status='running'",
 		)
 		if cur.rowcount:
 			self.conn.commit()

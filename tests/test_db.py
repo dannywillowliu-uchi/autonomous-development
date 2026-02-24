@@ -804,15 +804,15 @@ class TestResetOrphanedUnits:
 	def _setup(self, db: Database) -> None:
 		db.insert_plan(Plan(id="p1", objective="test"))
 
-	def test_resets_running_and_pending(self, db: Database) -> None:
+	def test_resets_only_running(self, db: Database) -> None:
 		self._setup(db)
 		db.insert_work_unit(WorkUnit(id="a", plan_id="p1", status="running"))
 		db.insert_work_unit(WorkUnit(id="b", plan_id="p1", status="pending"))
 		db.insert_work_unit(WorkUnit(id="c", plan_id="p1", status="completed"))
 		count = db.reset_orphaned_units()
-		assert count == 2
+		assert count == 1
 		assert db.get_work_unit("a").status == "failed"
-		assert db.get_work_unit("b").status == "failed"
+		assert db.get_work_unit("b").status == "pending"
 		assert db.get_work_unit("c").status == "completed"
 
 	def test_returns_zero_when_none(self, db: Database) -> None:
