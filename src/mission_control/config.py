@@ -276,14 +276,26 @@ class DeployConfig:
 
 
 @dataclass
+class EvaluatorConfig:
+	"""Evaluator agent settings -- spawns a Claude subprocess with shell access."""
+
+	enabled: bool = False
+	model: str = "sonnet"
+	budget_usd: float = 0.50
+	timeout: int = 300
+	max_turns: int = 10
+
+
+@dataclass
 class ReviewConfig:
 	"""LLM diff review settings."""
 
 	enabled: bool = True
-	model: str = "sonnet"
-	budget_per_review_usd: float = 0.10
+	model: str = "haiku"
+	budget_per_review_usd: float = 0.05
 	gate_completion: bool = False  # when True, review blocks unit completion
 	min_review_score: float = 0.0  # minimum avg_score to pass gating
+	skip_when_criteria_passed: bool = True
 
 
 @dataclass
@@ -439,6 +451,7 @@ class MissionConfig:
 	target: TargetConfig = field(default_factory=TargetConfig)
 	scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
 	review: ReviewConfig = field(default_factory=ReviewConfig)
+	evaluator: EvaluatorConfig = field(default_factory=EvaluatorConfig)
 	rounds: RoundsConfig = field(default_factory=RoundsConfig)
 	continuous: ContinuousConfig = field(default_factory=ContinuousConfig)
 	planner: PlannerConfig = field(default_factory=PlannerConfig)
@@ -749,6 +762,21 @@ def _build_notifications(data: dict[str, Any]) -> NotificationConfig:
 	return nc
 
 
+def _build_evaluator(data: dict[str, Any]) -> EvaluatorConfig:
+	ec = EvaluatorConfig()
+	if "enabled" in data:
+		ec.enabled = bool(data["enabled"])
+	if "model" in data:
+		ec.model = str(data["model"])
+	if "budget_usd" in data:
+		ec.budget_usd = float(data["budget_usd"])
+	if "timeout" in data:
+		ec.timeout = int(data["timeout"])
+	if "max_turns" in data:
+		ec.max_turns = int(data["max_turns"])
+	return ec
+
+
 def _build_review(data: dict[str, Any]) -> ReviewConfig:
 	rc = ReviewConfig()
 	if "enabled" in data:
@@ -761,6 +789,8 @@ def _build_review(data: dict[str, Any]) -> ReviewConfig:
 		rc.gate_completion = bool(data["gate_completion"])
 	if "min_review_score" in data:
 		rc.min_review_score = float(data["min_review_score"])
+	if "skip_when_criteria_passed" in data:
+		rc.skip_when_criteria_passed = bool(data["skip_when_criteria_passed"])
 	return rc
 
 
@@ -1060,6 +1090,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.dashboard = _build_dashboard(data["dashboard"])
 	if "review" in data:
 		mc.review = _build_review(data["review"])
+	if "evaluator" in data:
+		mc.evaluator = _build_evaluator(data["evaluator"])
 	if "deploy" in data:
 		mc.deploy = _build_deploy(data["deploy"])
 	if "models" in data:

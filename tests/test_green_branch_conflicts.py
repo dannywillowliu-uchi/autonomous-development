@@ -1125,6 +1125,7 @@ class TestReconcilerSweep:
 		self, config: MissionConfig, db: Database,
 	) -> None:
 		"""Reconciler sweep fires after a successful merge."""
+		config.continuous.verify_before_merge = False
 		db.insert_mission(Mission(id="m1", objective="test"))
 		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
@@ -1165,6 +1166,7 @@ class TestReconcilerSweep:
 		self, config: MissionConfig, db: Database,
 	) -> None:
 		"""When reconciler verification fails, run_fixup is called."""
+		config.continuous.verify_before_merge = False
 		db.insert_mission(Mission(id="m1", objective="test"))
 		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
@@ -1215,6 +1217,7 @@ class TestReconcilerSweep:
 		self, config: MissionConfig, db: Database,
 	) -> None:
 		"""Reconciler doesn't re-run if no new merges since last check."""
+		config.continuous.verify_before_merge = False
 		db.insert_mission(Mission(id="m1", objective="test"))
 		ctrl = ContinuousController(config, db)
 		result = ContinuousMissionResult(mission_id="m1")

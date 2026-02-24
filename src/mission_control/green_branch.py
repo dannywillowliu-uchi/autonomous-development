@@ -170,10 +170,11 @@ class GreenBranchManager:
 		self,
 		worker_workspace: str,
 		branch_name: str,
+		acceptance_criteria: str = "",
 	) -> UnitMergeResult:
 		"""Merge a unit branch into mc/green.
 
-		Simple flow: fetch, merge, push. Worker already ran tests.
+		Simple flow: fetch, merge, verify, push. Rolls back on verification failure.
 		"""
 		async with self._merge_lock:
 			gb = self.config.green_branch
@@ -230,6 +231,35 @@ class GreenBranchManager:
 
 				logger.info("Merged %s into %s", branch_name, gb.green_branch)
 
+				# Pre-merge verification gate
+				verification_report = None
+				if self.config.continuous.verify_before_merge:
+					verification_report = await self._run_verification()
+					if not verification_report.overall_passed:
+						logger.warning("Pre-merge verification failed for %s, rolling back", branch_name)
+						await self._run_git("reset", "--hard", "HEAD~1")
+						return UnitMergeResult(
+							merged=False,
+							verification_passed=False,
+							failure_output=verification_report.raw_output[:2000],
+							failure_stage="pre_merge_verification",
+							verification_report=verification_report,
+						)
+
+				# Acceptance criteria gate
+				if acceptance_criteria:
+					ac_passed, ac_output = await self._run_acceptance_criteria(acceptance_criteria)
+					if not ac_passed:
+						logger.warning("Acceptance criteria failed for %s, rolling back", branch_name)
+						await self._run_git("reset", "--hard", "HEAD~1")
+						return UnitMergeResult(
+							merged=False,
+							verification_passed=False,
+							failure_output=ac_output[:2000],
+							failure_stage="acceptance_criteria",
+							verification_report=verification_report,
+						)
+
 				sync_ok = await self._sync_to_source()
 
 				# Auto-push if configured
@@ -248,6 +278,7 @@ class GreenBranchManager:
 					changed_files=changed_files,
 					sync_ok=sync_ok,
 					conflict_resolved=conflict_resolved,
+					verification_report=verification_report,
 				)
 			finally:
 				await self._run_git("checkout", gb.green_branch)
@@ -777,6 +808,34 @@ class GreenBranchManager:
 		stdout, _ = await proc.communicate()
 		output = stdout.decode() if stdout else ""
 		return (proc.returncode == 0, output)
+
+	async def _run_acceptance_criteria(self, criteria: str, timeout: int = 120) -> tuple[bool, str]:
+		"""Run acceptance criteria shell command(s) in the workspace.
+
+		Returns (passed, output) tuple. Criteria are expected to be shell
+		commands that exit 0 on success.
+		"""
+		try:
+			proc = await asyncio.create_subprocess_shell(
+				criteria,
+				cwd=self.workspace,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.STDOUT,
+			)
+			try:
+				stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+			except asyncio.TimeoutError:
+				logger.warning("Acceptance criteria timed out after %ds: %s", timeout, criteria[:100])
+				try:
+					proc.kill()
+					await proc.wait()
+				except ProcessLookupError:
+					pass
+				return (False, f"Acceptance criteria timed out after {timeout}s")
+			output = stdout.decode() if stdout else ""
+			return (proc.returncode == 0, output)
+		except (FileNotFoundError, OSError) as exc:
+			return (False, f"Acceptance criteria execution error: {exc}")
 
 	async def _run_verification(self) -> VerificationReport:
 		"""Run verification nodes and return a structured report.

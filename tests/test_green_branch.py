@@ -20,7 +20,16 @@ from mission_control.config import (
 from mission_control.continuous_controller import ContinuousController
 from mission_control.db import Database
 from mission_control.green_branch import GreenBranchManager
-from mission_control.models import Epoch, Handoff, Mission, Plan, WorkUnit
+from mission_control.models import (
+	Epoch,
+	Handoff,
+	Mission,
+	Plan,
+	VerificationNodeKind,
+	VerificationReport,
+	VerificationResult,
+	WorkUnit,
+)
 
 
 def _config() -> MissionConfig:
@@ -35,6 +44,9 @@ def _config() -> MissionConfig:
 		working_branch="mc/working",
 		green_branch="mc/green",
 	)
+	# Disable pre-merge verification by default in tests to avoid
+	# needing to mock _run_verification in every merge test
+	mc.continuous.verify_before_merge = False
 	return mc
 
 
@@ -1163,5 +1175,167 @@ class TestTimestampFallback:
 		assert "Done without timestamp" in content
 		# No parenthesized timestamp
 		assert "()" not in content
+
+
+# -- Pre-merge verification gate tests --
+
+
+def _gate_manager() -> GreenBranchManager:
+	"""Manager with verify_before_merge enabled."""
+	config = _config()
+	config.continuous.verify_before_merge = True
+	db = Database(":memory:")
+	mgr = GreenBranchManager(config, db)
+	mgr.workspace = "/tmp/test-workspace"
+	return mgr
+
+
+class TestPreMergeVerificationGate:
+	"""Tests for the pre-merge verification gate in merge_unit()."""
+
+	async def test_pre_merge_verification_pass(self) -> None:
+		"""When verification passes, merge succeeds."""
+		mgr = _gate_manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		passing_report = VerificationReport(
+			results=[VerificationResult(kind=VerificationNodeKind.PYTEST, passed=True)],
+			raw_output="all passed",
+		)
+		mgr._run_verification = AsyncMock(return_value=passing_report)  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
+
+		assert result.merged is True
+		assert result.verification_passed is True
+		assert result.verification_report is passing_report
+		mgr._run_verification.assert_awaited_once()
+
+	async def test_pre_merge_verification_fail_rollback(self) -> None:
+		"""When verification fails, merge is rolled back."""
+		mgr = _gate_manager()
+		git_calls: list[tuple[str, ...]] = []
+
+		async def tracking_git(*args: str) -> tuple[bool, str]:
+			git_calls.append(args)
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=tracking_git)
+
+		failing_report = VerificationReport(
+			results=[VerificationResult(kind=VerificationNodeKind.PYTEST, passed=False)],
+			raw_output="2 tests failed",
+		)
+		mgr._run_verification = AsyncMock(return_value=failing_report)  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
+
+		assert result.merged is False
+		assert result.verification_passed is False
+		assert result.failure_stage == "pre_merge_verification"
+		assert "2 tests failed" in result.failure_output
+		assert result.verification_report is failing_report
+		# Verify git reset was called
+		reset_calls = [c for c in git_calls if c[0] == "reset" and "--hard" in c]
+		assert len(reset_calls) >= 1
+
+	async def test_pre_merge_verification_skipped_when_disabled(self) -> None:
+		"""When verify_before_merge is False, _run_verification is not called."""
+		mgr = _manager()  # verify_before_merge=False by default
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+		mgr._run_verification = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
+
+		assert result.merged is True
+		mgr._run_verification.assert_not_awaited()
+
+
+# -- Acceptance criteria tests --
+
+
+class TestAcceptanceCriteria:
+	"""Tests for executable acceptance criteria in merge_unit()."""
+
+	async def test_acceptance_criteria_pass(self) -> None:
+		"""When criteria command exits 0, merge succeeds."""
+		mgr = _gate_manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		passing_report = VerificationReport(
+			results=[VerificationResult(kind=VerificationNodeKind.PYTEST, passed=True)],
+			raw_output="ok",
+		)
+		mgr._run_verification = AsyncMock(return_value=passing_report)  # type: ignore[method-assign]
+		mgr._run_acceptance_criteria = AsyncMock(return_value=(True, "ok"))  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch", acceptance_criteria="pytest tests/test_x.py -q")
+
+		assert result.merged is True
+		mgr._run_acceptance_criteria.assert_awaited_once_with("pytest tests/test_x.py -q")
+
+	async def test_acceptance_criteria_fail_rollback(self) -> None:
+		"""When criteria command exits non-zero, merge is rolled back."""
+		mgr = _gate_manager()
+		git_calls: list[tuple[str, ...]] = []
+
+		async def tracking_git(*args: str) -> tuple[bool, str]:
+			git_calls.append(args)
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=tracking_git)
+
+		passing_report = VerificationReport(
+			results=[VerificationResult(kind=VerificationNodeKind.PYTEST, passed=True)],
+			raw_output="ok",
+		)
+		mgr._run_verification = AsyncMock(return_value=passing_report)  # type: ignore[method-assign]
+		mgr._run_acceptance_criteria = AsyncMock(return_value=(False, "assertion failed"))  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch", acceptance_criteria="python -c 'assert False'")
+
+		assert result.merged is False
+		assert result.failure_stage == "acceptance_criteria"
+		assert "assertion failed" in result.failure_output
+		# Verify git reset was called
+		reset_calls = [c for c in git_calls if c[0] == "reset" and "--hard" in c]
+		assert len(reset_calls) >= 1
+
+	async def test_acceptance_criteria_empty_skips(self) -> None:
+		"""When acceptance_criteria is empty, it's skipped."""
+		mgr = _gate_manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		passing_report = VerificationReport(
+			results=[VerificationResult(kind=VerificationNodeKind.PYTEST, passed=True)],
+			raw_output="ok",
+		)
+		mgr._run_verification = AsyncMock(return_value=passing_report)  # type: ignore[method-assign]
+		mgr._run_acceptance_criteria = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch", acceptance_criteria="")
+
+		assert result.merged is True
+		mgr._run_acceptance_criteria.assert_not_awaited()
+
+	async def test_acceptance_criteria_timeout(self) -> None:
+		"""Acceptance criteria timeout returns failure."""
+		mgr = _gate_manager()
+		mgr.workspace = "/tmp/test-workspace"
+
+		mock_proc = AsyncMock()
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+
+		with patch("mission_control.green_branch.asyncio.create_subprocess_shell", return_value=mock_proc):
+			with patch("mission_control.green_branch.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+				passed, output = await mgr._run_acceptance_criteria("sleep 999", timeout=1)
+
+		assert passed is False
+		assert "timed out" in output
 
 

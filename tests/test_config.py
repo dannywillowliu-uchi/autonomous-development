@@ -747,3 +747,80 @@ zfc_ambition_scoring = true
 		assert cfg.zfc.zfc_ambition_scoring is False
 		assert cfg.zfc.zfc_fixup_prompts is False
 		assert cfg.zfc.llm_timeout == 60
+
+
+# -- EvaluatorConfig tests --
+
+
+class TestEvaluatorConfig:
+	def test_evaluator_defaults(self) -> None:
+		"""EvaluatorConfig has correct defaults."""
+		from mission_control.config import EvaluatorConfig
+		ec = EvaluatorConfig()
+		assert ec.enabled is False
+		assert ec.model == "sonnet"
+		assert ec.budget_usd == 0.50
+		assert ec.timeout == 300
+		assert ec.max_turns == 10
+
+	def test_evaluator_on_mission_config(self) -> None:
+		"""MissionConfig includes evaluator field with defaults."""
+		mc = MissionConfig()
+		assert hasattr(mc, "evaluator")
+		assert mc.evaluator.enabled is False
+
+	def test_evaluator_parsed_from_toml(self, tmp_path: Path) -> None:
+		"""[evaluator] section values are parsed correctly from TOML."""
+		toml = tmp_path / "mission-control.toml"
+		toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[evaluator]
+enabled = true
+model = "opus"
+budget_usd = 1.0
+timeout = 600
+max_turns = 20
+""")
+		cfg = load_config(toml)
+		assert cfg.evaluator.enabled is True
+		assert cfg.evaluator.model == "opus"
+		assert cfg.evaluator.budget_usd == 1.0
+		assert cfg.evaluator.timeout == 600
+		assert cfg.evaluator.max_turns == 20
+
+	def test_evaluator_defaults_when_omitted(self, minimal_config: Path) -> None:
+		"""Without [evaluator] section, defaults are used."""
+		cfg = load_config(minimal_config)
+		assert cfg.evaluator.enabled is False
+		assert cfg.evaluator.model == "sonnet"
+		assert cfg.evaluator.budget_usd == 0.50
+
+
+# -- Updated ReviewConfig tests --
+
+
+class TestReviewConfigUpdated:
+	def test_review_defaults_updated(self) -> None:
+		"""ReviewConfig defaults changed to haiku and lower budget."""
+		from mission_control.config import ReviewConfig
+		rc = ReviewConfig()
+		assert rc.model == "haiku"
+		assert rc.budget_per_review_usd == 0.05
+		assert rc.skip_when_criteria_passed is True
+
+	def test_review_skip_when_criteria_parsed(self, tmp_path: Path) -> None:
+		"""[review] skip_when_criteria_passed is parsed from TOML."""
+		toml = tmp_path / "mission-control.toml"
+		toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[review]
+skip_when_criteria_passed = false
+""")
+		cfg = load_config(toml)
+		assert cfg.review.skip_when_criteria_passed is False

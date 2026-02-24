@@ -269,7 +269,7 @@ Option A - subdivide into sub-scopes (max {max_children}):
 Option B - leaf tasks:
 <!-- PLAN -->{{"type":"leaves","units":[
   {{"title":"task","description":"do X","files_hint":"f.py",
-    "priority":1,"acceptance_criteria":"testable condition","specialist":"",
+    "priority":1,"acceptance_criteria":"shell command(s) that exit 0 when done","specialist":"",
     "speculation_score":0.0}}
 ]}}<!-- /PLAN -->
 
@@ -349,7 +349,7 @@ For subdivision:
 For leaf tasks:
 <!-- PLAN -->{{"type":"leaves","units":[
   {{"title":"...","description":"...","files_hint":"...","priority":1,
-    "depends_on_indices":[],"acceptance_criteria":"testable done condition",
+    "depends_on_indices":[],"acceptance_criteria":"shell command(s) that exit 0 when done, separated by &&",
     "specialist":"test-writer|refactorer|debugger|",
     "speculation_score":0.0}}
 ]}}<!-- /PLAN -->

@@ -1151,7 +1151,7 @@ class TestCancelUnitDuringMerge:
 		merge_started = asyncio.Event()
 		merge_proceed = asyncio.Event()
 
-		async def slow_merge(workspace: str, branch: str) -> UnitMergeResult:
+		async def slow_merge(workspace: str, branch: str, **kwargs: object) -> UnitMergeResult:
 			merge_started.set()
 			await merge_proceed.wait()
 			return UnitMergeResult(merged=True, rebase_ok=True, verification_passed=True)
@@ -2846,4 +2846,96 @@ class TestAdjustSignalSemaphore:
 
 		# Only 2 should be available (2 releases were absorbed by debt)
 		assert ctrl._semaphore._value == 2
+
+
+# -- Evaluator agent tests --
+
+
+class TestEvaluatorAgent:
+	"""Tests for _run_evaluator_agent()."""
+
+	async def test_evaluator_passes(self, config: MissionConfig, db: Database) -> None:
+		"""Evaluator returning passed=true produces correct result."""
+		config.evaluator.enabled = True
+		ctrl = ContinuousController(config, db)
+		mission = Mission(id="m1", objective="Build API")
+
+		eval_output = 'Tests pass. EVALUATION:{"passed": true, "evidence": ["all tests green"], "gaps": []}'
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate = AsyncMock(return_value=(eval_output.encode(), b""))
+
+		mod = "mission_control.continuous_controller"
+		with patch(f"{mod}.claude_subprocess_env", return_value={}):
+			with patch(f"{mod}.asyncio.create_subprocess_exec", return_value=mock_proc):
+				with patch(f"{mod}.asyncio.wait_for", return_value=(eval_output.encode(), b"")):
+					result = await ctrl._run_evaluator_agent(mission, "/tmp/workspace")
+
+		assert result["passed"] is True
+		assert "all tests green" in result["evidence"]
+		assert result["gaps"] == []
+
+	async def test_evaluator_fails(self, config: MissionConfig, db: Database) -> None:
+		"""Evaluator returning passed=false produces correct result."""
+		config.evaluator.enabled = True
+		ctrl = ContinuousController(config, db)
+		mission = Mission(id="m1", objective="Build API")
+
+		eval_output = 'EVALUATION:{"passed": false, "evidence": [], "gaps": ["API endpoint missing"]}'
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate = AsyncMock(return_value=(eval_output.encode(), b""))
+
+		mod = "mission_control.continuous_controller"
+		with patch(f"{mod}.claude_subprocess_env", return_value={}):
+			with patch(f"{mod}.asyncio.create_subprocess_exec", return_value=mock_proc):
+				with patch(f"{mod}.asyncio.wait_for", return_value=(eval_output.encode(), b"")):
+					result = await ctrl._run_evaluator_agent(mission, "/tmp/workspace")
+
+		assert result["passed"] is False
+		assert "API endpoint missing" in result["gaps"]
+
+	async def test_evaluator_timeout(self, config: MissionConfig, db: Database) -> None:
+		"""Evaluator timeout returns failure result."""
+		config.evaluator.enabled = True
+		config.evaluator.timeout = 1
+		ctrl = ContinuousController(config, db)
+		mission = Mission(id="m1", objective="Build API")
+
+		mock_proc = AsyncMock()
+		mock_proc.kill = MagicMock()
+		mock_proc.wait = AsyncMock()
+
+		with patch("mission_control.continuous_controller.claude_subprocess_env", return_value={}):
+			with patch("mission_control.continuous_controller.asyncio.create_subprocess_exec", return_value=mock_proc):
+				with patch("mission_control.continuous_controller.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+					result = await ctrl._run_evaluator_agent(mission, "/tmp/workspace")
+
+		assert result["passed"] is False
+		assert "timed out" in result["gaps"][0].lower()
+
+	async def test_evaluator_skipped_when_disabled(self, config: MissionConfig, db: Database) -> None:
+		"""Evaluator config disabled by default -- verify default."""
+		assert config.evaluator.enabled is False
+
+
+# -- Reviewer skip tests --
+
+
+class TestReviewerSkip:
+	"""Tests for reviewer skip when acceptance criteria passed."""
+
+	def test_review_default_model_is_haiku(self) -> None:
+		"""Verify the default review model changed to haiku."""
+		from mission_control.config import ReviewConfig
+		rc = ReviewConfig()
+		assert rc.model == "haiku"
+		assert rc.budget_per_review_usd == 0.05
+		assert rc.skip_when_criteria_passed is True
+
+	def test_review_skip_when_criteria_passed_default(self) -> None:
+		"""skip_when_criteria_passed defaults to True."""
+		from mission_control.config import ReviewConfig
+		rc = ReviewConfig()
+		assert rc.skip_when_criteria_passed is True
 

@@ -8,7 +8,7 @@ import logging
 import shlex
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -154,6 +154,9 @@ class ContinuousMissionResult:
 	stopped_reason: str = ""
 	final_verification_passed: bool | None = None
 	final_verification_output: str = ""
+	evaluator_passed: bool | None = None
+	evaluator_evidence: list[str] = field(default_factory=list)
+	evaluator_gaps: list[str] = field(default_factory=list)
 	backlog_item_ids: list[str] | None = None
 	ambition_score: int = 0
 	next_objective: str = ""
@@ -173,9 +176,10 @@ class ContinuousController:
 	    records feedback, checks stopping conditions
 	"""
 
-	def __init__(self, config: MissionConfig, db: Database) -> None:
+	def __init__(self, config: MissionConfig, db: Database, chain_id: str = "") -> None:
 		self.config = config
 		self.db = db
+		self.chain_id = chain_id
 		self.running = True
 		self._backend: WorkerBackend | None = None
 		self._green_branch: GreenBranchManager | None = None
@@ -377,6 +381,7 @@ class ContinuousController:
 		mission = Mission(
 			objective=self.config.target.objective,
 			status="running",
+			chain_id=self.chain_id,
 		)
 		try:
 			self.db.insert_mission(mission)
@@ -514,6 +519,26 @@ class ContinuousController:
 					)
 					result.final_verification_passed = False
 					result.final_verification_output = str(exc)
+
+			# Evaluator agent: spawn Claude with shell access to actually test the software
+			if (
+				self.config.evaluator.enabled
+				and self._green_branch
+				and self._total_merged > 0
+				and result.final_verification_passed
+			):
+				try:
+					eval_result = await self._run_evaluator_agent(mission, self._green_branch.workspace)
+					result.evaluator_passed = eval_result.get("passed", False)
+					result.evaluator_evidence = eval_result.get("evidence", [])
+					result.evaluator_gaps = eval_result.get("gaps", [])
+					if not result.evaluator_passed:
+						result.objective_met = False
+						logger.warning(
+							"Evaluator agent failed: gaps=%s", result.evaluator_gaps,
+						)
+				except Exception as exc:
+					logger.error("Evaluator agent error: %s", exc, exc_info=True)
 
 			# Deploy at mission end if configured and verification passed
 			deploy = self.config.deploy
@@ -1697,6 +1722,7 @@ class ContinuousController:
 				try:
 					merge_result = await self._green_branch.merge_unit(
 						workspace, unit.branch_name,
+						acceptance_criteria=unit.acceptance_criteria,
 					)
 					merged = merge_result.merged
 					self._degradation.record_merge_attempt(conflict=not merged)
@@ -1737,7 +1763,14 @@ class ContinuousController:
 								)
 						# LLM diff review (blocking if gate_completion, else fire-and-forget)
 						if self.config.review.enabled:
-							if self.config.review.gate_completion:
+							criteria_passed = (
+								self.config.review.skip_when_criteria_passed
+								and unit.acceptance_criteria
+								and merge_result.verification_passed
+							)
+							if criteria_passed:
+								logger.debug("Skipping review for unit %s: acceptance criteria passed", unit.id)
+							elif self.config.review.gate_completion:
 								review = await self._blocking_review(
 									unit, workspace, mission, epoch,
 									merge_commit_hash=merge_result.merge_commit_hash,
@@ -1957,7 +1990,8 @@ class ContinuousController:
 				logger.debug("Failed to record causal signal: %s", exc)
 
 			# Reconciler sweep: verify combined green state after new merges
-			if merged and self._total_merged > self._last_reconcile_count:
+			# Skip when verify_before_merge is on -- each merge already verified
+			if merged and self._total_merged > self._last_reconcile_count and not cont.verify_before_merge:
 				try:
 					reconcile_ok, reconcile_output = await self._green_branch.run_reconciliation_check()
 					if not reconcile_ok:
@@ -2365,6 +2399,78 @@ class ContinuousController:
 		if not risk_lines:
 			return ""
 		return "## Causal Risk Factors\n" + "\n".join(risk_lines)
+
+	async def _run_evaluator_agent(self, mission: Mission, workspace: str) -> dict[str, Any]:
+		"""Spawn a Claude subprocess with shell/file access to evaluate the mission result.
+
+		Unlike _verify_objective (which reads summaries), this agent can actually
+		run the software: execute tests, start the app, check HTTP endpoints, inspect files.
+
+		Returns {"passed": bool, "evidence": [...], "gaps": [...]}.
+		"""
+		ev = self.config.evaluator
+		prompt = (
+			f"You are an evaluator agent. Your job is to determine whether the following "
+			f"objective has been achieved by actually running and testing the software.\n\n"
+			f"## Objective\n{mission.objective}\n\n"
+			f"## Instructions\n"
+			f"1. Read the relevant source files to understand what was implemented.\n"
+			f"2. Run the test suite to verify tests pass.\n"
+			f"3. If applicable, start the application and test it works from a user perspective.\n"
+			f"4. Check for any obvious gaps, broken functionality, or missing features.\n"
+			f"5. Be thorough but focused on the stated objective.\n\n"
+			f"End your response with EXACTLY:\n"
+			f'EVALUATION:{{"passed": true/false, "evidence": ["what works"], "gaps": ["what is missing"]}}'
+		)
+
+		try:
+			proc = await asyncio.create_subprocess_exec(
+				"claude", "-p",
+				"--output-format", "text",
+				"--model", ev.model,
+				"--max-turns", str(ev.max_turns),
+				"--max-budget-usd", str(ev.budget_usd),
+				stdin=asyncio.subprocess.PIPE,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				env=claude_subprocess_env(self.config),
+				cwd=workspace,
+			)
+			stdout, _ = await asyncio.wait_for(
+				proc.communicate(input=prompt.encode()),
+				timeout=ev.timeout,
+			)
+			output = stdout.decode() if stdout else ""
+		except asyncio.TimeoutError:
+			logger.warning("Evaluator agent timed out after %ds", ev.timeout)
+			try:
+				proc.kill()
+				await proc.wait()
+			except ProcessLookupError:
+				pass
+			return {"passed": False, "evidence": [], "gaps": ["Evaluator timed out"]}
+		except (FileNotFoundError, OSError) as exc:
+			logger.warning("Evaluator agent failed to start: %s", exc)
+			return {"passed": False, "evidence": [], "gaps": [str(exc)]}
+
+		# Parse EVALUATION marker
+		marker = "EVALUATION:"
+		idx = output.rfind(marker)
+		if idx == -1:
+			logger.warning("No EVALUATION marker found in evaluator output")
+			return {"passed": False, "evidence": [], "gaps": ["No EVALUATION marker in output"]}
+
+		remainder = output[idx + len(marker):]
+		data = extract_json_from_text(remainder)
+		if not isinstance(data, dict):
+			logger.warning("Failed to parse EVALUATION JSON")
+			return {"passed": False, "evidence": [], "gaps": ["Failed to parse EVALUATION JSON"]}
+
+		return {
+			"passed": bool(data.get("passed", False)),
+			"evidence": list(data.get("evidence", [])),
+			"gaps": list(data.get("gaps", [])),
+		}
 
 	async def _verify_objective(
 		self,
