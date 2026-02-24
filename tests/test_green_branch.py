@@ -1213,7 +1213,7 @@ class TestPreMergeVerificationGate:
 		mgr._run_verification.assert_awaited_once()
 
 	async def test_pre_merge_verification_fail_rollback(self) -> None:
-		"""When verification fails, merge is rolled back."""
+		"""When verification fails and fixup also fails, merge is rolled back."""
 		mgr = _gate_manager()
 		git_calls: list[tuple[str, ...]] = []
 
@@ -1227,7 +1227,9 @@ class TestPreMergeVerificationGate:
 			results=[VerificationResult(kind=VerificationNodeKind.PYTEST, passed=False)],
 			raw_output="2 tests failed",
 		)
+		# Both initial and post-fixup verification fail
 		mgr._run_verification = AsyncMock(return_value=failing_report)  # type: ignore[method-assign]
+		mgr._run_fixup_session = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 
 		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
 
@@ -1235,10 +1237,35 @@ class TestPreMergeVerificationGate:
 		assert result.verification_passed is False
 		assert result.failure_stage == "pre_merge_verification"
 		assert "2 tests failed" in result.failure_output
-		assert result.verification_report is failing_report
+		# Fixup was attempted before rollback
+		mgr._run_fixup_session.assert_awaited_once()
 		# Verify git reset was called
 		reset_calls = [c for c in git_calls if c[0] == "reset" and "--hard" in c]
 		assert len(reset_calls) >= 1
+
+	async def test_pre_merge_verification_fail_fixup_recovers(self) -> None:
+		"""When verification fails but fixup succeeds, merge is accepted."""
+		mgr = _gate_manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		failing_report = VerificationReport(
+			results=[VerificationResult(kind=VerificationNodeKind.PYTEST, passed=False)],
+			raw_output="2 tests failed",
+		)
+		passing_report = VerificationReport(
+			results=[VerificationResult(kind=VerificationNodeKind.PYTEST, passed=True)],
+			raw_output="all passed",
+		)
+		# First call fails (triggers fixup), second call passes
+		mgr._run_verification = AsyncMock(side_effect=[failing_report, passing_report])  # type: ignore[method-assign]
+		mgr._run_fixup_session = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/branch")
+
+		assert result.merged is True
+		assert result.verification_passed is True
+		mgr._run_fixup_session.assert_awaited_once()
 
 	async def test_pre_merge_verification_skipped_when_disabled(self) -> None:
 		"""When verify_before_merge is False, _run_verification is not called."""
@@ -1278,7 +1305,7 @@ class TestAcceptanceCriteria:
 		mgr._run_acceptance_criteria.assert_awaited_once_with("pytest tests/test_x.py -q")
 
 	async def test_acceptance_criteria_fail_rollback(self) -> None:
-		"""When criteria command exits non-zero, merge is rolled back."""
+		"""When criteria fails and fixup also fails, merge is rolled back."""
 		mgr = _gate_manager()
 		git_calls: list[tuple[str, ...]] = []
 
@@ -1293,13 +1320,17 @@ class TestAcceptanceCriteria:
 			raw_output="ok",
 		)
 		mgr._run_verification = AsyncMock(return_value=passing_report)  # type: ignore[method-assign]
+		# Both initial and post-fixup criteria fail
 		mgr._run_acceptance_criteria = AsyncMock(return_value=(False, "assertion failed"))  # type: ignore[method-assign]
+		mgr._run_fixup_session = AsyncMock(return_value=(True, ""))  # type: ignore[method-assign]
 
 		result = await mgr.merge_unit("/tmp/worker", "feat/branch", acceptance_criteria="python -c 'assert False'")
 
 		assert result.merged is False
 		assert result.failure_stage == "acceptance_criteria"
 		assert "assertion failed" in result.failure_output
+		# Fixup was attempted
+		mgr._run_fixup_session.assert_awaited_once()
 		# Verify git reset was called
 		reset_calls = [c for c in git_calls if c[0] == "reset" and "--hard" in c]
 		assert len(reset_calls) >= 1

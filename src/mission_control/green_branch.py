@@ -236,29 +236,49 @@ class GreenBranchManager:
 				if self.config.continuous.verify_before_merge:
 					verification_report = await self._run_verification()
 					if not verification_report.overall_passed:
-						logger.warning("Pre-merge verification failed for %s, rolling back", branch_name)
-						await self._run_git("reset", "--hard", "HEAD~1")
-						return UnitMergeResult(
-							merged=False,
-							verification_passed=False,
-							failure_output=verification_report.raw_output[:2000],
-							failure_stage="pre_merge_verification",
-							verification_report=verification_report,
+						# Attempt fixup before rolling back
+						verification_report = await self._attempt_gate_fixup(
+							branch_name, verification_report.raw_output[:2000],
 						)
+						if not verification_report.overall_passed:
+							logger.warning(
+								"Pre-merge verification failed for %s after fixup, rolling back",
+								branch_name,
+							)
+							await self._run_git("reset", "--hard", "HEAD~1")
+							return UnitMergeResult(
+								merged=False,
+								verification_passed=False,
+								failure_output=verification_report.raw_output[:2000],
+								failure_stage="pre_merge_verification",
+								verification_report=verification_report,
+							)
 
 				# Acceptance criteria gate
 				if acceptance_criteria:
 					ac_passed, ac_output = await self._run_acceptance_criteria(acceptance_criteria)
 					if not ac_passed:
-						logger.warning("Acceptance criteria failed for %s, rolling back", branch_name)
-						await self._run_git("reset", "--hard", "HEAD~1")
-						return UnitMergeResult(
-							merged=False,
-							verification_passed=False,
-							failure_output=ac_output[:2000],
-							failure_stage="acceptance_criteria",
-							verification_report=verification_report,
+						# Attempt fixup before rolling back
+						fixup_prompt = (
+							f"Acceptance criteria failed.\n\n"
+							f"## Criteria\n{acceptance_criteria}\n\n"
+							f"## Output\n{ac_output[:2000]}"
 						)
+						await self._run_fixup_session(fixup_prompt)
+						ac_passed, ac_output = await self._run_acceptance_criteria(acceptance_criteria)
+						if not ac_passed:
+							logger.warning(
+								"Acceptance criteria failed for %s after fixup, rolling back",
+								branch_name,
+							)
+							await self._run_git("reset", "--hard", "HEAD~1")
+							return UnitMergeResult(
+								merged=False,
+								verification_passed=False,
+								failure_output=ac_output[:2000],
+								failure_stage="acceptance_criteria",
+								verification_report=verification_report,
+							)
 
 				sync_ok = await self._sync_to_source()
 
@@ -808,6 +828,30 @@ class GreenBranchManager:
 		stdout, _ = await proc.communicate()
 		output = stdout.decode() if stdout else ""
 		return (proc.returncode == 0, output)
+
+	async def _attempt_gate_fixup(
+		self, branch_name: str, failure_output: str,
+	) -> VerificationReport:
+		"""Spawn a fixup session to resolve a pre-merge verification failure.
+
+		Runs on the current (merged) state. Returns a fresh VerificationReport.
+		"""
+		logger.info("Attempting gate fixup for %s", branch_name)
+		prompt = (
+			f"The following verification failure occurred after merging {branch_name}.\n"
+			f"Fix the issues so verification passes.\n\n"
+			f"## Verification Failure\n{failure_output}\n\n"
+			f"## Verification Command\n{self.config.target.verification.command}\n\n"
+			f"Run the verification command after making changes. "
+			f"Commit your fix if verification passes."
+		)
+		await self._run_fixup_session(prompt)
+		report = await self._run_verification()
+		if report.overall_passed:
+			logger.info("Gate fixup succeeded for %s", branch_name)
+		else:
+			logger.warning("Gate fixup failed for %s", branch_name)
+		return report
 
 	async def _run_acceptance_criteria(self, criteria: str, timeout: int = 120) -> tuple[bool, str]:
 		"""Run acceptance criteria shell command(s) in the workspace.
