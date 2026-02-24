@@ -9,6 +9,7 @@ import os
 import shlex
 import sqlite3
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1733,143 +1734,62 @@ class ContinuousController:
 						workspace, unit.branch_name,
 						acceptance_criteria=unit.acceptance_criteria,
 					)
-					merged = merge_result.merged
-					self._degradation.record_merge_attempt(conflict=not merged)
+					self._degradation.record_merge_attempt(conflict=not merge_result.merged)
 
-					if merged:
-						logger.info(
-							"Unit %s merged to green",
-							unit.id,
-						)
-						self._total_merged += 1
-						self._completed_unit_ids.add(unit.id)
-						# Track merged files so deferred duplicates are dropped
-						# Use actual git diff files when available, fall back to files_hint
-						if merge_result.changed_files:
-							merged_files = set(merge_result.changed_files)
-						else:
-							merged_files = _parse_files_hint(unit.files_hint)
-						if merged_files:
-							self._merged_files |= merged_files
-						# Log merge event
-						self._log_unit_event(
-							mission_id=mission.id,
-							epoch_id=epoch.id,
-							work_unit_id=unit.id,
-							event_type=UNIT_EVENT_MERGED,
-							input_tokens=unit.input_tokens,
-							output_tokens=unit.output_tokens,
-							cost_usd=unit.cost_usd,
-						)
-						# Check sync result
-						if not merge_result.sync_ok:
-							result.sync_failures += 1
-							logger.warning("Unit %s merged but sync to source repo failed", unit.id)
-							if self._notifier:
-								await self._notifier.send(
-									f"Sync warning: Unit '{unit.title}' merged to green but failed "
-									"to sync back to source repo. Changes may not be visible in the source.",
-								)
-						# LLM diff review (blocking if gate_completion, else fire-and-forget)
-						if self.config.review.enabled:
-							criteria_passed = (
-								self.config.review.skip_when_criteria_passed
-								and unit.acceptance_criteria
-								and merge_result.verification_passed
-							)
-							if criteria_passed:
-								logger.debug("Skipping review for unit %s: acceptance criteria passed", unit.id)
-							elif self.config.review.gate_completion:
-								review = await self._blocking_review(
-									unit, workspace, mission, epoch,
-									merge_commit_hash=merge_result.merge_commit_hash,
-								)
-								if review and review.avg_score < self.config.review.min_review_score:
-									logger.warning(
-										"Unit %s review score %.1f below threshold %.1f, scheduling retry",
-										unit.id, review.avg_score, self.config.review.min_review_score,
-									)
-									feedback = f"Review feedback (score {review.avg_score}): {review.rationale}"
-									self._schedule_retry(unit, epoch, mission, feedback, cont)
-									self._record_round_outcome(unit, epoch, merged=False)
-									continue
-							else:
-								task = asyncio.create_task(
-									self._review_merged_unit(
-										unit, workspace, mission, epoch,
-										merge_commit_hash=merge_result.merge_commit_hash,
-									),
-								)
-								self._active_tasks.add(task)
-								task.add_done_callback(self._task_done_callback)
-					else:
+					# Fixup path: resume worker for fixable failures
+					if not merge_result.merged:
 						logger.warning(
 							"Unit %s failed merge: %s",
 							unit.id, merge_result.failure_output[-200:],
 						)
-
-						# Worker-side fixup: if verification or acceptance criteria
-						# failed, let the worker fix its own code in-place and re-merge
-						# before falling through to a full retry.
-						fixup_stages = ("pre_merge_verification", "acceptance_criteria")
+						fixup_stages = ("pre_merge_verification", "acceptance_criteria", "merge_conflict")
 						if (
 							merge_result.failure_stage in fixup_stages
 							and workspace
 						):
-							fixed = await self._worker_fixup_and_remerge(
+							fixed = await self._resume_worker_for_fixup(
 								unit, workspace, merge_result, cont,
 							)
 							if fixed:
 								merge_result = fixed
-								merged = True
 								logger.info("Unit %s merged after worker fixup", unit.id)
-								self._total_merged += 1
-								self._completed_unit_ids.add(unit.id)
-								if merge_result.changed_files:
-									self._merged_files |= set(merge_result.changed_files)
-								else:
-									mf = _parse_files_hint(unit.files_hint)
-									if mf:
-										self._merged_files |= mf
-								self._log_unit_event(
-									mission_id=mission.id,
-									epoch_id=epoch.id,
-									work_unit_id=unit.id,
-									event_type=UNIT_EVENT_MERGED,
-									input_tokens=unit.input_tokens,
-									output_tokens=unit.output_tokens,
-									cost_usd=unit.cost_usd,
-								)
 
-						if not merged:
-							# Log merge_failed event
-							_fail_details = {
-								"failure_output": merge_result.failure_output[-2000:],
-								"failure_stage": merge_result.failure_stage,
-							}
-							self._log_unit_event(
-								mission_id=mission.id,
-								epoch_id=epoch.id,
-								work_unit_id=unit.id,
-								event_type=UNIT_EVENT_MERGE_FAILED,
-								details=json.dumps(_fail_details),
-								stream_details=_fail_details,
+					# Post-merge bookkeeping (review, counters, sync)
+					if merge_result.merged:
+						self._accept_merge(
+							unit, merge_result, workspace,
+							mission, epoch, result,
+						)
+						merged = True
+
+					if not merged:
+						# Log merge_failed event
+						_fail_details = {
+							"failure_output": merge_result.failure_output[-2000:],
+							"failure_stage": merge_result.failure_stage,
+						}
+						self._log_unit_event(
+							mission_id=mission.id,
+							epoch_id=epoch.id,
+							work_unit_id=unit.id,
+							event_type=UNIT_EVENT_MERGE_FAILED,
+							details=json.dumps(_fail_details),
+							stream_details=_fail_details,
+						)
+
+						# Append merge failure to handoff concerns
+						if handoff:
+							handoff.concerns.append(
+								f"Merge failed: {merge_result.failure_output[-500:]}",
 							)
 
-							# Append merge failure to handoff concerns
-							if handoff:
-								handoff.concerns.append(
-									f"Merge failed: {merge_result.failure_output[-500:]}",
-								)
-
-							failure_reason = merge_result.failure_output[-1000:]
+						failure_reason = merge_result.failure_output[-1000:]
 
 						# Check if retryable
-						if not merged and unit.attempt < unit.max_attempts:
+						if unit.attempt < unit.max_attempts:
 							self._schedule_retry(unit, epoch, mission, failure_reason, cont)
-						elif not merged:
+						else:
 							self._total_failed += 1
-							# Log rejection event
 							self._log_unit_event(
 								mission_id=mission.id,
 								epoch_id=epoch.id,
@@ -1878,8 +1798,6 @@ class ContinuousController:
 								details=merge_result.failure_output[-2000:],
 								stream_details={"failure_output": merge_result.failure_output[-2000:]},
 							)
-
-							# Notify merge conflict via Telegram
 							if self._notifier:
 								await self._notifier.send_merge_conflict(
 									unit.title, merge_result.failure_output[-500:],
@@ -2722,7 +2640,67 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		except Exception as exc:
 			logger.warning("Review failed for unit %s: %s", unit.id, exc)
 
-	async def _worker_fixup_and_remerge(
+	def _accept_merge(
+		self,
+		unit: WorkUnit,
+		merge_result: UnitMergeResult,
+		workspace: str,
+		mission: Mission,
+		epoch: Epoch,
+		result: ContinuousMissionResult,
+	) -> None:
+		"""Run post-merge bookkeeping: sync check, fire-and-forget review, counter updates."""
+		# Log merge event
+		self._log_unit_event(
+			mission_id=mission.id,
+			epoch_id=epoch.id,
+			work_unit_id=unit.id,
+			event_type=UNIT_EVENT_MERGED,
+			input_tokens=unit.input_tokens,
+			output_tokens=unit.output_tokens,
+			cost_usd=unit.cost_usd,
+		)
+
+		# Check sync result
+		if not merge_result.sync_ok:
+			result.sync_failures += 1
+			logger.warning("Unit %s merged but sync to source repo failed", unit.id)
+			if self._notifier:
+				asyncio.create_task(self._notifier.send(
+					f"Sync warning: Unit '{unit.title}' merged to green but failed "
+					"to sync back to source repo. Changes may not be visible in the source.",
+				))
+
+		# Fire-and-forget LLM diff review
+		if self.config.review.enabled:
+			criteria_passed = (
+				self.config.review.skip_when_criteria_passed
+				and unit.acceptance_criteria
+				and merge_result.verification_passed
+			)
+			if criteria_passed:
+				logger.debug("Skipping review for unit %s: acceptance criteria passed", unit.id)
+			else:
+				task = asyncio.create_task(
+					self._review_merged_unit(
+						unit, workspace, mission, epoch,
+						merge_commit_hash=merge_result.merge_commit_hash,
+					),
+				)
+				self._active_tasks.add(task)
+				task.add_done_callback(self._task_done_callback)
+
+		# Update counters
+		self._total_merged += 1
+		self._completed_unit_ids.add(unit.id)
+		if merge_result.changed_files:
+			self._merged_files |= set(merge_result.changed_files)
+		else:
+			mf = _parse_files_hint(unit.files_hint)
+			if mf:
+				self._merged_files |= mf
+
+	async def _resume_worker_for_fixup(
 		self,
 		unit: WorkUnit,
 		workspace: str,
@@ -2730,41 +2708,107 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		cont: ContinuousConfig,
 		max_fixup_attempts: int = 2,
 	) -> UnitMergeResult | None:
-		"""Spawn a fix session in the worker's workspace and re-attempt merge.
+		"""Resume the worker session (or spawn cold fixup) and re-attempt merge.
+
+		If the unit has a session_id, resumes the original worker session via
+		``--resume`` so the fixup agent has full conversation context. Falls back
+		to a cold ``-p`` call when no session_id is available (backward compat).
 
 		Returns a successful UnitMergeResult if fixup worked, None otherwise.
-		The worker's workspace still has full context (git history, changes).
 		"""
 		from mission_control.config import claude_subprocess_env
 
 		for attempt in range(max_fixup_attempts):
 			logger.info(
-				"Worker fixup attempt %d/%d for unit %s in %s",
+				"Worker fixup attempt %d/%d for unit %s in %s (resume=%s)",
 				attempt + 1, max_fixup_attempts, unit.id[:12], workspace,
+				bool(unit.session_id),
 			)
-
-			prompt = (
-				f"Your previous work on this task failed verification after merging.\n\n"
-				f"## Original Task\n{unit.title}\n{unit.description}\n\n"
-				f"## Failure Stage\n{merge_result.failure_stage}\n\n"
-				f"## Failure Output\n{merge_result.failure_output}\n\n"
-				f"## Verification Command\n{self.config.target.verification.command}\n\n"
-				f"Fix the issues in your code so verification passes. "
-				f"Run the verification command to confirm, then commit your fix."
-			)
-			if unit.acceptance_criteria and merge_result.failure_stage == "acceptance_criteria":
-				prompt += f"\n\n## Acceptance Criteria\n{unit.acceptance_criteria}"
 
 			models_cfg = getattr(self.config, "models", None)
 			model = getattr(models_cfg, "fixup_model", None) or self.config.scheduler.model
-			cmd = [
-				"claude", "-p",
-				"--output-format", "text",
-				"--permission-mode", "bypassPermissions",
-				"--model", model,
-				"--max-turns", "5",
-				prompt,
-			]
+
+			is_merge_conflict = merge_result.failure_stage == "merge_conflict"
+			green_branch = self.config.green_branch.green_branch
+
+			if unit.session_id:
+				# Resume: the session already has the full task context,
+				# so we only need to describe the failure.
+				if is_merge_conflict:
+					prompt = (
+						f"Your changes could not be merged into {green_branch} due to "
+						f"conflicts with changes merged by other workers.\n\n"
+						f"## Conflict Output\n{merge_result.failure_output}\n\n"
+						f"## Instructions\n"
+						f"1. Fetch the latest {green_branch}: "
+						f"`git fetch origin {green_branch}`\n"
+						f"2. Rebase your branch onto it: "
+						f"`git rebase origin/{green_branch}`\n"
+						f"3. Resolve any conflicts, keeping the intent of your changes "
+						f"while integrating the other workers' updates.\n"
+						f"4. After resolving, run the verification command to confirm "
+						f"nothing is broken: `{self.config.target.verification.command}`\n"
+						f"5. Commit your resolved changes."
+					)
+				else:
+					prompt = (
+						f"Your code failed post-merge verification.\n\n"
+						f"## Failure Stage\n{merge_result.failure_stage}\n\n"
+						f"## Output\n{merge_result.failure_output}\n\n"
+						f"## Verification Command\n{self.config.target.verification.command}\n\n"
+						f"Fix the issue and commit."
+					)
+				if unit.acceptance_criteria and merge_result.failure_stage == "acceptance_criteria":
+					prompt += f"\n\n## Acceptance Criteria\n{unit.acceptance_criteria}"
+				cmd = [
+					"claude",
+					"--resume", unit.session_id,
+					"-p",
+					"--output-format", "text",
+					"--permission-mode", "bypassPermissions",
+					"--model", model,
+					"--max-turns", "5",
+					prompt,
+				]
+			else:
+				# Cold fixup: no session to resume, include full task context.
+				if is_merge_conflict:
+					prompt = (
+						f"Your previous work on this task has merge conflicts with "
+						f"changes merged by other workers.\n\n"
+						f"## Original Task\n{unit.title}\n{unit.description}\n\n"
+						f"## Conflict Output\n{merge_result.failure_output}\n\n"
+						f"## Instructions\n"
+						f"1. Fetch the latest {green_branch}: "
+						f"`git fetch origin {green_branch}`\n"
+						f"2. Rebase your branch onto it: "
+						f"`git rebase origin/{green_branch}`\n"
+						f"3. Resolve any conflicts, keeping the intent of your changes "
+						f"while integrating the other workers' updates.\n"
+						f"4. After resolving, run the verification command to confirm "
+						f"nothing is broken: `{self.config.target.verification.command}`\n"
+						f"5. Commit your resolved changes."
+					)
+				else:
+					prompt = (
+						f"Your previous work on this task failed verification after merging.\n\n"
+						f"## Original Task\n{unit.title}\n{unit.description}\n\n"
+						f"## Failure Stage\n{merge_result.failure_stage}\n\n"
+						f"## Failure Output\n{merge_result.failure_output}\n\n"
+						f"## Verification Command\n{self.config.target.verification.command}\n\n"
+						f"Fix the issues in your code so verification passes. "
+						f"Run the verification command to confirm, then commit your fix."
+					)
+				if unit.acceptance_criteria and merge_result.failure_stage == "acceptance_criteria":
+					prompt += f"\n\n## Acceptance Criteria\n{unit.acceptance_criteria}"
+				cmd = [
+					"claude", "-p",
+					"--output-format", "text",
+					"--permission-mode", "bypassPermissions",
+					"--model", model,
+					"--max-turns", "5",
+					prompt,
+				]
 			try:
 				env = claude_subprocess_env(self.config)
 			except Exception:
@@ -3056,12 +3100,15 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			budget = self.config.scheduler.budget.max_per_session_usd
 			models_cfg = getattr(self.config, "models", None)
 			model = getattr(models_cfg, "worker_model", None) or self.config.scheduler.model
+			session_id = str(uuid.uuid4())
+			unit.session_id = session_id
 			cmd = [
 				"claude", "-p",
 				"--output-format", "stream-json",
 				"--permission-mode", "bypassPermissions",
 				"--model", model,
 				"--max-budget-usd", str(budget),
+				"--session-id", session_id,
 				prompt,
 			]
 

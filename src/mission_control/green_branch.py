@@ -62,7 +62,6 @@ class UnitMergeResult:
 	merge_commit_hash: str = ""
 	changed_files: list[str] = field(default_factory=list)
 	sync_ok: bool = True
-	conflict_resolved: bool = False
 	verification_report: VerificationReport | None = None
 	hitl_decision: str = ""
 
@@ -197,26 +196,13 @@ class GreenBranchManager:
 					"merge", "--no-ff", f"{remote_name}/{branch_name}",
 					"-m", f"Merge {branch_name} into {gb.green_branch}",
 				)
-				conflict_resolved = False
 				if not ok:
 					logger.warning("Merge conflict for %s: %s", branch_name, output)
-					resolved = False
-					if gb.conflict_resolution:
-						merge_msg = f"Merge {branch_name} into {gb.green_branch}"
-						resolved, _ = await self._resolve_merge_conflict(
-							branch_name, merge_msg,
-						)
-						if resolved:
-							conflict_resolved = True
-							logger.info(
-								"LLM resolved merge conflict for %s", branch_name,
-							)
-					if not resolved:
-						await self._run_git("merge", "--abort")
-						return UnitMergeResult(
-							failure_output=f"Merge conflict: {output[:500]}",
-							failure_stage="merge_conflict",
-						)
+					await self._run_git("merge", "--abort")
+					return UnitMergeResult(
+						failure_output=f"Merge conflict: {output[:500]}",
+						failure_stage="merge_conflict",
+					)
 
 				# Capture merge info
 				_, merge_hash = await self._run_git("rev-parse", "HEAD")
@@ -277,7 +263,6 @@ class GreenBranchManager:
 					merge_commit_hash=merge_commit_hash,
 					changed_files=changed_files,
 					sync_ok=sync_ok,
-					conflict_resolved=conflict_resolved,
 					verification_report=verification_report,
 				)
 			finally:
@@ -497,98 +482,6 @@ class GreenBranchManager:
 			"-p", prompt,
 		]
 		return await self._run_command(cmd)
-
-	async def _resolve_merge_conflict(
-		self,
-		branch_name: str,
-		merge_message: str,
-	) -> tuple[bool, str]:
-		"""Attempt to resolve merge conflicts via a short LLM session.
-
-		Called when merge --no-ff produces conflicts. Detects conflicted files,
-		builds a prompt with conflict markers, spawns a Claude session to resolve,
-		then verifies the resolution is sound.
-
-		Returns (success, output) tuple.
-		"""
-		# 1. Detect conflicted files
-		ok, diff_output = await self._run_git(
-			"diff", "--name-only", "--diff-filter=U",
-		)
-		if not ok or not diff_output.strip():
-			logger.warning("No conflicted files detected for %s", branch_name)
-			return (False, "No conflicted files detected")
-
-		conflicted_files = [
-			f.strip() for f in diff_output.splitlines() if f.strip()
-		]
-		logger.info(
-			"Resolving %d conflicted files for %s: %s",
-			len(conflicted_files), branch_name, conflicted_files,
-		)
-
-		# 2. Read conflict markers from each file (cap at 10 files)
-		file_contents: list[str] = []
-		for cf in conflicted_files[:10]:
-			file_path = Path(self.workspace) / cf
-			if file_path.exists():
-				try:
-					text = file_path.read_text(errors="replace")
-					file_contents.append(f"### {cf}\n```\n{text[:5000]}\n```")
-				except OSError:
-					file_contents.append(f"### {cf}\n(could not read)")
-
-		# 3. Build prompt
-		prompt = (
-			"You are resolving git merge conflicts. The following files have conflict markers "
-			"(<<<<<<< / ======= / >>>>>>>) that must be resolved.\n\n"
-			f"## Merge Context\n{merge_message}\n\n"
-			f"## Conflicted Files\n" + "\n\n".join(file_contents) + "\n\n"
-			"## Instructions\n"
-			"1. Edit each conflicted file to resolve the conflicts (remove all conflict markers).\n"
-			"2. Stage the resolved files with git add.\n"
-			"3. Commit with: git commit --no-edit\n"
-			"4. Do NOT modify any files that are not conflicted.\n"
-			"5. Preserve the intent of BOTH sides of each conflict where possible.\n"
-		)
-
-		# 4. Spawn Claude session
-		model = self._get_fixup_model()
-		cmd = [
-			"claude", "--print", "--output-format", "text",
-			"--model", model,
-			"--max-turns", "3",
-			"-p", prompt,
-		]
-		try:
-			ok, output = await self._run_command(cmd)
-		except Exception as exc:
-			logger.warning("Conflict resolution session failed: %s", exc)
-			return (False, str(exc))
-
-		if not ok:
-			logger.warning("Conflict resolution session returned failure for %s", branch_name)
-			return (False, output)
-
-		# 5. Check working tree is clean (merge completed)
-		_, status_output = await self._run_git("status", "--porcelain")
-		if status_output.strip():
-			logger.warning(
-				"Working tree still dirty after conflict resolution for %s: %s",
-				branch_name, status_output[:200],
-			)
-			return (False, f"Working tree dirty: {status_output[:200]}")
-
-		# 6. Run verification
-		report = await self._run_verification()
-		if not report.overall_passed:
-			logger.warning(
-				"Verification failed after conflict resolution for %s", branch_name,
-			)
-			return (False, f"Verification failed: {report.raw_output[:500]}")
-
-		logger.info("Conflict resolution and verification succeeded for %s", branch_name)
-		return (True, output)
 
 	@staticmethod
 	def _count_diff_lines(diff_stat_output: str) -> int:

@@ -180,7 +180,6 @@ class GreenBranchConfig:
 	reset_on_init: bool = True
 	auto_push: bool = False
 	push_branch: str = "main"
-	conflict_resolution: bool = True
 
 
 @dataclass
@@ -294,8 +293,6 @@ class ReviewConfig:
 	enabled: bool = True
 	model: str = "haiku"
 	budget_per_review_usd: float = 0.05
-	gate_completion: bool = False  # when True, review blocks unit completion
-	min_review_score: float = 0.0  # minimum avg_score to pass gating
 	skip_when_criteria_passed: bool = True
 
 
@@ -786,10 +783,6 @@ def _build_review(data: dict[str, Any]) -> ReviewConfig:
 		rc.model = str(data["model"])
 	if "budget_per_review_usd" in data:
 		rc.budget_per_review_usd = float(data["budget_per_review_usd"])
-	if "gate_completion" in data:
-		rc.gate_completion = bool(data["gate_completion"])
-	if "min_review_score" in data:
-		rc.min_review_score = float(data["min_review_score"])
 	if "skip_when_criteria_passed" in data:
 		rc.skip_when_criteria_passed = bool(data["skip_when_criteria_passed"])
 	return rc

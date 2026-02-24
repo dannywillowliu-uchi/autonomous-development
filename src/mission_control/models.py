@@ -207,6 +207,7 @@ class WorkUnit:
 	specialist: str = ""  # specialist template name (e.g. "test-writer")
 	acceptance_criteria: str = ""  # what must be true for this unit to be "done"
 	specialist: str = ""  # specialist type: test-writer, refactorer, debugger, or empty for general
+	session_id: str = ""  # Claude Code session ID for --resume
 	input_tokens: int = 0
 	output_tokens: int = 0
 	cost_usd: float = 0.0
