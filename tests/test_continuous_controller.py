@@ -2940,8 +2940,8 @@ class TestReviewerSkip:
 		assert rc.skip_when_criteria_passed is True
 
 
-class TestWorkerFixupAndRemerge:
-	"""Tests for _worker_fixup_and_remerge in the completion processor."""
+class TestResumeWorkerForFixup:
+	"""Tests for _resume_worker_for_fixup (session resume fixup)."""
 
 	def _make_ctrl(self, config: MissionConfig, db: Database) -> tuple[ContinuousController, Database]:
 		db.insert_mission(Mission(id="m1", objective="test"))
@@ -2951,13 +2951,13 @@ class TestWorkerFixupAndRemerge:
 		return ctrl, db
 
 	@pytest.mark.asyncio
-	async def test_fixup_succeeds_and_merges(self, config: MissionConfig, db: Database) -> None:
-		"""Worker fixup fixes the code and re-merge succeeds."""
+	async def test_fixup_succeeds_with_resume(self, config: MissionConfig, db: Database) -> None:
+		"""Worker fixup uses --resume when session_id is set and re-merge succeeds."""
 		ctrl, db = self._make_ctrl(config, db)
 
 		unit = WorkUnit(
 			id="wu1", plan_id="p1", title="Task", description="Do stuff",
-			branch_name="mc/unit-wu1",
+			branch_name="mc/unit-wu1", session_id="test-session-123",
 		)
 		fail_result = UnitMergeResult(
 			merged=False,
@@ -2966,7 +2966,6 @@ class TestWorkerFixupAndRemerge:
 		)
 		success_result = UnitMergeResult(merged=True, verification_passed=True)
 
-		# First merge fails, fixup re-merge succeeds
 		ctrl._green_branch.merge_unit = AsyncMock(return_value=success_result)
 
 		with patch("asyncio.create_subprocess_exec") as mock_exec:
@@ -2975,9 +2974,55 @@ class TestWorkerFixupAndRemerge:
 			mock_proc.kill = AsyncMock()
 			mock_exec.return_value = mock_proc
 
-			result = await ctrl._worker_fixup_and_remerge(
+			result = await ctrl._resume_worker_for_fixup(
 				unit, "/tmp/ws", fail_result, config.continuous,
 			)
+
+			# Verify --resume flag is in the command
+			call_args = mock_exec.call_args[0]
+			assert "--resume" in call_args
+			assert "test-session-123" in call_args
+			# Should NOT contain the original task context
+			prompt_arg = call_args[-1]
+			assert "Do stuff" not in prompt_arg
+
+		assert result is not None
+		assert result.merged is True
+
+	@pytest.mark.asyncio
+	async def test_fixup_cold_fallback_without_session_id(self, config: MissionConfig, db: Database) -> None:
+		"""Worker fixup falls back to cold -p when no session_id is set."""
+		ctrl, db = self._make_ctrl(config, db)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task", description="Do stuff",
+			branch_name="mc/unit-wu1", session_id="",
+		)
+		fail_result = UnitMergeResult(
+			merged=False,
+			failure_output="2 tests failed",
+			failure_stage="pre_merge_verification",
+		)
+		success_result = UnitMergeResult(merged=True, verification_passed=True)
+
+		ctrl._green_branch.merge_unit = AsyncMock(return_value=success_result)
+
+		with patch("asyncio.create_subprocess_exec") as mock_exec:
+			mock_proc = AsyncMock()
+			mock_proc.communicate = AsyncMock(return_value=(b"Fixed", b""))
+			mock_proc.kill = AsyncMock()
+			mock_exec.return_value = mock_proc
+
+			result = await ctrl._resume_worker_for_fixup(
+				unit, "/tmp/ws", fail_result, config.continuous,
+			)
+
+			# Verify --resume is NOT in the command
+			call_args = mock_exec.call_args[0]
+			assert "--resume" not in call_args
+			# Cold fixup should include the original task context
+			prompt_arg = call_args[-1]
+			assert "Do stuff" in prompt_arg
 
 		assert result is not None
 		assert result.merged is True
@@ -2989,7 +3034,7 @@ class TestWorkerFixupAndRemerge:
 
 		unit = WorkUnit(
 			id="wu1", plan_id="p1", title="Task", description="Do stuff",
-			branch_name="mc/unit-wu1",
+			branch_name="mc/unit-wu1", session_id="test-session-123",
 		)
 		fail_result = UnitMergeResult(
 			merged=False,
@@ -2997,7 +3042,6 @@ class TestWorkerFixupAndRemerge:
 			failure_stage="pre_merge_verification",
 		)
 
-		# Re-merge also fails after fixup
 		ctrl._green_branch.merge_unit = AsyncMock(
 			return_value=UnitMergeResult(merged=False, failure_output="still failing"),
 		)
@@ -3008,7 +3052,7 @@ class TestWorkerFixupAndRemerge:
 			mock_proc.kill = AsyncMock()
 			mock_exec.return_value = mock_proc
 
-			result = await ctrl._worker_fixup_and_remerge(
+			result = await ctrl._resume_worker_for_fixup(
 				unit, "/tmp/ws", fail_result, config.continuous,
 				max_fixup_attempts=1,
 			)
@@ -3023,7 +3067,7 @@ class TestWorkerFixupAndRemerge:
 
 		unit = WorkUnit(
 			id="wu1", plan_id="p1", title="Task", description="Do stuff",
-			branch_name="mc/unit-wu1",
+			branch_name="mc/unit-wu1", session_id="test-session-123",
 		)
 		fail_result = UnitMergeResult(
 			merged=False,
@@ -3038,7 +3082,7 @@ class TestWorkerFixupAndRemerge:
 			mock_proc.wait = AsyncMock()
 			mock_exec.return_value = mock_proc
 
-			result = await ctrl._worker_fixup_and_remerge(
+			result = await ctrl._resume_worker_for_fixup(
 				unit, "/tmp/ws", fail_result, config.continuous,
 				max_fixup_attempts=1,
 			)
@@ -3079,9 +3123,8 @@ class TestWorkerFixupAndRemerge:
 		ctrl._completion_queue.put_nowait(completion)
 		ctrl.running = False
 
-		# Mock fixup to succeed
 		with patch.object(
-			ctrl, "_worker_fixup_and_remerge",
+			ctrl, "_resume_worker_for_fixup",
 			new_callable=AsyncMock,
 			return_value=success_result,
 		):
@@ -3090,15 +3133,15 @@ class TestWorkerFixupAndRemerge:
 		assert ctrl._total_merged == 1
 
 	@pytest.mark.asyncio
-	async def test_fixup_not_triggered_on_merge_conflict(self, config: MissionConfig, db: Database) -> None:
-		"""Completion processor does NOT call fixup for merge conflicts (only verification/criteria)."""
+	async def test_fixup_not_triggered_on_fetch_failure(self, config: MissionConfig, db: Database) -> None:
+		"""Completion processor does NOT call fixup for non-fixable stages like fetch failure."""
 		ctrl, db = self._make_ctrl(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
 		fail_result = UnitMergeResult(
 			merged=False,
-			failure_output="Merge conflict in utils.py",
-			failure_stage="merge",
+			failure_output="Failed to fetch unit branch",
+			failure_stage="fetch",
 		)
 		ctrl._green_branch.merge_unit = AsyncMock(return_value=fail_result)
 
@@ -3122,11 +3165,176 @@ class TestWorkerFixupAndRemerge:
 		ctrl.running = False
 
 		with patch.object(
-			ctrl, "_worker_fixup_and_remerge",
+			ctrl, "_resume_worker_for_fixup",
 			new_callable=AsyncMock,
 		) as mock_fixup, patch.object(ctrl, "_retry_unit", new_callable=AsyncMock):
 			await ctrl._process_completions(Mission(id="m1"), result)
 
 		mock_fixup.assert_not_awaited()
 		assert ctrl._total_merged == 0
+
+	@pytest.mark.asyncio
+	async def test_fixup_triggered_on_merge_conflict(self, config: MissionConfig, db: Database) -> None:
+		"""Completion processor calls fixup for merge_conflict so the worker can rebase."""
+		ctrl, db = self._make_ctrl(config, db)
+		result = ContinuousMissionResult(mission_id="m1")
+
+		fail_result = UnitMergeResult(
+			merged=False,
+			failure_output="Merge conflict: CONFLICT in utils.py",
+			failure_stage="merge_conflict",
+		)
+		success_result = UnitMergeResult(merged=True, verification_passed=True)
+
+		ctrl._green_branch.merge_unit = AsyncMock(return_value=fail_result)
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task",
+			status="completed", commit_hash="abc123",
+			branch_name="mc/unit-wu1",
+			attempt=1, max_attempts=3,
+		)
+		db.insert_work_unit(unit)
+
+		completion = WorkerCompletion(
+			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
+		)
+		ctrl._completion_queue.put_nowait(completion)
+		ctrl.running = False
+
+		with patch.object(
+			ctrl, "_resume_worker_for_fixup",
+			new_callable=AsyncMock,
+			return_value=success_result,
+		) as mock_fixup:
+			await ctrl._process_completions(Mission(id="m1"), result)
+
+		mock_fixup.assert_awaited_once()
+		assert ctrl._total_merged == 1
+
+	@pytest.mark.asyncio
+	async def test_merge_conflict_resume_prompt_contains_rebase(self, config: MissionConfig, db: Database) -> None:
+		"""Merge conflict fixup prompt instructs the worker to rebase, not just fix verification."""
+		ctrl, db = self._make_ctrl(config, db)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task", description="Do stuff",
+			branch_name="mc/unit-wu1", session_id="test-session-456",
+		)
+		fail_result = UnitMergeResult(
+			merged=False,
+			failure_output="CONFLICT (content): Merge conflict in utils.py",
+			failure_stage="merge_conflict",
+		)
+		success_result = UnitMergeResult(merged=True, verification_passed=True)
+
+		ctrl._green_branch.merge_unit = AsyncMock(return_value=success_result)
+
+		with patch("asyncio.create_subprocess_exec") as mock_exec:
+			mock_proc = AsyncMock()
+			mock_proc.communicate = AsyncMock(return_value=(b"Resolved", b""))
+			mock_proc.kill = AsyncMock()
+			mock_exec.return_value = mock_proc
+
+			result = await ctrl._resume_worker_for_fixup(
+				unit, "/tmp/ws", fail_result, config.continuous,
+			)
+
+			call_args = mock_exec.call_args[0]
+			assert "--resume" in call_args
+			prompt_arg = call_args[-1]
+			assert "rebase" in prompt_arg.lower()
+			assert "conflict" in prompt_arg.lower()
+			# Should NOT contain the original task (session has it)
+			assert "Do stuff" not in prompt_arg
+
+		assert result is not None
+		assert result.merged is True
+
+
+class TestAcceptMerge:
+	"""Tests for _accept_merge: counter updates and fire-and-forget review."""
+
+	def _make_ctrl(self, config: MissionConfig, db: Database) -> tuple[ContinuousController, Database]:
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._green_branch = MagicMock()
+		ctrl._semaphore = DynamicSemaphore(2)
+		return ctrl, db
+
+	def test_accept_merge_increments_counters(self, config: MissionConfig, db: Database) -> None:
+		"""Basic merge acceptance updates counters and file tracking."""
+		ctrl, db = self._make_ctrl(config, db)
+		config.review.enabled = False
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task",
+			files_hint="src/foo.py", input_tokens=100, output_tokens=50,
+		)
+		merge_result = UnitMergeResult(
+			merged=True, verification_passed=True,
+			changed_files=["src/foo.py"],
+		)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		result = ContinuousMissionResult(mission_id="m1")
+
+		ctrl._accept_merge(
+			unit, merge_result, "/tmp/ws",
+			Mission(id="m1"), epoch, result,
+		)
+
+		assert ctrl._total_merged == 1
+		assert "wu1" in ctrl._completed_unit_ids
+		assert "src/foo.py" in ctrl._merged_files
+
+	@pytest.mark.asyncio
+	async def test_fixup_merge_goes_through_accept(self, config: MissionConfig, db: Database) -> None:
+		"""Fixup-merged units go through _accept_merge (not bypassing review)."""
+		ctrl, db = self._make_ctrl(config, db)
+		result = ContinuousMissionResult(mission_id="m1")
+
+		fail_result = UnitMergeResult(
+			merged=False,
+			failure_output="2 tests failed",
+			failure_stage="pre_merge_verification",
+		)
+		success_result = UnitMergeResult(merged=True, verification_passed=True)
+
+		ctrl._green_branch.merge_unit = AsyncMock(return_value=fail_result)
+
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+
+		unit = WorkUnit(
+			id="wu1", plan_id="p1", title="Task",
+			status="completed", commit_hash="abc123",
+			branch_name="mc/unit-wu1",
+			attempt=1, max_attempts=3,
+		)
+		db.insert_work_unit(unit)
+
+		completion = WorkerCompletion(
+			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
+		)
+		ctrl._completion_queue.put_nowait(completion)
+		ctrl.running = False
+
+		with patch.object(
+			ctrl, "_resume_worker_for_fixup",
+			new_callable=AsyncMock,
+			return_value=success_result,
+		), patch.object(
+			ctrl, "_accept_merge",
+		) as mock_accept:
+			await ctrl._process_completions(Mission(id="m1"), result)
+
+		# Verify _accept_merge was called (fixup path uses unified acceptance)
+		mock_accept.assert_called_once()
 

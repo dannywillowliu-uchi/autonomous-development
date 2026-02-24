@@ -148,31 +148,8 @@ class TestMergeUnit:
 		assert len(remote_removes) >= 1
 
 
-	async def test_merge_conflict_resolved_by_llm(self) -> None:
-		"""When conflict resolution succeeds, result.merged=True and conflict_resolved=True."""
-		mgr = _manager()
-
-		async def side_effect(*args: str) -> tuple[bool, str]:
-			if args[0] == "merge" and "--no-ff" in args:
-				return (False, "CONFLICT (content): Merge conflict in file.py")
-			if args[0] == "rev-parse" and args[1] == "HEAD":
-				return (True, "abc123\n")
-			if args[0] == "diff" and args[1] == "--name-only" and "HEAD~1" in args:
-				return (True, "file.py\n")
-			return (True, "")
-
-		mgr._run_git = AsyncMock(side_effect=side_effect)
-		mgr._resolve_merge_conflict = AsyncMock(return_value=(True, "resolved"))  # type: ignore[method-assign]
-		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
-
-		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
-
-		assert result.merged is True
-		assert result.conflict_resolved is True
-		mgr._resolve_merge_conflict.assert_awaited_once()
-
-	async def test_merge_conflict_resolution_fails_falls_back(self) -> None:
-		"""When conflict resolution fails, merge aborts as before."""
+	async def test_merge_conflict_returns_failure(self) -> None:
+		"""Merge conflict aborts and returns merge_conflict failure stage."""
 		mgr = _manager()
 
 		async def side_effect(*args: str) -> tuple[bool, str]:
@@ -181,31 +158,11 @@ class TestMergeUnit:
 			return (True, "")
 
 		mgr._run_git = AsyncMock(side_effect=side_effect)
-		mgr._resolve_merge_conflict = AsyncMock(return_value=(False, "failed"))  # type: ignore[method-assign]
 
 		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
 
 		assert result.merged is False
 		assert result.failure_stage == "merge_conflict"
-
-	async def test_merge_conflict_resolution_disabled(self) -> None:
-		"""When conflict_resolution is disabled, skips resolution attempt."""
-		mgr = _manager()
-		mgr.config.green_branch.conflict_resolution = False
-
-		async def side_effect(*args: str) -> tuple[bool, str]:
-			if args[0] == "merge" and "--no-ff" in args:
-				return (False, "CONFLICT (content): Merge conflict in file.py")
-			return (True, "")
-
-		mgr._run_git = AsyncMock(side_effect=side_effect)
-		mgr._resolve_merge_conflict = AsyncMock()  # type: ignore[method-assign]
-
-		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
-
-		assert result.merged is False
-		assert result.failure_stage == "merge_conflict"
-		mgr._resolve_merge_conflict.assert_not_awaited()
 
 
 class TestPushGreenToMain:
