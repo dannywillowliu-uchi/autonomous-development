@@ -20,7 +20,6 @@ from mission_control.config import ContinuousConfig, MissionConfig, claude_subpr
 from mission_control.constants import (
 	UNIT_EVENT_DEGRADATION_TRANSITION,
 	UNIT_EVENT_DISPATCHED,
-	UNIT_EVENT_EXPERIMENT_COMPLETED,
 	UNIT_EVENT_MERGE_FAILED,
 	UNIT_EVENT_MERGED,
 	UNIT_EVENT_REJECTED,
@@ -1638,7 +1637,7 @@ class ContinuousController:
 					mission_id=mission.id,
 					epoch_id=epoch.id,
 					work_unit_id=unit.id,
-					event_type=UNIT_EVENT_EXPERIMENT_COMPLETED,
+					event_type="experiment_completed",
 				)
 
 				if handoff and self._planner:
