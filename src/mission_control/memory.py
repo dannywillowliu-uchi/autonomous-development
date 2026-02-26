@@ -8,12 +8,10 @@ import logging
 from mission_control.config import EpisodicMemoryConfig, MissionConfig, claude_subprocess_env
 from mission_control.db import Database
 from mission_control.models import ContextItem, EpisodicMemory, SemanticMemory, Session, WorkUnit, _new_id, _now_iso
-from mission_control.reviewer import ReviewVerdict
 
 logger = logging.getLogger(__name__)
 
 CONTEXT_BUDGET = 16000  # ~4000 tokens
-
 
 
 def _format_session_history(sessions: list[Session]) -> str:
@@ -25,19 +23,6 @@ def _format_session_history(sessions: list[Session]) -> str:
 		status_icon = {"completed": "+", "failed": "x", "reverted": "!"}.get(s.status, "?")
 		lines.append(f"[{status_icon}] {s.id}: {s.task_description} -> {s.status} ({s.output_summary[:80]})")
 	return "\n".join(lines)
-
-
-def summarize_session(session: Session, verdict: ReviewVerdict) -> str:
-	"""Create a one-paragraph summary for future context."""
-	parts = [f"Session {session.id} ({session.task_description}):"]
-	parts.append(f"Verdict: {verdict.verdict}.")
-	if verdict.improvements:
-		parts.append(f"Improved: {', '.join(verdict.improvements)}.")
-	if verdict.regressions:
-		parts.append(f"Regressed: {', '.join(verdict.regressions)}.")
-	if session.output_summary:
-		parts.append(f"Output: {session.output_summary[:200]}")
-	return " ".join(parts)
 
 
 def compress_history(sessions: list[Session], max_chars: int = 4000) -> str:

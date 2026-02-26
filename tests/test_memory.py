@@ -19,7 +19,6 @@ from mission_control.memory import (
 	inject_context_items,
 	load_context_for_mission_worker,
 	load_context_for_work_unit,
-	summarize_session,
 )
 from mission_control.models import (
 	ContextItem,
@@ -35,7 +34,6 @@ from mission_control.models import (
 	WorkUnit,
 )
 from mission_control.planner_context import build_planner_context
-from mission_control.reviewer import ReviewVerdict
 
 
 @pytest.fixture
@@ -203,44 +201,6 @@ class TestCompressHistory:
 		assert len(result) <= 200  # generous bound including the "... and N more" line
 		assert "... and" in result
 		assert "more sessions" in result
-
-
-# -- summarize_session --
-
-
-class TestSummarizeSession:
-	def test_basic_format(self):
-		session = _make_session(id="abc123", desc="add logging")
-		verdict = ReviewVerdict(verdict="helped")
-		result = summarize_session(session, verdict)
-		assert "Session abc123 (add logging):" in result
-		assert "Verdict: helped." in result
-
-	def test_with_improvements(self):
-		session = _make_session(id="s1", desc="refactor")
-		verdict = ReviewVerdict(verdict="helped", improvements=["reduced complexity", "added types"])
-		result = summarize_session(session, verdict)
-		assert "Improved: reduced complexity, added types." in result
-
-	def test_with_regressions(self):
-		session = _make_session(id="s1", desc="deploy")
-		verdict = ReviewVerdict(verdict="hurt", regressions=["broke API", "lost data"])
-		result = summarize_session(session, verdict)
-		assert "Regressed: broke API, lost data." in result
-
-	def test_full_combo(self):
-		session = _make_session(id="s1", desc="big change", summary="lots happened")
-		verdict = ReviewVerdict(
-			verdict="helped",
-			improvements=["test coverage"],
-			regressions=["minor lint"],
-		)
-		result = summarize_session(session, verdict)
-		assert "Session s1 (big change):" in result
-		assert "Verdict: helped." in result
-		assert "Improved: test coverage." in result
-		assert "Regressed: minor lint." in result
-		assert "Output: lots happened" in result
 
 
 # -- Context CRUD --
