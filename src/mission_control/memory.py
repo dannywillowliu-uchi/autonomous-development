@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 
 from mission_control.config import EpisodicMemoryConfig, MissionConfig, claude_subprocess_env
 from mission_control.db import Database
@@ -120,6 +121,18 @@ def load_context_for_mission_worker(
 	if claude_md:
 		truncated = claude_md[:min(4000, budget)]
 		sections.append(f"### Project Instructions\n{truncated}")
+		budget -= len(truncated)
+
+	# 3. File previews from files_hint (budget-aware)
+	if unit.files_hint:
+		preview_budget = min(3000, budget)
+		previews = build_file_previews(
+			unit.files_hint,
+			config.target.resolved_path,
+			preview_budget,
+		)
+		if previews:
+			sections.append(previews)
 
 	return "\n\n".join(sections) if sections else ""
 
@@ -172,6 +185,59 @@ def inject_context_items(
 	if len(formatted) > budget:
 		formatted = formatted[:budget]
 	return f"### Context from Prior Workers\n{formatted}"
+
+
+def build_file_previews(
+	files_hint: str,
+	resolved_path: Path,
+	budget: int,
+	max_lines: int = 40,
+) -> str:
+	"""Read the first lines of files listed in files_hint, fitting within budget.
+
+	Returns a formatted '### File Previews' section or empty string if no files found.
+	"""
+	if not files_hint or budget <= 0:
+		return ""
+
+	paths = [p.strip() for p in files_hint.split(",") if p.strip()]
+	if not paths:
+		return ""
+
+	previews: list[str] = []
+	remaining = budget
+	header = "### File Previews\n"
+	remaining -= len(header)
+
+	for rel_path in paths:
+		if remaining <= 0:
+			break
+		full_path = resolved_path / rel_path
+		try:
+			text = full_path.read_text()
+		except (FileNotFoundError, PermissionError, IsADirectoryError, OSError):
+			logger.debug("File preview skipped (not found): %s", rel_path)
+			continue
+
+		lines = text.splitlines(keepends=True)[:max_lines]
+		content = "".join(lines)
+		entry = f"#### {rel_path}\n```\n{content}```\n"
+
+		if len(entry) > remaining:
+			# Truncate content to fit
+			overhead = len(f"#### {rel_path}\n```\n") + len("```\n")
+			available = remaining - overhead
+			if available <= 0:
+				break
+			entry = f"#### {rel_path}\n```\n{content[:available]}```\n"
+
+		previews.append(entry)
+		remaining -= len(entry)
+
+	if not previews:
+		return ""
+
+	return header + "\n".join(previews)
 
 
 def _read_project_claude_md(config: MissionConfig) -> str:
