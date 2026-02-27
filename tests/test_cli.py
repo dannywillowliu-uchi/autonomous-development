@@ -128,7 +128,7 @@ class _FakeResult:
 
 @patch("mission_control.cli._start_dashboard_background", return_value=(None, None))
 class TestMissionChainLoop:
-	"""Tests that the chaining loop in cmd_mission respects max depth and strategist."""
+	"""Tests that the chaining loop in cmd_mission respects max depth and deliberative planner."""
 
 	def _mock_mission_run(self, results: list[_FakeResult]) -> tuple[MagicMock, list]:
 		"""Setup mocks for cmd_mission. Returns (mock_controller_cls, call_log)."""

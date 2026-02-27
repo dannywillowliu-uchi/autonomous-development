@@ -25,11 +25,13 @@ Before ANY commit, run:
 
 ### Mission Mode (Continuous) -- the primary execution mode
 - `continuous_controller.py` -- Event-driven loop: dispatch + completion processor via asyncio.Queue
-- `continuous_planner.py` -- Flat impact-focused planner wrapper around RecursivePlanner
+- `deliberative_planner.py` -- Dual-agent deliberation: critic researches/reviews, planner decomposes/refines, iterates until solid
+- `critic_agent.py` -- Critic subprocess: research, plan review, and chaining objective proposal via CRITIC_RESULT marker
+- `planner_agent.py` -- Wraps RecursivePlanner with critic-enriched context (findings, risks, gaps)
+- `context_gathering.py` -- Shared context functions: backlog, git log, past missions, strategic context, episodic memory
+- `continuous_planner.py` -- Flat impact-focused planner wrapper around RecursivePlanner (fallback when deliberation disabled)
 - `recursive_planner.py` -- LLM-based recursive plan tree generation with PLAN_RESULT marker
-- `research_phase.py` -- Pre-planning parallel research agents (codebase analyst, domain researcher, prior art reviewer) + synthesis -> MISSION_STRATEGY.md
 - `batch_analyzer.py` -- Heuristic pattern detection from batch signals (file hotspots, failure clusters, stalled areas)
-- `strategic_reflection.py` -- LLM synthesis of batch signals into actionable reflection (patterns, tensions, open questions, strategy revision)
 - `planner_context.py` -- Minimal planner context (cross-mission semantic memories + recent failures) and fixed-size MISSION_STATE.md writer
 - `green_branch.py` -- mc/green branch lifecycle, merge_unit() for direct merge without verification, ZFC fixup prompt generation
 - `hitl.py` -- Human-in-the-loop approval gates (file-based + Telegram polling) for push and large merge actions
@@ -38,7 +40,6 @@ Before ANY commit, run:
 - `diff_reviewer.py` -- Fire-and-forget LLM diff review (alignment/approach/tests scoring); feeds quality signals to planner but does NOT gate merges
 - `feedback.py` -- Worker context from past experiences
 - `overlap.py` -- File overlap detection and dependency injection
-- `strategist.py` -- Mission objective proposal, ambition scoring (heuristic + ZFC LLM-backed)
 
 ### Infrastructure
 - `backends/` -- Worker execution backends (local pool, SSH)
@@ -49,16 +50,16 @@ Before ANY commit, run:
 - `mcp_server.py` -- MCP server for external control
 
 ### Execution Flow
-1. Controller creates mission, initializes backend + green branch + planner
-2. Research phase: parallel agents investigate codebase, domain, and prior art -> writes MISSION_STRATEGY.md
-3. Orchestration loop: plan -> execute -> process -> reflect, repeat
+1. Controller creates mission, initializes backend + green branch + deliberative planner
+2. Deliberation: critic researches (codebase, domain, prior art) -> planner decomposes -> critic reviews -> planner refines (up to N rounds) -> writes MISSION_STRATEGY.md
+3. Orchestration loop: deliberate -> execute -> process, repeat (batch signals feed next critic pass)
 4. Workers run as Claude Code subprocesses with MCP access, emit MC_RESULT with handoff data
 5. Completion processor: merge to mc/green, ingest handoff, update MISSION_STATE.md (fixed-size summary)
 6. Batch analysis: heuristic pattern detection (file hotspots, failure clusters, stalled areas)
-7. Strategic reflection: LLM synthesis of batch signals, optional strategy revision
-8. Heartbeat monitors progress, sends Telegram alerts
-9. Stopping: planner returns empty plan (objective met), heartbeat stall, wall time, or signal
-10. Final verification runs on mc/green at mission end
+7. Heartbeat monitors progress, sends Telegram alerts
+8. Stopping: planner returns empty plan (objective met), heartbeat stall, wall time, or signal
+9. Final verification runs on mc/green at mission end
+10. Chaining (--chain): critic proposes next objective, approval prompt, new mission starts
 
 ## Gotchas
 

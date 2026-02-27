@@ -331,8 +331,7 @@ def cmd_mission(args: argparse.Namespace) -> int:
 
 	if not config.target.objective:
 		print(
-			"Error: target.objective must be set in config "
-			"for mission mode (or use --strategist)."
+			"Error: target.objective must be set in config."
 		)
 		return 1
 
