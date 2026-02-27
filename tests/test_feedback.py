@@ -103,6 +103,30 @@ class TestExtractKeywords:
 		keywords = _extract_keywords("test_api_endpoints")
 		assert "test_api_endpoints" in keywords
 
+	def test_file_paths_preserved(self) -> None:
+		"""File paths like 'src/foo/bar.py' are preserved as whole keywords."""
+		keywords = _extract_keywords("fix src/mission_control/worker.py")
+		assert "src/mission_control/worker.py" in keywords
+
+	def test_multiple_paths(self) -> None:
+		keywords = _extract_keywords("edit src/foo/bar.py and tests/test_bar.py")
+		assert "src/foo/bar.py" in keywords
+		assert "tests/test_bar.py" in keywords
+
+	def test_tokens_still_extracted_alongside_paths(self) -> None:
+		"""Existing token extraction still works for non-path text."""
+		keywords = _extract_keywords("fix src/mission_control/worker.py session handling")
+		assert "src/mission_control/worker.py" in keywords
+		assert "session" in keywords
+		assert "handling" in keywords
+
+	def test_deduplication_path_and_tokens(self) -> None:
+		"""Dedup works: path tokens don't duplicate the path itself."""
+		keywords = _extract_keywords("src/foo/bar.py")
+		assert keywords.count("src/foo/bar.py") == 1
+		# Tokens from the path (src, foo, bar, py) should not duplicate
+		assert len(keywords) == len(set(k.lower() for k in keywords))
+
 
 class TestExperienceSearchByKeywords:
 	def test_like_queries(self, db: Database) -> None:
