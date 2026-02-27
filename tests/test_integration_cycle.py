@@ -893,11 +893,11 @@ class TestChainLoopInCLI:
 	@patch("mission_control.continuous_controller.ContinuousController")
 	@patch("mission_control.cli.load_config")
 	@patch("mission_control.cli.Database")
-	def test_chain_without_strategist_runs_once(
+	def test_chain_proposes_next_via_deliberative_planner(
 		self, mock_db_cls: MagicMock, mock_load: MagicMock, mock_ctrl_cls: MagicMock,
 		_mock_dash: MagicMock, tmp_path: Path,
 	) -> None:
-		"""With --chain but no --strategist, breaks after first mission."""
+		"""With --chain, deliberative planner proposes next objective (empty stops chain)."""
 		_, config = self._make_config(tmp_path)
 		mock_load.return_value = config
 
@@ -911,7 +911,10 @@ class TestChainLoopInCLI:
 
 		def run_side_effect(coro):
 			call_count[0] += 1
-			return result
+			if call_count[0] == 1:
+				return result
+			# Second call is propose_next_objective -> empty stops chain
+			return ("", "")
 
 		parser = build_parser()
 		args = parser.parse_args([
@@ -919,7 +922,11 @@ class TestChainLoopInCLI:
 			"--config", str(tmp_path / "mission-control.toml"),
 		])
 
-		with patch("asyncio.run", side_effect=run_side_effect):
+		with (
+			patch("asyncio.run", side_effect=run_side_effect),
+			patch("mission_control.deliberative_planner.DeliberativePlanner"),
+		):
 			cmd_mission(args)
 
-		assert call_count[0] == 1
+		# 2 calls: 1 mission run + 1 propose_next_objective
+		assert call_count[0] == 2

@@ -10,6 +10,14 @@ import asyncio
 import logging
 
 from mission_control.config import MissionConfig, build_claude_cmd, claude_subprocess_env
+from mission_control.context_gathering import (
+	get_episodic_context,
+	get_git_log,
+	get_human_preferences,
+	get_past_missions,
+	get_strategic_context,
+	read_backlog,
+)
 from mission_control.db import Database
 from mission_control.json_utils import extract_json_from_text
 from mission_control.memory import MemoryManager
@@ -93,115 +101,25 @@ class Strategist:
 		self._memory_manager = memory_manager
 
 	def _read_backlog(self) -> str:
-		backlog_path = self.config.target.resolved_path / "BACKLOG.md"
-		try:
-			return backlog_path.read_text()
-		except FileNotFoundError:
-			log.info("No BACKLOG.md found at %s", backlog_path)
-			return ""
+		return read_backlog(self.config)
 
 	async def _get_git_log(self) -> str:
-		try:
-			proc = await asyncio.create_subprocess_exec(
-				"git", "log", "--oneline", "-20",
-				stdout=asyncio.subprocess.PIPE,
-				stderr=asyncio.subprocess.PIPE,
-				cwd=str(self.config.target.resolved_path),
-			)
-			stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-			output = stdout.decode() if stdout else ""
-			return output.strip() if proc.returncode == 0 else ""
-		except (asyncio.TimeoutError, FileNotFoundError, OSError):
-			log.info("Could not read git log")
-			return ""
+		return await get_git_log(self.config)
 
 	def _get_past_missions(self) -> str:
-		missions = self.db.get_all_missions(limit=10)
-		if not missions:
-			return ""
-		lines = []
-		for m in missions:
-			rating_str = ""
-			try:
-				ratings = self.db.get_trajectory_ratings_for_mission(m.id)
-				if ratings:
-					rating_str = f", human_rating={ratings[0].rating}/10"
-			except Exception:
-				pass
-			lines.append(
-				f"- [{m.status}] {m.objective[:120]} "
-				f"(rounds={m.total_rounds}, score={m.final_score}, "
-				f"reason={m.stopped_reason or 'n/a'}{rating_str})"
-			)
-		return "\n".join(lines)
+		return get_past_missions(self.db)
 
 	def _get_strategic_context(self) -> str:
-		if not hasattr(self.db, "get_strategic_context"):
-			return ""
-		try:
-			entries = self.db.get_strategic_context(limit=10)
-			if not entries:
-				return ""
-			return "\n".join(f"- {e}" for e in entries)
-		except Exception:
-			log.debug("get_strategic_context not available", exc_info=True)
-			return ""
+		return get_strategic_context(self.db)
 
 	def _get_pending_backlog(self) -> str:
 		return ""
 
 	def _get_human_preferences(self) -> str:
-		"""Build a human preference signals section from trajectory ratings."""
-		try:
-			missions = self.db.get_all_missions(limit=20)
-			high_rated: list[str] = []
-			low_rated: list[str] = []
-			for m in missions:
-				ratings = self.db.get_trajectory_ratings_for_mission(m.id)
-				if not ratings:
-					continue
-				r = ratings[0]
-				label = f"\"{m.objective[:80]}\" ({r.rating}/10)"
-				if r.rating >= 7:
-					high_rated.append(label)
-				elif r.rating <= 4:
-					low_rated.append(label)
-			if not high_rated and not low_rated:
-				return ""
-			lines = []
-			if high_rated:
-				lines.append("Highly-rated: " + ", ".join(high_rated[:5]))
-			if low_rated:
-				lines.append("Low-rated: " + ", ".join(low_rated[:5]))
-			lines.append(
-				"Prefer work similar to highly-rated missions."
-			)
-			return "\n".join(lines)
-		except Exception:
-			return ""
+		return get_human_preferences(self.db)
 
 	def _get_episodic_context(self) -> str:
-		"""Load episodic + semantic memories and format as context for strategy prompts."""
-		lines: list[str] = []
-		try:
-			semantic = self.db.get_top_semantic_memories(limit=5)
-			if semantic:
-				lines.append("Learned rules:")
-				for sm in semantic:
-					lines.append(f"  - [{sm.confidence:.1f}] {sm.content}")
-		except Exception:
-			log.debug("Failed to load semantic memories", exc_info=True)
-
-		try:
-			episodes = self.db.get_episodic_memories_by_scope(["mission", "strategy"], limit=10)
-			if episodes:
-				lines.append("Recent episodes:")
-				for ep in episodes:
-					lines.append(f"  - [{ep.event_type}] {ep.content} -> {ep.outcome}")
-		except Exception:
-			log.debug("Failed to load episodic memories", exc_info=True)
-
-		return "\n".join(lines)
+		return get_episodic_context(self.db)
 
 	def _parse_strategy_output(self, output: str) -> tuple[str, str, int]:
 		"""Parse STRATEGY_RESULT from LLM output. Returns (objective, rationale, ambition_score)."""

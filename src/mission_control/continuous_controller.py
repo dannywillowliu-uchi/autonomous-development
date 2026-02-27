@@ -34,6 +34,7 @@ from mission_control.constants import (
 from mission_control.continuous_planner import ContinuousPlanner
 from mission_control.db import Database
 from mission_control.degradation import DegradationManager, DegradationTransition
+from mission_control.deliberative_planner import DeliberativePlanner
 from mission_control.diff_reviewer import DiffReviewer
 from mission_control.ema import ExponentialMovingAverage
 from mission_control.event_stream import EventStream
@@ -59,8 +60,6 @@ from mission_control.notifier import TelegramNotifier
 from mission_control.overlap import _parse_files_hint, topological_layers
 from mission_control.planner_context import build_planner_context, update_mission_state
 from mission_control.session import parse_mc_result
-from mission_control.strategic_reflection import StrategicReflectionAgent
-from mission_control.strategist import Strategist
 from mission_control.token_parser import compute_token_cost, parse_stream_json
 from mission_control.tracing import MissionTracer
 from mission_control.worker import load_specialist_template, render_mission_worker_prompt
@@ -185,7 +184,6 @@ class ContinuousController:
 		self._last_reconcile_count: int = 0
 		self._objective_check_count: int = 0
 		self._failed_unit_replan_count: int = 0
-		self._strategist: Strategist | None = None
 		self._is_cleanup_mission: bool = config.target.objective.startswith("[CLEANUP]")
 		self._diff_reviewer: DiffReviewer = DiffReviewer(config)
 		cont = config.continuous
@@ -228,9 +226,7 @@ class ContinuousController:
 		except Exception:
 			logger.warning("Failed to initialize memory manager", exc_info=True)
 		self._batch_analyzer: BatchAnalyzer = BatchAnalyzer(db)
-		self._strategic_reflection: StrategicReflectionAgent = StrategicReflectionAgent(config)
 		self._current_strategy: str = ""
-		self._latest_reflection: Any = None
 		self._speculation_completions: dict[str, list[WorkerCompletion]] = {}
 		self._speculation_parent_units: dict[str, WorkUnit] = {}
 		budget = config.scheduler.budget
@@ -387,24 +383,6 @@ class ContinuousController:
 
 		try:
 			await self._init_components()
-
-			# Run research phase (before first planning iteration)
-			if self.config.research.enabled:
-				try:
-					from mission_control.research_phase import ResearchPhase
-					research_phase = ResearchPhase(self.config, self.db)
-					research_result = await research_phase.run(mission)
-					self._current_strategy = research_result.strategy
-					if self._planner:
-						self._planner.set_strategy(research_result.strategy)
-					mission.total_cost_usd += research_result.cost_usd
-					logger.info(
-						"Research phase complete: strategy=%d chars, findings=%d, cost=$%.2f",
-						len(research_result.strategy), len(research_result.findings),
-						research_result.cost_usd,
-					)
-				except Exception as exc:
-					logger.warning("Research phase failed (continuing without strategy): %s", exc)
 
 			if self._a2a_server is not None:
 				try:
@@ -779,8 +757,11 @@ class ContinuousController:
 				"operations. SSH backend is not yet supported."
 			)
 
-		# Continuous planner (wraps RecursivePlanner)
-		self._planner = ContinuousPlanner(self.config, self.db)
+		# Deliberative planner (critic/planner dual-agent loop)
+		if self.config.deliberation.enabled:
+			self._planner = DeliberativePlanner(self.config, self.db)
+		else:
+			self._planner = ContinuousPlanner(self.config, self.db)
 
 		# Telegram notifier (optional)
 		tg = self.config.notifications.telegram
@@ -1421,12 +1402,21 @@ class ContinuousController:
 					for k in knowledge_items[-20:]
 				)
 
+			# Gather batch signals for the deliberative planner's critic
+			batch_signals = None
+			if self._total_dispatched > 0:
+				try:
+					batch_signals = self._batch_analyzer.analyze(mission.id)
+				except Exception as exc:
+					logger.debug("Batch analysis failed: %s", exc)
+
 			try:
 				plan, units, epoch = await self._planner.get_next_units(
 					mission,
 					max_units=num_workers,
 					feedback_context=state,
 					knowledge_context=knowledge_context,
+					batch_signals=batch_signals,
 				)
 			except Exception as exc:
 				logger.error("Planner failed: %s", exc, exc_info=True)
@@ -1454,30 +1444,11 @@ class ContinuousController:
 
 			await self._process_batch(completions, mission, result)
 
-			# Reflect on batch results (skip first iteration -- no data yet)
-			if self._total_dispatched > len(units):
-				try:
-					signals = self._batch_analyzer.analyze(mission.id)
-					ki = self.db.get_knowledge_for_mission(mission.id)
-					reflection = await self._strategic_reflection.reflect(
-						objective=mission.objective,
-						signals=signals,
-						knowledge_items=ki,
-						strategy=self._current_strategy,
-					)
-					if reflection.strategy_revision:
-						self._current_strategy = reflection.strategy_revision
-						self._write_strategy_update(reflection.strategy_revision)
-					self._latest_reflection = reflection
-				except Exception as exc:
-					logger.debug("Reflection failed: %s", exc)
-
 			try:
 				update_mission_state(
 					self.db, mission, self.config, self._state_changelog,
 					degradation_status=self._degradation.get_status_dict(),
 					strategy=self._current_strategy,
-					reflection=self._latest_reflection,
 				)
 			except Exception as exc:
 				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
@@ -2935,7 +2906,6 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			self.db, mission, self.config, self._state_changelog,
 			degradation_status=self._degradation.get_status_dict(),
 			strategy=self._current_strategy,
-			reflection=self._latest_reflection,
 		)
 
 	def stop(self) -> None:

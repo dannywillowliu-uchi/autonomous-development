@@ -431,6 +431,19 @@ class ResearchConfig:
 
 
 @dataclass
+class DeliberationConfig:
+	"""Deliberative planner settings (critic/planner dual-agent loop)."""
+
+	enabled: bool = True
+	max_rounds: int = 3
+	critic_budget_usd: float = 2.0
+	planner_budget_usd: float = 1.0
+	timeout: int = 300
+	critic_model: str = ""  # defaults to scheduler.model
+	planner_model: str = ""  # defaults to models.planner
+
+
+@dataclass
 class SecurityConfig:
 	"""Security settings for worker subprocess isolation."""
 
@@ -460,6 +473,7 @@ class MissionConfig:
 	tool_synthesis: ToolSynthesisConfig = field(default_factory=ToolSynthesisConfig)
 	mcp: MCPConfig = field(default_factory=MCPConfig)
 	research: ResearchConfig = field(default_factory=ResearchConfig)
+	deliberation: DeliberationConfig = field(default_factory=DeliberationConfig)
 	security: SecurityConfig = field(default_factory=SecurityConfig)
 	tracing: TracingConfig = field(default_factory=TracingConfig)
 	hitl: HITLConfig = field(default_factory=HITLConfig)
@@ -1066,6 +1080,25 @@ def _build_research(data: dict[str, Any]) -> ResearchConfig:
 	return rc
 
 
+def _build_deliberation(data: dict[str, Any]) -> DeliberationConfig:
+	dc = DeliberationConfig()
+	if "enabled" in data:
+		dc.enabled = bool(data["enabled"])
+	if "max_rounds" in data:
+		dc.max_rounds = int(data["max_rounds"])
+	if "critic_budget_usd" in data:
+		dc.critic_budget_usd = float(data["critic_budget_usd"])
+	if "planner_budget_usd" in data:
+		dc.planner_budget_usd = float(data["planner_budget_usd"])
+	if "timeout" in data:
+		dc.timeout = int(data["timeout"])
+	if "critic_model" in data:
+		dc.critic_model = str(data["critic_model"])
+	if "planner_model" in data:
+		dc.planner_model = str(data["planner_model"])
+	return dc
+
+
 def load_config(path: str | Path) -> MissionConfig:
 	"""Load a mission-control.toml config file.
 
@@ -1125,6 +1158,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.mcp = _build_mcp(data["mcp"])
 	if "research" in data:
 		mc.research = _build_research(data["research"])
+	if "deliberation" in data:
+		mc.deliberation = _build_deliberation(data["deliberation"])
 	if "security" in data:
 		mc.security = _build_security(data["security"])
 	if "tracing" in data:

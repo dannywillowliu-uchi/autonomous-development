@@ -14,8 +14,6 @@ from typing import Any
 from mission_control.config import MissionConfig, load_config, validate_config
 from mission_control.db import Database
 from mission_control.models import Mission
-from mission_control.priority import parse_backlog_md_text as parse_backlog_md
-from mission_control.priority import recalculate_priorities as recalculate_priorities_db
 
 DEFAULT_CONFIG = "mission-control.toml"
 DEFAULT_DB = "mission-control.db"
@@ -43,16 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
 	mission.add_argument("--workers", type=int, default=None, help="Number of workers")
 	mission.add_argument("--dry-run", action="store_true", help="Show mission plan without executing")
 	mission.add_argument(
-		"--auto-discover", action="store_true",
-		help="Run discovery before mission, use results as objective",
-	)
-	mission.add_argument(
 		"--approve-all", action="store_true",
-		help="Auto-approve all discovery items (skip checkpoint)",
-	)
-	mission.add_argument(
-		"--strategist", action="store_true",
-		help="Run strategist to propose an objective before the mission",
+		help="Auto-approve proposed objective (skip checkpoint)",
 	)
 	mission.add_argument(
 		"--experiment", action="store_true",
@@ -74,13 +64,6 @@ def build_parser() -> argparse.ArgumentParser:
 		"--dashboard-port", type=int, default=8080,
 		help="Port for the live dashboard (default: 8080)",
 	)
-
-	# mc discover
-	discover = sub.add_parser("discover", help="Run codebase discovery analysis")
-	discover.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
-	discover.add_argument("--dry-run", action="store_true", help="Show what would be analyzed")
-	discover.add_argument("--json", action="store_true", dest="json_output", help="Output raw JSON")
-	discover.add_argument("--latest", action="store_true", help="Show latest discovery from DB")
 
 	# mc init
 	init_cmd = sub.add_parser("init", help="Initialize a mission-control config")
@@ -126,35 +109,6 @@ def build_parser() -> argparse.ArgumentParser:
 	# mc validate-config
 	vc = sub.add_parser("validate-config", help="Validate config file semantically")
 	vc.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
-
-	# mc priority
-	priority = sub.add_parser("priority", help="Manage backlog priority queue")
-	priority.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
-	priority_sub = priority.add_subparsers(dest="priority_command")
-
-	# mc priority list
-	priority_sub.add_parser("list", help="List backlog items sorted by score")
-
-	# mc priority set <item-id> <score>
-	pset = priority_sub.add_parser("set", help="Pin a priority score on an item")
-	pset.add_argument("item_id", help="Backlog item ID")
-	pset.add_argument("score", type=float, help="Priority score to pin")
-
-	# mc priority defer <item-id>
-	pdefer = priority_sub.add_parser("defer", help="Defer a backlog item")
-	pdefer.add_argument("item_id", help="Backlog item ID to defer")
-
-	# mc priority import --config <path>
-	pimport = priority_sub.add_parser("import", help="Import items from BACKLOG.md")
-	pimport.add_argument("--file", required=True, help="Path to BACKLOG.md file")
-
-	# mc priority recalc
-	priority_sub.add_parser("recalc", help="Recalculate all priority scores")
-
-	# mc priority export
-	pexport = priority_sub.add_parser("export", help="Export backlog queue to markdown")
-	pexport.add_argument("--file", default=None, help="Output file (default: stdout)")
-	pexport.add_argument("--status", default=None, help="Filter by status")
 
 	return parser
 
@@ -211,80 +165,6 @@ def cmd_history(args: argparse.Namespace) -> int:
 			if s.output_summary:
 				print(f"    {s.output_summary[:100]}")
 		return 0
-
-
-def cmd_discover(args: argparse.Namespace) -> int:
-	"""Run codebase discovery analysis."""
-	import json as json_mod
-
-	from mission_control.auto_discovery import DiscoveryEngine
-
-	config = load_config(args.config)
-	db_path = _get_db_path(args.config)
-
-	if args.dry_run:
-		dc = config.discovery
-		print(f"Target: {config.target.name} ({config.target.resolved_path})")
-		print(f"Tracks: {', '.join(dc.tracks)}")
-		print(f"Model: {dc.model}")
-		print(f"Budget: ${dc.budget_per_call_usd}/call")
-		print(f"Min priority: {dc.min_priority_score}")
-		print(f"Max items/track: {dc.max_items_per_track}")
-		return 0
-
-	with Database(db_path) as db:
-		if args.latest:
-			result, items = db.get_latest_discovery()
-			if result is None:
-				print("No discovery results found.")
-				return 1
-		else:
-			engine = DiscoveryEngine(config, db)
-			result, items = asyncio.run(engine.discover())
-
-		if args.json_output:
-			data = {
-				"id": result.id,
-				"timestamp": result.timestamp,
-				"model": result.model,
-				"item_count": result.item_count,
-				"items": [
-					{
-						"track": i.track,
-						"title": i.title,
-						"description": i.description,
-						"rationale": i.rationale,
-						"files_hint": i.files_hint,
-						"impact": i.impact,
-						"effort": i.effort,
-						"priority_score": i.priority_score,
-						"status": i.status,
-					}
-					for i in items
-				],
-			}
-			print(json_mod.dumps(data, indent=2))
-		else:
-			_print_discovery_table(items)
-
-		return 0
-
-
-def _print_discovery_table(items: list) -> None:
-	"""Print discovery items in a formatted table."""
-	if not items:
-		print("No items discovered.")
-		return
-
-	print(f"\n{'Track':<10} {'Title':<40} {'Priority':>8} {'Impact':>7} {'Effort':>7}")
-	print("-" * 75)
-	for i in items:
-		title = i.title[:38] + ".." if len(i.title) > 40 else i.title
-		print(
-			f"{i.track:<10} {title:<40} {i.priority_score:>8.1f} "
-			f"{i.impact:>7} {i.effort:>7}"
-		)
-	print(f"\nTotal: {len(items)} items")
 
 
 def _is_cleanup_mission(mission: Mission) -> bool:
@@ -437,57 +317,6 @@ def cmd_mission(args: argparse.Namespace) -> int:
 				asyncio.run(controller.run(dry_run=True))
 		return 0
 
-	# Strategist mode: propose an objective before the mission
-	if args.strategist:
-		from mission_control.strategist import Strategist
-
-		with Database(db_path) as db:
-			strategist = Strategist(config, db)
-			objective, rationale, ambition = asyncio.run(strategist.propose_objective())
-
-		print(f"Proposed objective: {objective}")
-		print(f"Rationale: {rationale}")
-		print(f"Ambition score: {ambition}/10")
-
-		if not args.approve_all:
-			answer = input("Approve this objective? [y/N] ").strip().lower()
-			if answer != "y":
-				print("Objective rejected. Exiting.")
-				return 0
-
-		config.target.objective = objective
-
-	# Auto-discover mode: run discovery, then use results as objective
-	if args.auto_discover:
-		from mission_control.auto_discovery import DiscoveryEngine
-
-		with Database(db_path) as db:
-			engine = DiscoveryEngine(config, db)
-			result, items = asyncio.run(engine.discover())
-
-			if not items:
-				print("Discovery found no actionable items.")
-				return 0
-
-			_print_discovery_table(items)
-
-			if not args.approve_all:
-				print("\nReview the items above.")
-				answer = input(
-					"Approve all and start mission? [y/N] "
-				).strip().lower()
-				if answer != "y":
-					print("Mission cancelled.")
-					return 0
-
-			# Mark all as approved
-			for item in items:
-				db.update_discovery_item_status(item.id, "approved")
-
-			# Compose objective from approved items
-			config.target.objective = engine.compose_objective(items)
-			print(f"\nComposed objective from {len(items)} items.")
-
 	# Experiment mode: prepend instruction to objective for planner
 	if args.experiment and config.target.objective:
 		config.target.objective = (
@@ -503,7 +332,7 @@ def cmd_mission(args: argparse.Namespace) -> int:
 	if not config.target.objective:
 		print(
 			"Error: target.objective must be set in config "
-			"for mission mode (or use --auto-discover)."
+			"for mission mode (or use --strategist)."
 		)
 		return 1
 
@@ -560,16 +389,29 @@ def cmd_mission(args: argparse.Namespace) -> int:
 			if chain_depth >= max_chain_depth:
 				print(f"Chain depth limit reached ({max_chain_depth}). Stopping.")
 				break
-			# Re-invoke strategist for next objective if chaining
-			if args.strategist:
-				with Database(db_path) as chain_db:
-					chain_strat = Strategist(config, chain_db)
-					obj, _rat, _amb = asyncio.run(chain_strat.propose_objective())
-				config.target.objective = obj
-				print(f"\n--- Chaining mission {chain_depth + 1}/{max_chain_depth} ---")
-				print(f"Next objective: {obj}")
-			else:
+			# Use deliberative planner's critic to propose next objective
+			from mission_control.deliberative_planner import DeliberativePlanner
+			with Database(db_path) as chain_db:
+				chain_planner = DeliberativePlanner(config, chain_db)
+				obj, rationale = asyncio.run(
+					chain_planner.propose_next_objective(
+						Mission(objective=config.target.objective),
+						last_result,
+					)
+				)
+			if not obj:
+				print("Critic did not propose a next objective. Stopping chain.")
 				break
+			print(f"\n--- Chaining mission {chain_depth + 1}/{max_chain_depth} ---")
+			print(f"Next objective: {obj}")
+			if rationale:
+				print(f"Rationale: {rationale[:200]}")
+			if not args.approve_all:
+				answer = input("Approve this objective? [y/N] ").strip().lower()
+				if answer != "y":
+					print("Objective rejected. Stopping chain.")
+					break
+			config.target.objective = obj
 	finally:
 		if dashboard_server is not None:
 			dashboard_server.should_exit = True
@@ -728,14 +570,6 @@ fixup_max_attempts = 3
 [continuous]
 max_wall_time_seconds = 7200
 timeout_multiplier = 1.2
-
-[discovery]
-enabled = true
-tracks = ["feature", "quality", "security"]
-max_items_per_track = 3
-min_priority_score = 3.0
-model = "opus"
-budget_per_call_usd = 2.0
 
 [heartbeat]
 interval = 300
@@ -946,238 +780,9 @@ def cmd_a2a(args: argparse.Namespace) -> int:
 
 
 
-def cmd_priority_list(args: argparse.Namespace) -> int:
-	"""List backlog items sorted by priority score."""
-	db_path = _get_db_path(args.config)
-	if not db_path.exists():
-		print("No database found. Run 'mc start' first.")
-		return 1
-
-	with Database(db_path) as db:
-		recalculate_priorities_db(db)
-		items = db.list_backlog_items()
-		if not items:
-			print("No backlog items.")
-			return 0
-
-		print(
-			f"\n{'ID':<14} {'Title':<30} {'Score':>6} {'Impact':>7} "
-			f"{'Effort':>7} {'Track':<10} {'Status':<10} {'Attempts':>8}"
-		)
-		print("-" * 96)
-		for i in items:
-			title = i.title[:28] + ".." if len(i.title) > 30 else i.title
-			print(
-				f"{i.id:<14} {title:<30} {i.priority_score:>6.1f} {i.impact:>7} "
-				f"{i.effort:>7} {i.track:<10} {i.status:<10} {i.attempt_count:>8}"
-			)
-		print(f"\nTotal: {len(items)} items")
-		return 0
-
-
-def cmd_priority_set(args: argparse.Namespace) -> int:
-	"""Pin a priority score on a backlog item."""
-	db_path = _get_db_path(args.config)
-	if not db_path.exists():
-		print("No database found. Run 'mc start' first.")
-		return 1
-
-	with Database(db_path) as db:
-		item = db.get_backlog_item(args.item_id)
-		if item is None:
-			print(f"Item not found: {args.item_id}")
-			return 1
-		db.pin_backlog_score(args.item_id, args.score)
-		print(f"Pinned score {args.score:.1f} on item {args.item_id} ({item.title})")
-		return 0
-
-
-def cmd_priority_defer(args: argparse.Namespace) -> int:
-	"""Defer a backlog item."""
-	db_path = _get_db_path(args.config)
-	if not db_path.exists():
-		print("No database found. Run 'mc start' first.")
-		return 1
-
-	with Database(db_path) as db:
-		item = db.get_backlog_item(args.item_id)
-		if item is None:
-			print(f"Item not found: {args.item_id}")
-			return 1
-		db.defer_backlog_item(args.item_id)
-		print(f"Deferred item {args.item_id} ({item.title})")
-		return 0
-
-
-def cmd_priority_import(args: argparse.Namespace) -> int:
-	"""Import backlog items from a BACKLOG.md file."""
-	db_path = _get_db_path(args.config)
-
-	file_path = Path(args.file)
-	if not file_path.exists():
-		print(f"File not found: {file_path}")
-		return 1
-
-	text = file_path.read_text()
-	parsed = parse_backlog_md(text)
-	if not parsed:
-		print("No items found in file.")
-		return 0
-
-	with Database(db_path) as db:
-		existing = db.list_backlog_items(limit=1000)
-		existing_titles = {item.title for item in existing}
-		imported = 0
-		for item in parsed:
-			if item.title in existing_titles:
-				continue
-			db.insert_backlog_item(item)
-			imported += 1
-		print(f"Imported {imported} items ({len(parsed) - imported} skipped as duplicates)")
-		return 0
-
-
-def cmd_priority_recalc(args: argparse.Namespace) -> int:
-	"""Recalculate all priority scores."""
-	db_path = _get_db_path(args.config)
-	if not db_path.exists():
-		print("No database found. Run 'mc start' first.")
-		return 1
-
-	with Database(db_path) as db:
-		updated = recalculate_priorities_db(db)
-		if not updated:
-			print("All scores up to date.")
-			return 0
-
-		print(f"Recalculated {len(updated)} item(s):")
-		for item in updated:
-			title = item.title[:40] + ".." if len(item.title) > 42 else item.title
-			print(f"  {item.id[:12]}  {title:<42} -> {item.priority_score:.1f}")
-		return 0
-
-
-def _render_backlog_markdown(items: list, status_filter: str | None = None) -> str:
-	"""Render backlog items as grouped markdown."""
-	from mission_control.models import BacklogItem
-
-	status_order = ["in_progress", "pending", "completed", "deferred"]
-	grouped: dict[str, list[BacklogItem]] = {}
-	for item in items:
-		grouped.setdefault(item.status, []).append(item)
-
-	lines: list[str] = ["# Backlog Queue", ""]
-	if status_filter:
-		lines.append(f"*Filtered by status: {status_filter}*")
-		lines.append("")
-
-	any_items = False
-	for status in status_order:
-		group = grouped.get(status, [])
-		if not group:
-			continue
-		any_items = True
-		# Sort by priority_score descending within group
-		group.sort(key=lambda x: x.priority_score, reverse=True)
-		lines.append(f"## {status.replace('_', ' ').title()} ({len(group)})")
-		lines.append("")
-		for item in group:
-			lines.append(f"### {item.title}")
-			lines.append(
-				f"- **Score**: {item.priority_score:.1f} | **Impact**: {item.impact} | **Effort**: {item.effort}"
-			)
-			if item.track:
-				lines.append(f"- **Track**: {item.track}")
-			if item.tags:
-				lines.append(f"- **Tags**: {item.tags}")
-			if item.attempt_count > 0:
-				lines.append(f"- **Attempts**: {item.attempt_count}")
-			if item.description:
-				desc = item.description[:200]
-				if len(item.description) > 200:
-					desc += "..."
-				lines.append(f"- {desc}")
-			lines.append("")
-
-	# Include any statuses not in the predefined order
-	for status, group in grouped.items():
-		if status not in status_order:
-			any_items = True
-			group.sort(key=lambda x: x.priority_score, reverse=True)
-			lines.append(f"## {status.replace('_', ' ').title()} ({len(group)})")
-			lines.append("")
-			for item in group:
-				lines.append(f"### {item.title}")
-				lines.append(
-				f"- **Score**: {item.priority_score:.1f} | **Impact**: {item.impact} | **Effort**: {item.effort}"
-			)
-				if item.track:
-					lines.append(f"- **Track**: {item.track}")
-				if item.tags:
-					lines.append(f"- **Tags**: {item.tags}")
-				if item.attempt_count > 0:
-					lines.append(f"- **Attempts**: {item.attempt_count}")
-				if item.description:
-					desc = item.description[:200]
-					if len(item.description) > 200:
-						desc += "..."
-					lines.append(f"- {desc}")
-				lines.append("")
-
-	if not any_items:
-		lines.append("*No backlog items.*")
-		lines.append("")
-
-	return "\n".join(lines)
-
-
-def cmd_priority_export(args: argparse.Namespace) -> int:
-	"""Export backlog queue to markdown."""
-	db_path = _get_db_path(args.config)
-	if not db_path.exists():
-		print("No database found. Run 'mc start' first.")
-		return 1
-
-	with Database(db_path) as db:
-		recalculate_priorities_db(db)
-		items = db.list_backlog_items(status=args.status, limit=1000)
-		md = _render_backlog_markdown(items, status_filter=args.status)
-
-		if args.file:
-			Path(args.file).write_text(md)
-			print(f"Exported {len(items)} items to {args.file}")
-		else:
-			print(md)
-		return 0
-
-
-def cmd_priority(args: argparse.Namespace) -> int:
-	"""Dispatch priority subcommands."""
-	subcmd = getattr(args, "priority_command", None)
-	if subcmd is None:
-		print("Usage: mc priority {list|set|defer|import|recalc|export}")
-		return 1
-	handler = _PRIORITY_COMMANDS.get(subcmd)
-	if handler is None:
-		print(f"Unknown priority subcommand: {subcmd}")
-		return 1
-	return handler(args)
-
-
-_PRIORITY_COMMANDS = {
-	"list": cmd_priority_list,
-	"set": cmd_priority_set,
-	"defer": cmd_priority_defer,
-	"import": cmd_priority_import,
-	"recalc": cmd_priority_recalc,
-	"export": cmd_priority_export,
-}
-
-
 COMMANDS = {
 	"status": cmd_status,
 	"history": cmd_history,
-	"discover": cmd_discover,
 	"mission": cmd_mission,
 	"init": cmd_init,
 	"dashboard": cmd_dashboard,
@@ -1190,7 +795,6 @@ COMMANDS = {
 	"mcp": cmd_mcp,
 	"a2a": cmd_a2a,
 	"validate-config": cmd_validate_config,
-	"priority": cmd_priority,
 }
 
 

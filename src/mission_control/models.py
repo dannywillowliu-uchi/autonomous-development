@@ -478,6 +478,30 @@ class ResearchResult:
 	cost_usd: float = 0.0
 
 
+@dataclass
+class CriticFinding:
+	"""Output of a critic agent pass (research, plan review, or chaining)."""
+
+	findings: list[str] = field(default_factory=list)
+	risks: list[str] = field(default_factory=list)
+	gaps: list[str] = field(default_factory=list)
+	open_questions: list[str] = field(default_factory=list)
+	verdict: str = "needs_refinement"  # "sufficient" | "needs_refinement"
+	confidence: float = 0.0
+	strategy_text: str = ""
+	proposed_objective: str = ""  # only used in chaining mode
+
+
+@dataclass
+class DeliberationResult:
+	"""Summary of a deliberation loop (critic/planner rounds)."""
+
+	rounds_taken: int = 0
+	final_verdict: str = ""
+	strategy: str = ""
+	cost_usd: float = 0.0
+
+
 # -- Strategic context models --
 
 
