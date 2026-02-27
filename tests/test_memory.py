@@ -13,6 +13,7 @@ from mission_control.memory import (
 	CONTEXT_BUDGET,
 	MemoryManager,
 	_format_session_history,
+	build_file_previews,
 	compress_history,
 	extract_scope_tokens,
 	format_context_items,
@@ -1066,3 +1067,75 @@ def test_no_semantic_memories_no_section(db: Database) -> None:
 
 	result = build_planner_context(db, "m1")
 	assert "## Learned Rules" not in result
+
+
+# -- build_file_previews --
+
+
+class TestBuildFilePreviews:
+	def test_returns_content_for_existing_files(self, tmp_path):
+		(tmp_path / "src").mkdir()
+		(tmp_path / "src" / "foo.py").write_text("def hello():\n\treturn 42\n")
+		result = build_file_previews("src/foo.py", tmp_path, budget=3000)
+		assert "### File Previews" in result
+		assert "src/foo.py" in result
+		assert "def hello():" in result
+
+	def test_returns_empty_for_missing_files(self, tmp_path):
+		result = build_file_previews("nonexistent.py", tmp_path, budget=3000)
+		assert result == ""
+
+	def test_respects_budget(self, tmp_path):
+		(tmp_path / "big.py").write_text("x = 1\n" * 200)
+		result = build_file_previews("big.py", tmp_path, budget=100)
+		assert len(result) <= 200  # generous bound for header + truncation overhead
+
+	def test_multiple_files(self, tmp_path):
+		(tmp_path / "a.py").write_text("aaa\n")
+		(tmp_path / "b.py").write_text("bbb\n")
+		result = build_file_previews("a.py,b.py", tmp_path, budget=3000)
+		assert "a.py" in result
+		assert "b.py" in result
+
+	def test_skips_missing_reads_existing(self, tmp_path):
+		(tmp_path / "exists.py").write_text("found\n")
+		result = build_file_previews("missing.py,exists.py", tmp_path, budget=3000)
+		assert "exists.py" in result
+		assert "found" in result
+		assert "missing.py" not in result
+
+	def test_empty_hint_returns_empty(self, tmp_path):
+		result = build_file_previews("", tmp_path, budget=3000)
+		assert result == ""
+
+	def test_zero_budget_returns_empty(self, tmp_path):
+		(tmp_path / "foo.py").write_text("content\n")
+		result = build_file_previews("foo.py", tmp_path, budget=0)
+		assert result == ""
+
+	def test_max_lines_capped(self, tmp_path):
+		(tmp_path / "long.py").write_text("line\n" * 100)
+		result = build_file_previews("long.py", tmp_path, budget=5000, max_lines=10)
+		assert result.count("line") == 10
+
+
+class TestMissionWorkerFilePreviewsIntegration:
+	def test_includes_previews_when_files_exist(self, config, tmp_path):
+		(tmp_path / "src").mkdir()
+		(tmp_path / "src" / "worker.py").write_text("class Worker:\n\tpass\n")
+		unit = WorkUnit(files_hint="src/worker.py", title="update worker")
+		result = load_context_for_mission_worker(unit, config)
+		assert "### File Previews" in result
+		assert "class Worker:" in result
+
+	def test_no_previews_when_no_files_hint(self, config, tmp_path):
+		(tmp_path / "CLAUDE.md").write_text("# Docs")
+		unit = WorkUnit(title="task")
+		result = load_context_for_mission_worker(unit, config)
+		assert "### File Previews" not in result
+
+	def test_no_previews_when_files_missing(self, config, tmp_path):
+		(tmp_path / "CLAUDE.md").write_text("# Docs")
+		unit = WorkUnit(files_hint="nonexistent.py", title="task")
+		result = load_context_for_mission_worker(unit, config)
+		assert "### File Previews" not in result
