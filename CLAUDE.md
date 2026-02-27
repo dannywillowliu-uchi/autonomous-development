@@ -25,9 +25,8 @@ Before ANY commit, run:
 
 ### Mission Mode (Continuous) -- the primary execution mode
 - `continuous_controller.py` -- Event-driven loop: dispatch + completion processor via asyncio.Queue
-- `deliberative_planner.py` -- Dual-agent deliberation: critic researches/reviews, planner decomposes/refines, iterates until solid
-- `critic_agent.py` -- Critic subprocess: research, plan review, and chaining objective proposal via CRITIC_RESULT marker
-- `planner_agent.py` -- Wraps RecursivePlanner with critic-enriched context (findings, risks, gaps)
+- `deliberative_planner.py` -- Ambitious planner + supplementary critic: planner proposes (with web search + project context), critic does feasibility review, iterates until approved
+- `critic_agent.py` -- Supplementary critic: feasibility review of proposed plans, chaining objective proposal via CRITIC_RESULT marker
 - `context_gathering.py` -- Shared context functions: backlog, git log, past missions, strategic context, episodic memory
 - `continuous_planner.py` -- Flat impact-focused planner wrapper around RecursivePlanner (fallback when deliberation disabled)
 - `recursive_planner.py` -- Flat LLM-based planner: single-call decomposition into work units via <!-- PLAN --> block
@@ -51,8 +50,8 @@ Before ANY commit, run:
 
 ### Execution Flow
 1. Controller creates mission, initializes backend + green branch + deliberative planner
-2. Deliberation: critic researches (codebase, domain, prior art) -> planner decomposes -> critic reviews -> planner refines (up to N rounds) -> writes MISSION_STRATEGY.md
-3. Orchestration loop: deliberate -> execute -> process, repeat (batch signals feed next critic pass)
+2. Deliberation: planner proposes ambitious plan (with web search + project context) -> critic checks feasibility -> planner refines if needed (up to N rounds)
+3. Orchestration loop: deliberate -> execute -> process, repeat (batch signals feed next planner pass)
 4. Workers run as Claude Code subprocesses with MCP access, emit MC_RESULT with handoff data
 5. Completion processor: merge to mc/green, ingest handoff, update MISSION_STATE.md (fixed-size summary)
 6. Batch analysis: heuristic pattern detection (file hotspots, failure clusters, stalled areas)

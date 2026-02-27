@@ -1,4 +1,4 @@
-"""Tests for DeliberativePlanner -- dual-agent deliberation loop."""
+"""Tests for DeliberativePlanner -- ambitious planner + supplementary critic."""
 
 from __future__ import annotations
 
@@ -38,13 +38,13 @@ def _mission() -> Mission:
 
 def _sufficient_finding(**kwargs) -> CriticFinding:
 	defaults = {
-		"findings": ["codebase uses Flask"],
-		"risks": ["tight coupling"],
+		"findings": ["plan looks good"],
+		"risks": [],
 		"gaps": [],
 		"open_questions": [],
 		"verdict": "sufficient",
 		"confidence": 0.9,
-		"strategy_text": "Use JWT with Flask",
+		"strategy_text": "",
 	}
 	defaults.update(kwargs)
 	return CriticFinding(**defaults)
@@ -58,7 +58,7 @@ def _refinement_finding(**kwargs) -> CriticFinding:
 		"open_questions": [],
 		"verdict": "needs_refinement",
 		"confidence": 0.5,
-		"strategy_text": "Need finer decomposition",
+		"strategy_text": "",
 	}
 	defaults.update(kwargs)
 	return CriticFinding(**defaults)
@@ -75,24 +75,32 @@ def _mock_units(count: int = 2) -> list[WorkUnit]:
 	]
 
 
+def _mock_plan_round(units):
+	"""Create an AsyncMock for plan_round returning given units."""
+	mock_plan = Plan(id="p1", objective="test")
+	mock_plan.status = "active"
+	mock_plan.total_units = len(units)
+
+	async def side_effect(**kwargs):
+		return mock_plan, list(units)
+	return side_effect
+
+
 class TestDeliberationLoop:
 	@pytest.mark.asyncio
 	async def test_single_round_sufficient(self, tmp_path: Path) -> None:
-		"""Critic approves on first review -> 2 total rounds."""
+		"""Planner proposes -> critic approves -> done in 1 round."""
 		db = Database(":memory:")
 		db.insert_mission(_mission())
 		planner = DeliberativePlanner(_config(tmp_path), db)
 
-		mock_plan = Plan(id="p1", objective="test")
 		units = _mock_units(2)
 
-		# Round 1: research -> decompose
-		# Round 2: review -> sufficient (no refine needed)
 		with (
 			patch.object(
-				planner._critic, "research",
+				planner._planner, "plan_round",
 				new_callable=AsyncMock,
-				return_value=_refinement_finding(),
+				side_effect=_mock_plan_round(units),
 			),
 			patch.object(
 				planner._critic, "review_plan",
@@ -100,12 +108,7 @@ class TestDeliberationLoop:
 				return_value=_sufficient_finding(),
 			),
 			patch.object(
-				planner._planner, "decompose",
-				new_callable=AsyncMock,
-				return_value=(mock_plan, units),
-			),
-			patch.object(
-				planner._critic, "gather_context_async",
+				planner, "_gather_project_context",
 				new_callable=AsyncMock,
 				return_value="context",
 			),
@@ -120,7 +123,7 @@ class TestDeliberationLoop:
 
 	@pytest.mark.asyncio
 	async def test_refinement_loop(self, tmp_path: Path) -> None:
-		"""Critic rejects first plan, approves second -> 3 rounds."""
+		"""Critic rejects first plan, approves second -> 2 rounds."""
 		db = Database(":memory:")
 		db.insert_mission(_mission())
 		planner = DeliberativePlanner(_config(tmp_path), db)
@@ -129,9 +132,12 @@ class TestDeliberationLoop:
 		refined_units = _mock_units(3)
 		mock_plan = Plan(id="p1", objective="test")
 
-		# Round 1: research (returns needs_refinement finding)
-		# Round 2: review (needs_refinement) -> refine
-		# Round 3: review (sufficient) -> done
+		# Round 1: planner proposes -> critic rejects
+		# Round 2: planner refines -> critic approves
+		plan_results = [
+			(mock_plan, initial_units),
+			(mock_plan, refined_units),
+		]
 		review_results = [
 			_refinement_finding(),
 			_sufficient_finding(),
@@ -139,9 +145,9 @@ class TestDeliberationLoop:
 
 		with (
 			patch.object(
-				planner._critic, "research",
+				planner._planner, "plan_round",
 				new_callable=AsyncMock,
-				return_value=_refinement_finding(),
+				side_effect=plan_results,
 			),
 			patch.object(
 				planner._critic, "review_plan",
@@ -149,17 +155,7 @@ class TestDeliberationLoop:
 				side_effect=review_results,
 			),
 			patch.object(
-				planner._planner, "decompose",
-				new_callable=AsyncMock,
-				return_value=(mock_plan, initial_units),
-			),
-			patch.object(
-				planner._planner, "refine",
-				new_callable=AsyncMock,
-				return_value=(mock_plan, refined_units),
-			),
-			patch.object(
-				planner._critic, "gather_context_async",
+				planner, "_gather_project_context",
 				new_callable=AsyncMock,
 				return_value="context",
 			),
@@ -185,9 +181,9 @@ class TestDeliberationLoop:
 
 		with (
 			patch.object(
-				planner._critic, "research",
+				planner._planner, "plan_round",
 				new_callable=AsyncMock,
-				return_value=_refinement_finding(),
+				return_value=(mock_plan, units),
 			),
 			patch.object(
 				planner._critic, "review_plan",
@@ -195,17 +191,7 @@ class TestDeliberationLoop:
 				return_value=_refinement_finding(),
 			),
 			patch.object(
-				planner._planner, "decompose",
-				new_callable=AsyncMock,
-				return_value=(mock_plan, units),
-			),
-			patch.object(
-				planner._planner, "refine",
-				new_callable=AsyncMock,
-				return_value=(mock_plan, units),
-			),
-			patch.object(
-				planner._critic, "gather_context_async",
+				planner, "_gather_project_context",
 				new_callable=AsyncMock,
 				return_value="context",
 			),
@@ -228,21 +214,16 @@ class TestDeliberationLoop:
 
 		with (
 			patch.object(
-				planner._critic, "research",
+				planner._planner, "plan_round",
 				new_callable=AsyncMock,
-				return_value=_sufficient_finding(),
+				return_value=(mock_plan, []),
 			),
 			patch.object(
 				planner._critic, "review_plan",
 				new_callable=AsyncMock,
 			) as mock_review,
 			patch.object(
-				planner._planner, "decompose",
-				new_callable=AsyncMock,
-				return_value=(mock_plan, []),
-			),
-			patch.object(
-				planner._critic, "gather_context_async",
+				planner, "_gather_project_context",
 				new_callable=AsyncMock,
 				return_value="context",
 			),
@@ -266,9 +247,9 @@ class TestDeliberationLoop:
 
 		with (
 			patch.object(
-				planner._critic, "research",
+				planner._planner, "plan_round",
 				new_callable=AsyncMock,
-				return_value=_sufficient_finding(),
+				return_value=(mock_plan, units),
 			),
 			patch.object(
 				planner._critic, "review_plan",
@@ -276,12 +257,7 @@ class TestDeliberationLoop:
 				return_value=_sufficient_finding(),
 			),
 			patch.object(
-				planner._planner, "decompose",
-				new_callable=AsyncMock,
-				return_value=(mock_plan, units),
-			),
-			patch.object(
-				planner._critic, "gather_context_async",
+				planner, "_gather_project_context",
 				new_callable=AsyncMock,
 				return_value="context",
 			),
@@ -292,6 +268,54 @@ class TestDeliberationLoop:
 
 		assert len(result_units) == 2
 		assert epoch.units_planned == 5  # planned count before cap
+
+	@pytest.mark.asyncio
+	async def test_planner_leads_not_critic(self, tmp_path: Path) -> None:
+		"""Planner is called first (not critic.research). Critic only reviews."""
+		db = Database(":memory:")
+		db.insert_mission(_mission())
+		planner = DeliberativePlanner(_config(tmp_path), db)
+
+		units = _mock_units(1)
+		mock_plan = Plan(id="p1", objective="test")
+
+		call_order: list[str] = []
+
+		async def track_plan_round(**kwargs):
+			call_order.append("planner")
+			return mock_plan, units
+
+		async def track_review(*args, **kwargs):
+			call_order.append("critic_review")
+			return _sufficient_finding()
+
+		with (
+			patch.object(
+				planner._planner, "plan_round",
+				new_callable=AsyncMock,
+				side_effect=track_plan_round,
+			),
+			patch.object(
+				planner._critic, "review_plan",
+				new_callable=AsyncMock,
+				side_effect=track_review,
+			),
+			patch.object(
+				planner._critic, "research",
+				new_callable=AsyncMock,
+			) as mock_research,
+			patch.object(
+				planner, "_gather_project_context",
+				new_callable=AsyncMock,
+				return_value="context",
+			),
+		):
+			await planner.get_next_units(_mission())
+
+		# Planner must be called before critic review
+		assert call_order == ["planner", "critic_review"]
+		# critic.research should NOT be called
+		mock_research.assert_not_called()
 
 
 class TestWriteStrategy:
@@ -371,10 +395,21 @@ class TestEpochCounting:
 		units = _mock_units(1)
 
 		with (
-			patch.object(planner._critic, "research", new_callable=AsyncMock, return_value=_sufficient_finding()),
-			patch.object(planner._critic, "review_plan", new_callable=AsyncMock, return_value=_sufficient_finding()),
-			patch.object(planner._planner, "decompose", new_callable=AsyncMock, return_value=(mock_plan, units)),
-			patch.object(planner._critic, "gather_context_async", new_callable=AsyncMock, return_value="ctx"),
+			patch.object(
+				planner._planner, "plan_round",
+				new_callable=AsyncMock,
+				return_value=(mock_plan, units),
+			),
+			patch.object(
+				planner._critic, "review_plan",
+				new_callable=AsyncMock,
+				return_value=_sufficient_finding(),
+			),
+			patch.object(
+				planner, "_gather_project_context",
+				new_callable=AsyncMock,
+				return_value="ctx",
+			),
 		):
 			_, _, epoch1 = await planner.get_next_units(_mission())
 			_, _, epoch2 = await planner.get_next_units(_mission())

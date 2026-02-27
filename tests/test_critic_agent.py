@@ -165,50 +165,17 @@ class TestCriticGatherContext:
 
 class TestCriticResearch:
 	@pytest.mark.asyncio
-	async def test_research_success(self, tmp_path: Path) -> None:
+	async def test_research_returns_stub(self, tmp_path: Path) -> None:
+		"""research() is now a stub -- returns minimal finding, no LLM call."""
 		db = MagicMock()
 		agent = CriticAgent(_config(tmp_path), db)
-		fake_output = json.dumps({
-			"findings": ["uses Flask"],
-			"risks": ["tight coupling"],
-			"gaps": [],
-			"open_questions": ["which auth?"],
-			"verdict": "needs_refinement",
-			"confidence": 0.7,
-			"strategy_text": "Use JWT",
-		})
-		llm_output = f"Analysis.\n{CRITIC_RESULT_MARKER}{fake_output}"
 
-		with patch.object(agent, "_invoke_llm", new_callable=AsyncMock, return_value=llm_output):
+		with patch.object(agent, "_invoke_llm", new_callable=AsyncMock) as mock_llm:
 			result = await agent.research("Build API", "context here")
 
-		assert result.findings == ["uses Flask"]
-		assert result.risks == ["tight coupling"]
-		assert "JWT" in result.strategy_text
-
-	@pytest.mark.asyncio
-	async def test_research_with_batch_signals(self, tmp_path: Path) -> None:
-		db = MagicMock()
-		agent = CriticAgent(_config(tmp_path), db)
-		fake_output = f'{CRITIC_RESULT_MARKER}{json.dumps({"findings": ["f1"], "verdict": "sufficient"})}'
-
-		with patch.object(agent, "_invoke_llm", new_callable=AsyncMock, return_value=fake_output) as mock_llm:
-			await agent.research("Build API", "context", _signals())
-		# Verify batch signals are in the prompt
-		prompt = mock_llm.call_args[0][0]
-		assert "Execution Signals" in prompt
-		assert "src/auth.py" in prompt
-
-	@pytest.mark.asyncio
-	async def test_research_llm_failure(self, tmp_path: Path) -> None:
-		db = MagicMock()
-		agent = CriticAgent(_config(tmp_path), db)
-
-		with patch.object(agent, "_invoke_llm", new_callable=AsyncMock, return_value=""):
-			result = await agent.research("Build API", "context")
-
-		assert result.findings == []
+		mock_llm.assert_not_called()
 		assert result.verdict == "needs_refinement"
+		assert result.confidence == 0.5
 
 
 class TestCriticReviewPlan:
@@ -246,6 +213,26 @@ class TestCriticReviewPlan:
 
 		assert result.verdict == "needs_refinement"
 		assert "too coarse-grained" in result.gaps
+
+	@pytest.mark.asyncio
+	async def test_review_prompt_is_feasibility_focused(self, tmp_path: Path) -> None:
+		"""review_plan prompt uses feasibility framing, not strategic."""
+		db = MagicMock()
+		agent = CriticAgent(_config(tmp_path), db)
+		from mission_control.models import WorkUnit
+		units = [WorkUnit(title="Task", description="x", files_hint="a.py", priority=1)]
+		prev = CriticFinding()
+		fake_output = f'{CRITIC_RESULT_MARKER}{json.dumps({"verdict": "sufficient"})}'
+
+		with patch.object(
+			agent, "_invoke_llm", new_callable=AsyncMock, return_value=fake_output,
+		) as mock_llm:
+			await agent.review_plan("Build API", units, prev)
+
+		prompt = mock_llm.call_args[0][0]
+		assert "feasibility reviewer" in prompt
+		assert "NOT to set strategy" in prompt
+		assert "Do NOT propose new strategic direction" in prompt
 
 
 class TestCriticProposeNext:

@@ -895,6 +895,57 @@ class TestCausalContextAndSnapshot:
 		assert "## Project Structure" in prompt
 
 
+	@pytest.mark.asyncio
+	async def test_ambitious_prompt_with_web_search(self) -> None:
+		"""Planner prompt includes ambitious framing and WebSearch instruction."""
+		planner = _planner()
+		planner.config.target.name = "my-project"
+
+		response = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch("mission_control.recursive_planner.asyncio.create_subprocess_exec", return_value=mock_proc):
+			await planner._invoke_planner_llm("Build auth system")
+
+		prompt = mock_proc.communicate.call_args[1]["input"].decode()
+		assert "strategic planner for my-project" in prompt
+		assert "most impactful work" in prompt
+		assert "WebSearch" in prompt
+		assert "WebFetch" in prompt
+		assert "Think ambitiously" in prompt
+
+	@pytest.mark.asyncio
+	async def test_allowed_tools_passed_to_subprocess(self) -> None:
+		"""Planner subprocess command includes --allowedTools flags."""
+		planner = _planner()
+
+		response = json.dumps({
+			"type": "leaves",
+			"units": [{"title": "Task", "description": "x", "files_hint": "", "priority": 1}],
+		})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		) as mock_exec:
+			await planner._run_planner_subprocess("test prompt")
+
+		call_args = list(mock_exec.call_args[0])
+		assert "--allowedTools" in call_args
+		tool_indices = [i for i, a in enumerate(call_args) if a == "--allowedTools"]
+		tools_passed = [call_args[i + 1] for i in tool_indices]
+		assert "WebSearch" in tools_passed
+		assert "WebFetch" in tools_passed
+
+
 # -- Per-component model usage tests --
 
 

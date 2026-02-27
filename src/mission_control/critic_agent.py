@@ -94,46 +94,12 @@ class CriticAgent:
 		context: str,
 		batch_signals: BatchSignals | None = None,
 	) -> CriticFinding:
-		"""First-pass research: analyze codebase, domain, and prior art.
+		"""Legacy research stub -- planner now leads research via web search.
 
-		Runs with MCP tools in the target directory for codebase access.
+		Returns a minimal finding so callers that still reference this method
+		continue to work without errors.
 		"""
-		signals_section = ""
-		if batch_signals is not None:
-			signals_section = "\n" + _build_batch_signals_text(batch_signals) + "\n"
-
-		prompt = f"""You are a critic agent analyzing a project before planning begins.
-
-## Objective
-{objective}
-
-## Project Context
-{context}
-{signals_section}
-## Your Task
-
-1. Analyze the codebase to understand current architecture and patterns
-2. Research the problem domain -- how is this type of work typically approached?
-3. Check prior art: git history, BACKLOG.md, past missions for related attempts
-4. Identify risks, gaps in understanding, and open questions
-5. Produce a strategic recommendation for how to approach this objective
-
-## Output Format
-
-Reason in prose first, then emit your structured findings:
-
-CRITIC_RESULT:{{"findings": ["key finding 1", ...],\
- "risks": ["risk 1", ...],\
- "gaps": ["knowledge gap 1", ...],\
- "open_questions": ["question 1", ...],\
- "verdict": "needs_refinement",\
- "confidence": 0.7,\
- "strategy_text": "Recommended approach: ..."}}
-
-IMPORTANT: The CRITIC_RESULT line must contain valid JSON."""
-
-		output = await self._invoke_llm(prompt, "critic-research", use_mcp=True)
-		return _parse_critic_output(output)
+		return CriticFinding(verdict="needs_refinement", confidence=0.5)
 
 	async def review_plan(
 		self,
@@ -142,56 +108,49 @@ IMPORTANT: The CRITIC_RESULT line must contain valid JSON."""
 		prev_finding: CriticFinding,
 		batch_signals: BatchSignals | None = None,
 	) -> CriticFinding:
-		"""Review proposed work units and judge whether they're sufficient."""
+		"""Feasibility review: check whether proposed units are achievable."""
 		units_text = "\n".join(
 			f"  {i+1}. [{u.priority}] {u.title}: {u.description[:200]} "
 			f"(files: {u.files_hint or 'unspecified'})"
 			for i, u in enumerate(units)
 		)
 
-		prev_findings_text = "\n".join(f"  - {f}" for f in prev_finding.findings) or "  (none)"
-		prev_risks_text = "\n".join(f"  - {r}" for r in prev_finding.risks) or "  (none)"
-		prev_gaps_text = "\n".join(f"  - {g}" for g in prev_finding.gaps) or "  (none)"
-
 		signals_section = ""
 		if batch_signals is not None:
 			signals_section = "\n" + _build_batch_signals_text(batch_signals) + "\n"
 
-		prompt = f"""You are a critic agent reviewing a proposed plan.
+		prompt = f"""You are a feasibility reviewer for a development plan. \
+Your job is NOT to set strategy -- the planner has already done that. \
+Your job is to check whether the proposed work units are achievable.
 
 ## Objective
 {objective}
-
-## Previous Findings
-{prev_findings_text}
-
-## Previous Risks
-{prev_risks_text}
-
-## Previous Gaps
-{prev_gaps_text}
 {signals_section}
 ## Proposed Work Units
 {units_text}
 
-## Your Task
+## Review Criteria
 
-1. Do these units address the objective completely?
-2. Are there gaps -- important work that's missing?
-3. Are there risks the plan doesn't mitigate?
-4. Is the file isolation sufficient to avoid merge conflicts?
-5. Are dependencies between units correctly ordered?
+For each unit, check:
+1. Can one worker complete this in a single session?
+2. Are file boundaries clean (no overlap between sibling units)?
+3. Are the acceptance criteria testable?
+4. Is the scope realistic given the codebase?
 
-Set verdict to "sufficient" if the plan is ready for execution.
-Set verdict to "needs_refinement" if it needs improvement.
+## Verdict
+
+If all units pass, set verdict to "sufficient".
+If units need adjustment, set verdict to "needs_refinement" with specific, actionable feedback.
+
+Do NOT propose new strategic direction. Do NOT add units. Only refine what exists.
 
 CRITIC_RESULT:{{"findings": ["..."],\
  "risks": ["..."],\
  "gaps": ["..."],\
- "open_questions": ["..."],\
+ "open_questions": [],\
  "verdict": "sufficient|needs_refinement",\
  "confidence": 0.8,\
- "strategy_text": "..."}}"""
+ "strategy_text": ""}}"""
 
 		output = await self._invoke_llm(prompt, "critic-review", use_mcp=False)
 		return _parse_critic_output(output)

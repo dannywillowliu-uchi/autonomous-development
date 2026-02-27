@@ -218,14 +218,25 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 		if self._project_snapshot:
 			snapshot_section = f"\n## Project Structure\n{self._project_snapshot}\n"
 
-		prompt = f"""You are a planner decomposing work for parallel execution.
+		target_name = self.config.target.name or "this project"
+
+		prompt = f"""You are a strategic planner for {target_name}. \
+Your job is to propose the most impactful work possible.
 
 ## Objective
 {objective}
+
+## Tools Available
+You have WebSearch and WebFetch tools. Use them to:
+- Research external tools, frameworks, and libraries that could help
+- Look up best practices and state-of-the-art approaches
+- Find Claude Code plugins, MCP servers, or agentic tooling
+- Check documentation for APIs or libraries relevant to the objective
 {feedback_section}{locked_section}{causal_section}{snapshot_section}
-## Heuristics
-- Produce a flat list of concrete, independently-completable tasks
-- Each task should be completable by one worker in one session
+## Planning Philosophy
+- Think ambitiously. The best plan integrates external capabilities, not just internal fixes.
+- If the objective mentions tooling or capability, research what exists before proposing to build from scratch.
+- Each unit should be completable by one worker in one session.
 - NEVER let sibling tasks touch the same file. Merge them or add depends_on_indices.
 - Read MISSION_STATE.md in the project root to see what's already been completed.
 - If Past Round Performance lists already-modified files, do NOT target those files again.
@@ -234,7 +245,7 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
   <!-- PLAN -->{{"type":"leaves","units":[]}}<!-- /PLAN -->
 
 ## Output Format
-Reason in prose first, then emit your plan inside a <!-- PLAN --> block.
+Reason in prose first (include your research findings), then emit your plan inside a <!-- PLAN --> block.
 
 <!-- PLAN -->{{"type":"leaves","units":[
   {{"title":"...","description":"...","files_hint":"...","priority":1,
@@ -286,7 +297,8 @@ IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must cont
 
 		log.info("Invoking planner LLM for objective: %s", prompt[:80])
 
-		cmd = build_claude_cmd(self.config, model=model, budget=budget)
+		allowed_tools = self.config.planner.allowed_tools or None
+		cmd = build_claude_cmd(self.config, model=model, budget=budget, allowed_tools=allowed_tools)
 		try:
 			proc = await asyncio.create_subprocess_exec(
 				*cmd,
