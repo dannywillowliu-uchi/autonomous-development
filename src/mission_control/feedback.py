@@ -13,14 +13,35 @@ log = logging.getLogger(__name__)
 
 
 def _extract_keywords(text: str) -> list[str]:
-	"""Extract meaningful keywords from text for experience search."""
+	"""Extract meaningful keywords from text for experience search.
+
+	Preserves full file paths (e.g. 'src/foo/bar.py') as whole keywords
+	so that LIKE %keyword% queries can match on paths stored in DB columns.
+	"""
 	stop_words = {
 		"the", "and", "for", "that", "this", "with", "from", "are", "was",
 		"will", "have", "has", "been", "not", "but", "can", "all", "its",
 		"add", "fix", "update", "implement", "create", "make", "use",
 	}
+	# Extract file paths first (word chars, slashes, dots, hyphens with a file extension)
+	paths = re.findall(r"[\w./\-]+/[\w./\-]+\.\w+", text)
+
+	seen: set[str] = set()
+	result: list[str] = []
+	for p in paths:
+		key = p.lower()
+		if key not in seen:
+			seen.add(key)
+			result.append(p)
+
+	# Token-split for remaining keywords
 	words = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", text.lower())
-	return [w for w in words if len(w) > 2 and w not in stop_words]
+	for w in words:
+		if len(w) > 2 and w not in stop_words and w not in seen:
+			seen.add(w)
+			result.append(w)
+
+	return result
 
 
 def get_worker_context(
