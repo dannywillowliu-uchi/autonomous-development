@@ -8,50 +8,62 @@ Point it at a repo with an objective and a verification command. It plans, execu
 
 ```mermaid
 flowchart TD
-    subgraph Controller["Continuous Controller"]
+    subgraph Init["Mission Init"]
         direction TB
-        Start([Mission Start]) --> Plan
-        Plan["Recursive Planner\n(tree decomposition,\nacceptance criteria)"]
+        Start([Mission Start]) --> Research
+        Research["Research Phase\n(3 parallel agents:\ncodebase, domain, prior art)"]
+        Research --> Synth["Synthesis Agent\n-> MISSION_STRATEGY.md"]
+        Synth --> Loop
+    end
+
+    subgraph Controller["Orchestration Loop"]
+        direction TB
+        Loop["Stop Check\n(wall time, stall,\nempty plan)"]
+        Loop --> Reflect
+        Reflect["Batch Analysis\n+ Strategic Reflection\n(skip first iteration)"]
+        Reflect --> Plan
+        Plan["Recursive Planner\n(reads MISSION_STATE.md\n+ MISSION_STRATEGY.md)"]
         Plan --> Ambition{"Ambition\nGate"}
         Ambition -- "score < threshold" --> Plan
         Ambition -- "pass" --> Dispatch
     end
 
-    subgraph Workers["Parallel Workers"]
-        Dispatch["Dispatch to\nworker pool"] --> W1["Worker 1\n(architect/editor)"]
-        Dispatch --> W2["Worker 2\n(architect/editor)"]
-        Dispatch --> W3["Worker N\n(architect/editor)"]
-    end
-
-    subgraph Merge["Green Branch Manager"]
+    subgraph Execution["Layered Execution"]
         direction TB
-        W1 & W2 & W3 --> MQ["Merge Queue"]
-        MQ --> GitMerge["Git Merge\ninto mc/working"]
-        GitMerge --> PreMerge{"Pre-merge\nVerification\n(pytest, ruff, mypy)"}
-        PreMerge -- "fail" --> Rollback["git reset HEAD~1"]
-        Rollback --> MQ
-        PreMerge -- "pass" --> AC{"Acceptance\nCriteria\n(shell commands)"}
-        AC -- "fail" --> Rollback
-        AC -- "pass" --> Promote["Promote to\nmc/green"]
+        Dispatch["Dispatch\ntopological layer"] --> W1["Worker 1"]
+        Dispatch --> W2["Worker 2"]
+        Dispatch --> W3["Worker N"]
+        W1 & W2 & W3 --> Barrier["Layer barrier\n(all complete)"]
+        Barrier --> NextLayer{"More\nlayers?"}
+        NextLayer -- "yes" --> Dispatch
+        NextLayer -- "no" --> Process
     end
 
-    subgraph Quality["Quality Gates"]
+    subgraph Merge["Green Branch Merge"]
         direction TB
-        Promote --> Review{"Diff Review\n(haiku)"}
-        Review -- "skip if criteria passed" --> Feedback
-        Review -- "score < threshold" --> Retry["Retry unit\nwith feedback"]
-        Retry --> Dispatch
-        Review -- "pass" --> Feedback["Feedback Loop\n(grade, reflect,\nEMA budget)"]
+        Process["Process completions"] --> GitMerge["Merge to mc/green"]
+        GitMerge --> PreMerge{"Pre-merge\nverification?"}
+        PreMerge -- "fail" --> Fixup["ZFC fixup\n(N candidates)"]
+        Fixup --> GitMerge
+        PreMerge -- "pass / skip" --> Ingest["Ingest handoff\n+ update state"]
     end
 
-    Feedback --> EpochDone{"Epoch\ncomplete?"}
-    EpochDone -- "more units" --> Plan
-    EpochDone -- "all done" --> FinalVerify
+    subgraph Analysis["Reflection"]
+        direction TB
+        Ingest --> BA["Batch Analyzer\n(hotspots, failures,\nstalled areas)"]
+        BA --> SR["Strategic Reflection\n(LLM synthesis)"]
+        SR --> RevQ{"Strategy\nrevision?"}
+        RevQ -- "yes" --> Update["Update\nMISSION_STRATEGY.md"]
+        RevQ -- "no" --> State["Write fixed-size\nMISSION_STATE.md"]
+        Update --> State
+    end
+
+    State --> Loop
 
     subgraph Completion["Mission Completion"]
         direction TB
         FinalVerify["Final Verification\n(pytest on mc/green)"]
-        FinalVerify --> Evaluator{"Evaluator Agent\n(Claude w/ tools:\nruns app, checks\nendpoints, reads files)"}
+        FinalVerify --> Evaluator{"Evaluator Agent\n(runs app, checks\nendpoints, reads files)"}
         Evaluator -- "gaps found" --> ObjFail["objective_met = false"]
         Evaluator -- "pass" --> ObjMet["Objective Met"]
         ObjMet --> Strategist["Strategist proposes\nnext objective"]
@@ -61,24 +73,27 @@ flowchart TD
         ObjFail --> Plan
     end
 
-    style Controller fill:#1a1a2e,stroke:#e94560,color:#eee
-    style Workers fill:#1a1a2e,stroke:#0f3460,color:#eee
-    style Merge fill:#1a1a2e,stroke:#e94560,color:#eee
-    style Quality fill:#1a1a2e,stroke:#16213e,color:#eee
-    style Completion fill:#1a1a2e,stroke:#0f3460,color:#eee
+    Loop -- "stop condition" --> FinalVerify
+
+    style Init fill:#1a1a2e,stroke:#e94560,color:#eee
+    style Controller fill:#1a1a2e,stroke:#0f3460,color:#eee
+    style Execution fill:#1a1a2e,stroke:#e94560,color:#eee
+    style Merge fill:#1a1a2e,stroke:#16213e,color:#eee
+    style Analysis fill:#1a1a2e,stroke:#0f3460,color:#eee
+    style Completion fill:#1a1a2e,stroke:#e94560,color:#eee
 ```
 
-Each epoch:
-1. **Plan** -- Recursive planner decomposes the objective into a tree of work units with executable acceptance criteria (shell commands), dependency ordering, and specialist assignments
-2. **Ambition gate** -- Reject trivially scoped plans (configurable min score) and force replanning
-3. **Execute** -- Parallel Claude workers run in isolated workspace clones, optionally using architect/editor two-pass mode
-4. **Merge** -- Workers' branches queue into the merge queue and merge into `mc/working` via the green branch manager
-5. **Pre-merge verification** -- pytest/ruff/mypy run on the merged code before accepting. Failures roll back the merge with `git reset --hard HEAD~1`
-6. **Acceptance criteria** -- Shell commands from the planner (e.g. `pytest tests/test_auth.py -q`) run as a second gate. Failures roll back
-7. **Fixup** -- If merge conflicts occur, N candidate fixup agents run in parallel; the best-scoring candidate wins
-8. **Review gate** -- LLM diff review (haiku) scores each unit on alignment, approach, and tests. Skipped when acceptance criteria already passed
-9. **Evaluator agent** -- At mission end, a Claude subprocess with shell/file access actually runs the software, checks endpoints, and inspects output. Flips `objective_met` to false if gaps are found
-10. **Feedback** -- Record reflections, compute rewards, track costs via EMA budget tracking
+Each mission:
+1. **Research** -- Three parallel agents (codebase analyst, domain researcher, prior art reviewer) investigate the problem space with MCP tool access. A synthesis agent combines findings into `MISSION_STRATEGY.md`
+2. **Plan** -- Recursive planner reads `MISSION_STATE.md` and `MISSION_STRATEGY.md` from disk, decomposes the objective into work units with acceptance criteria, dependency ordering, and specialist assignments
+3. **Ambition gate** -- Reject trivially scoped plans (configurable min score) and force replanning
+4. **Layered execution** -- Work units execute in topological layers (parallel within layers, sequential across layers). Workers run as Claude Code subprocesses with MCP access
+5. **Green branch merge** -- Completed units merge directly to `mc/green`. Optional pre-merge verification (pytest/ruff/mypy) gates the merge; failures trigger ZFC fixup agents
+6. **Handoff ingestion** -- Workers emit structured `MC_RESULT` handoffs with files changed, concerns, discoveries. These feed the knowledge base and state tracking
+7. **Batch analysis** -- Heuristic pattern detection: file hotspots (files touched by 3+ units), failure clusters, stalled areas (2+ failed attempts), effort distribution, knowledge gaps
+8. **Strategic reflection** -- LLM synthesis of batch signals into patterns, tensions, and open questions. Can trigger strategy revision mid-mission
+9. **State update** -- Fixed-size `MISSION_STATE.md` (progress counts, active issues, strategy summary, patterns, files modified) replaces the old growing log
+10. **Evaluator agent** -- At mission end, a Claude subprocess with shell/file access runs the software, checks endpoints, and inspects output
 11. **Strategize** -- Strategist proposes follow-up objectives; `--chain` auto-starts the next mission
 
 ## Quick start
@@ -172,6 +187,16 @@ enabled = true
 tracks = ["feature", "quality", "security"]
 research_enabled = true
 
+[mcp]
+config_path = "~/.claude/settings.local.json"  # MCP JSON config file
+enabled = true                                  # Pass --mcp-config to all subprocesses
+
+[research]
+enabled = true               # Pre-planning research phase
+budget_per_agent_usd = 1.0   # Budget per research agent
+timeout = 300                # Seconds per research agent
+model = ""                   # Defaults to scheduler.model
+
 [models]
 planner = "opus"         # Model for planning calls
 reviewer = "sonnet"      # Model for diff review
@@ -213,118 +238,82 @@ service_name = "mission-control"
 ## Architecture
 
 ```
-src/mission_control/                    # 57 modules
-+-- __init__.py
-+-- __main__.py
-+-- cli.py                   # CLI entry point (16 commands)
-+-- config.py                # TOML config loader + validation
+src/mission_control/
++-- cli.py                   # CLI entry point
++-- config.py                # TOML config loader, build_claude_cmd(), MCPConfig
 +-- models.py                # Dataclasses (Mission, WorkUnit, Epoch, ...)
 +-- db.py                    # SQLite with WAL mode + migrations
-+-- continuous_controller.py # Main epoch loop with ambition/review gates
-+-- continuous_planner.py    # Adaptive planner with replan-on-stall
-+-- recursive_planner.py     # Tree decomposition of objectives
-+-- worker.py                # Worker prompt rendering + architect/editor mode
++-- # Core loop
++-- continuous_controller.py # Main loop: research -> plan -> execute -> reflect
++-- continuous_planner.py    # Adaptive planner wrapper around RecursivePlanner
++-- recursive_planner.py     # LLM-based tree decomposition with PLAN_RESULT marker
++-- research_phase.py        # Pre-planning parallel research + synthesis -> MISSION_STRATEGY.md
++-- batch_analyzer.py        # Heuristic pattern detection (hotspots, failures, stalled areas)
++-- strategic_reflection.py  # LLM synthesis of batch signals -> patterns, tensions, revision
++-- planner_context.py       # Minimal planner context + fixed-size MISSION_STATE.md writer
++-- # Workers
++-- worker.py                # Worker prompt rendering + handoff parsing
 +-- specialist.py            # Specialist worker template routing
-+-- grading.py               # Deterministic decomposition grading
++-- feedback.py              # Worker context from past experiences
++-- overlap.py               # File overlap detection + dependency injection
++-- # Merge pipeline
++-- green_branch.py          # mc/green branch lifecycle, merge, ZFC fixup
++-- # Quality + review
++-- diff_reviewer.py         # Fire-and-forget LLM diff review (scoring, no gating)
 +-- evaluator.py             # Round scoring (test/lint delta, completion, regression)
-+-- diff_reviewer.py         # LLM diff review (alignment/approach/tests scoring)
-+-- reviewer.py              # Review gating logic
-+-- feedback.py              # Reflections, rewards, experiences
-+-- green_branch.py          # Green branch pattern + N-of-M fixup selection
-+-- merge_queue.py           # Ordered merge queue for worker branches
-+-- ema.py                   # Exponential moving average budget tracking
-+-- memory.py                # Typed context store for workers
-+-- session.py               # Claude subprocess spawning + output parsing
-+-- strategist.py            # Follow-up objective proposal + mission chaining
++-- grading.py               # Deterministic decomposition grading
++-- # Strategy + discovery
++-- strategist.py            # Mission objective proposal, ambition scoring
 +-- auto_discovery.py        # Gap analysis -> research -> backlog pipeline
 +-- priority.py              # Backlog priority scoring + recalculation
 +-- backlog_manager.py       # Persistent backlog across missions
-+-- overlap.py               # File overlap detection + dependency injection
-+-- causal.py                # Causal attribution for outcome analysis
++-- # Infrastructure
++-- session.py               # Claude subprocess spawning + output parsing
++-- heartbeat.py             # Time-based progress monitor + Telegram alerts
++-- notifier.py              # Telegram notifications (mission events, conflicts)
++-- hitl.py                  # Human-in-the-loop approval gates (file + Telegram)
 +-- degradation.py           # Graceful degradation with circuit breakers
 +-- circuit_breaker.py       # Circuit breaker state machine
-+-- hitl.py                  # Human-in-the-loop approval gates (file + Telegram)
-+-- a2a.py                   # Agent-to-Agent protocol server
++-- ema.py                   # Exponential moving average budget tracking
++-- memory.py                # Typed context store for workers
++-- # External interfaces
 +-- mcp_server.py            # MCP server for external control
-+-- mcp_registry.py          # MCP tool registry
-+-- tracing.py               # OpenTelemetry tracing integration
-+-- tool_synthesis.py        # Dynamic tool generation for workers
-+-- prompt_evolution.py      # Prompt variant evolution + scoring
-+-- planner_context.py       # Mission state formatting for planner prompts
-+-- mission_report.py        # Post-mission JSON report generation
-+-- heartbeat.py             # Liveness monitoring + stale worker recovery
-+-- notifier.py              # Telegram notifications with batching + retry
-+-- event_stream.py          # SSE event stream for live dashboard
-+-- token_parser.py          # Token usage tracking + cost estimation
-+-- json_utils.py            # Robust JSON extraction from LLM output
-+-- state.py                 # Mission state formatting
-+-- launcher.py              # Subprocess launcher utilities
-+-- constants.py             # Shared constants
-+-- registry.py              # Multi-project registry
-+-- workspace.py             # Git clone pool management
++-- a2a.py                   # Agent-to-Agent protocol server
 +-- dashboard/
-|   +-- live.py              # FastAPI app for live web dashboard
-|   +-- live_ui.html         # Dashboard frontend (SSE + real-time updates)
+|   +-- live.py              # FastAPI + HTMX web dashboard
 |   +-- tui.py               # Terminal UI
-|   +-- provider.py          # Dashboard data provider
 +-- backends/
-|   +-- base.py              # WorkerBackend ABC
 |   +-- local.py             # Local subprocess backend with workspace pool
 |   +-- ssh.py               # Remote SSH backend
-|   +-- container.py         # Container-based worker backend
 ```
 
 ## Key concepts
 
-**Green branch pattern**: Workers merge into `mc/working` via a merge queue. A pre-merge verification gate (pytest/ruff/mypy) runs immediately after merge; failures roll back with `git reset --hard HEAD~1`. Executable acceptance criteria (shell commands from the planner) run as a second gate. Only code that passes both promotes (ff-merge) to `mc/green`.
+**Research phase**: Before the first planning iteration, three parallel agents (codebase analyst, domain researcher, prior art reviewer) investigate the problem with MCP tool access (web search, library docs). A synthesis agent combines findings into `MISSION_STRATEGY.md`, which the planner reads from disk. Knowledge items are stored in the DB for cross-mission learning.
 
-**N-of-M fixup selection**: When verification fails, N=3 parallel fixup agents run with different approach hints. Each produces a candidate patch. The system selects the candidate with the best test delta, inspired by tournament-style patch selection from Agentless (UIUC).
+**Batch analysis**: After each batch of work units completes, heuristic pattern detection runs on the DB: file hotspots (files touched by 3+ units), failure clusters (recurring error patterns), stalled areas (2+ failed attempts with no success), effort distribution, retry depth, and knowledge gaps (areas where implementation outpaces research coverage).
 
-**Architect/editor mode**: Workers optionally operate in two passes. Pass 1 (architect) analyzes the codebase and describes needed changes without editing. Pass 2 (editor) implements the architect's plan. Inspired by Aider's architect/editor pattern.
+**Strategic reflection**: An LLM synthesizes batch signals into actionable patterns, tensions between strategy and reality, and open questions. When tensions are severe enough, it can trigger a mid-mission strategy revision that rewrites `MISSION_STRATEGY.md`.
 
-**Ambition gate**: The controller scores planned work units on ambition (1-10). Plans below the threshold are rejected and the planner is forced to replan with feedback, preventing trivially scoped busywork.
+**Fixed-size MISSION_STATE.md**: Progress summary that stays constant size regardless of mission length. Contains progress counts, active issues (last 3 failures), strategy summary, patterns from reflection, and files modified grouped by directory. Replaces the old growing log that bloated planner context.
 
-**Review gate**: After each unit completes, an LLM diff review scores it on alignment, approach quality, and test meaningfulness. Units below the threshold are retried with review feedback injected.
+**MCP access**: All Claude subprocesses (workers, planner, reviewer, strategist, research agents) receive `--mcp-config` when configured, giving them access to external tools (web search, library docs via context7, etc.). Controlled by `[mcp]` in TOML config.
 
-**Evaluator agent**: At mission end, a Claude subprocess with full tool access (shell, file reads) actually runs the software: executes tests, checks HTTP endpoints, inspects files. Replaces pure LLM opinion with environment-grounded verification. Disabled by default (opt in via `[evaluator] enabled = true`).
+**Green branch pattern**: Workers merge directly to `mc/green`. Optional pre-merge verification (pytest/ruff/mypy) gates the merge; failures trigger ZFC fixup agents that run in parallel and select the best candidate.
 
-**Speculation branching**: High-uncertainty units fork into N parallel branches with different approach hints. A selection gate picks the winner based on test/lint scores, allowing the system to explore multiple strategies simultaneously.
+**Ambition gate**: The controller scores planned work units on ambition (1-10). Plans below the threshold are rejected and the planner is forced to replan, preventing trivially scoped busywork.
 
-**Graceful degradation**: Circuit breakers track failure rates per component. When tripped, the system falls back to simpler strategies (e.g., fewer workers, no architect pass) instead of failing outright.
+**Evaluator agent**: At mission end, a Claude subprocess with full tool access (shell, file reads) actually runs the software: executes tests, checks HTTP endpoints, inspects files. Disabled by default.
 
-**Human-in-the-loop (HITL)**: Configurable approval gates before push/merge operations. Supports file-based polling and Telegram-based approval prompts with configurable timeout.
+**Graceful degradation**: Circuit breakers track failure rates per component. When tripped, the system falls back to simpler strategies instead of failing outright.
 
-**Agent-to-Agent (A2A)**: Protocol server for inter-agent communication, allowing external agents to submit work or query mission state.
+**Human-in-the-loop (HITL)**: Configurable approval gates before push/merge operations. Supports file-based polling and Telegram-based approval prompts.
 
-**MCP server**: Model Context Protocol server for external tool integration, exposing mission control operations as MCP tools.
+**Adaptive planning**: The recursive planner decomposes objectives into a tree of work units with acceptance criteria and dependencies. File overlap detection automatically adds dependency edges. The planner reads `MISSION_STATE.md` and `MISSION_STRATEGY.md` from disk rather than receiving bloated context strings.
 
-**Episodic memory**: Stores and retrieves past worker experiences for context injection into subsequent worker prompts, enabling learning from prior attempts.
+**Mission chaining**: With `--chain`, after a mission completes, the strategist proposes the next objective and a new mission starts automatically.
 
-**Prompt evolution**: Variant tracking and scoring for prompt optimization. Maintains a population of prompt variants, scores them on worker outcomes, and evolves toward higher-performing prompts.
-
-**Tool synthesis**: Dynamic tool generation for specialized worker tasks, creating purpose-built tools from templates at runtime.
-
-**Specialist templates**: Role-specific worker prompts (e.g., test writer, refactorer, security auditor) that shape worker behavior for different task types.
-
-**Causal attribution**: Traces outcomes back to specific planning and execution decisions, feeding attribution signals into the feedback loop for improved future planning.
-
-**Evaluator**: Round-level scoring combining test delta, lint delta, completion rate, and regression detection. Drives the stall detector and adaptive replanning.
-
-**EMA budget tracking**: Per-cycle costs are tracked with exponential moving average (alpha=0.3) with outlier dampening and conservatism factor. Adaptive cooldown increases when costs exceed budget.
-
-**Typed context store**: Workers produce structured context items (architecture notes, gotchas, patterns) stored in SQLite with scope-based filtering. Relevant items are selectively injected into subsequent worker prompts.
-
-**Adaptive planning**: The recursive planner decomposes objectives into a tree of work units with acceptance criteria and dependencies. File overlap detection automatically adds dependency edges between units touching the same files.
-
-**Auto-discovery**: Pipeline that analyzes the codebase for gaps, researches best practices, and populates a persistent backlog with prioritized improvement items. The backlog persists across missions.
-
-**Mission chaining**: With `--chain`, after a mission completes, the strategist proposes the next objective and a new mission starts automatically. Combined with auto-discovery, the system can continuously improve a codebase without human intervention.
-
-**Tracing**: OpenTelemetry integration for observability, emitting spans for planning, execution, merging, and verification phases.
-
-**Live dashboard**: Real-time web dashboard showing mission state, worker status, merge activity, and cost tracking via Server-Sent Events.
-
-**Workspace pool**: Parallel workers each get an isolated git clone from a pre-warmed pool. Clones are recycled between epochs.
+**Live dashboard**: Real-time web dashboard (FastAPI + HTMX) showing mission state, worker status, merge activity, and cost tracking via Server-Sent Events.
 
 ## CLI commands
 
@@ -379,7 +368,7 @@ mc priority export
 ## Tests
 
 ```bash
-uv run pytest -q                           # 1,690+ tests
+uv run pytest -q                           # 1,460+ tests
 uv run ruff check src/ tests/              # Lint
 uv run mypy src/mission_control --ignore-missing-imports  # Types
 ```
