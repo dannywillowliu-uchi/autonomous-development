@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from mission_control.backends.base import WorkerBackend, WorkerHandle
-from mission_control.config import MissionConfig
+from mission_control.config import MissionConfig, build_claude_cmd
 from mission_control.db import Database
 from mission_control.models import Handoff, MergeRequest, Worker, WorkUnit, _now_iso
 from mission_control.session import parse_mc_result, validate_mc_result
@@ -78,6 +78,14 @@ Run: {verification_command}
 3. If verification passes, commit with a descriptive message.
 4. If verification fails, diagnose the issue and fix it. Stop and report if truly stuck.
 - Do NOT run `pip install`, `uv pip install`, or modify the Python environment -- it is pre-configured via symlink
+
+## Research & MCP Tools
+- Use WebSearch to find latest best practices, libraries, and API docs before implementing unfamiliar patterns
+- Use WebFetch to read specific documentation pages found via search
+- Use Context7 MCP tools (resolve-library-id, query-docs) to look up library documentation directly
+- Use claude-flow MCP tools for memory storage/retrieval, agent coordination, and swarm orchestration
+- Prefer discovering existing solutions over building from scratch
+- Include research findings and MCP tool usage in the 'discoveries' field of MC_RESULT
 
 ## Output
 When done, write a summary as the LAST line of output:
@@ -150,8 +158,16 @@ You are a research agent for {target_name} at {workspace_path}.
 
 {description}
 
+## Available Tools
+- WebSearch: Search the web for documentation, prior art, best practices, and solutions
+- WebFetch: Fetch content from a specific URL for detailed reading
+- Context7 MCP: Use resolve-library-id then query-docs to look up library documentation
+- claude-flow MCP: Use for memory storage/retrieval, agent coordination, and swarm orchestration
+Use these actively to supplement codebase analysis with external knowledge.
+
 ## Guidelines
 - Focus on EXPLORATION and DISCOVERY, not code changes
+- Use WebSearch to find documentation, examples, and best practices relevant to the task
 - Read files, run tests, analyze patterns, gather information
 - Do NOT commit code changes -- your output is the research itself
 - Document findings thoroughly in your MC_RESULT discoveries field
@@ -182,6 +198,13 @@ You are an experiment agent for {target_name} at {workspace_path}.
 {title}
 
 {description}
+
+## Available Tools
+- WebSearch: Search for benchmarks, implementation alternatives, and performance comparisons
+- WebFetch: Fetch content from a specific URL for detailed reading
+- Context7 MCP: Use resolve-library-id then query-docs to look up library documentation
+- claude-flow MCP: Use for memory storage/retrieval, agent coordination, and swarm orchestration
+Use these to research approaches before experimenting and to compare against published benchmarks.
 
 ## Guidelines
 - Try each approach described above (default: 2 approaches)
@@ -219,10 +242,18 @@ You are an audit agent for {target_name} at {workspace_path}.
 
 {description}
 
+## Available Tools
+- WebSearch: Search for security advisories, best practice guides, and known vulnerability patterns
+- WebFetch: Fetch content from a specific URL for reference
+- Context7 MCP: Use resolve-library-id then query-docs to look up library documentation
+- claude-flow MCP: Use for memory storage/retrieval, agent coordination, and swarm orchestration
+Use these to verify findings against official documentation and known issue databases.
+
 ## Guidelines
 - Focus on ANALYSIS and EVALUATION, not code changes
 - Audit the codebase against the criteria described in the task
 - Check for correctness, consistency, security issues, and best practice violations
+- Use WebSearch to check for known vulnerability patterns or security advisories
 - Do NOT commit code changes -- your output is the audit findings
 - Document all findings thoroughly in your MC_RESULT discoveries field
 - Rate confidence in each finding (high/medium/low)
@@ -252,6 +283,13 @@ You are a design agent for {target_name} at {workspace_path}.
 {title}
 
 {description}
+
+## Available Tools
+- WebSearch: Search for design patterns, architecture references, and prior art
+- WebFetch: Fetch content from a specific URL for reference
+- Context7 MCP: Use resolve-library-id then query-docs to look up library documentation
+- claude-flow MCP: Use for memory storage/retrieval, agent coordination, and swarm orchestration
+Use these to research design patterns and validate architectural choices against industry practice.
 
 ## Guidelines
 - Focus on DESIGN DECISIONS, not code changes
@@ -287,6 +325,13 @@ You are working on {target_name} at {workspace_path}.
 
 {description}
 {acceptance_criteria_block}
+## Available Tools
+- WebSearch: Search the web for documentation, examples, or solutions
+- WebFetch: Fetch content from a specific URL
+- Context7 MCP: Use resolve-library-id then query-docs to look up library documentation
+- claude-flow MCP: Use for memory storage/retrieval, agent coordination, and swarm orchestration
+Use these when you need to understand unfamiliar APIs, find implementation examples, or verify best practices.
+
 ## Guidelines
 - No TODOs, no partial implementations
 - Modify any files necessary to complete the task well, including creating new files if needed
@@ -588,6 +633,7 @@ class WorkerAgent:
 
 	async def _spawn_and_wait(
 		self, prompt: str, workspace_path: str, effective_timeout: int,
+		unit_type: str = "implementation",
 	) -> tuple[str, int]:
 		"""Spawn a Claude session and wait for completion.
 
@@ -597,15 +643,10 @@ class WorkerAgent:
 		budget = self.config.scheduler.budget.max_per_session_usd
 		models_cfg = getattr(self.config, "models", None)
 		model = getattr(models_cfg, "worker_model", None) or self.config.scheduler.model
-		cmd = [
-			"claude",
-			"-p",
-			"--output-format", "text",
-			"--permission-mode", "bypassPermissions",
-			"--model", model,
-			"--max-budget-usd", str(budget),
-			prompt,
-		]
+		cmd = build_claude_cmd(
+			self.config, model=model, budget=budget,
+			permission_mode="bypassPermissions", prompt=prompt,
+		)
 
 		handle = await self.backend.spawn(
 			worker_id=self.worker.id,
@@ -679,6 +720,7 @@ class WorkerAgent:
 				try:
 					architect_output, architect_exit = await self._spawn_and_wait(
 						architect_prompt, workspace_path, effective_timeout,
+						unit_type="design",
 					)
 					architect_succeeded = architect_exit == 0
 				except _SpawnError:
@@ -698,6 +740,7 @@ class WorkerAgent:
 					try:
 						output, exit_code = await self._spawn_and_wait(
 							editor_prompt, workspace_path, effective_timeout,
+							unit_type=unit.unit_type,
 						)
 					except _SpawnError as exc:
 						unit.output_summary = str(exc)
@@ -722,6 +765,7 @@ class WorkerAgent:
 					try:
 						output, exit_code = await self._spawn_and_wait(
 							prompt, workspace_path, effective_timeout,
+							unit_type=unit.unit_type,
 						)
 					except _SpawnError as exc:
 						unit.output_summary = str(exc)
@@ -746,6 +790,7 @@ class WorkerAgent:
 				try:
 					output, exit_code = await self._spawn_and_wait(
 						prompt, workspace_path, effective_timeout,
+						unit_type=unit.unit_type,
 					)
 				except _SpawnError as exc:
 					unit.output_summary = str(exc)

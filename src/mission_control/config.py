@@ -93,6 +93,9 @@ class SchedulerConfig:
 	polling_interval: int = 5  # seconds between status checks during execution
 	raw_output_max_chars: int = 4000  # truncation limit for raw verification output
 	session_lookback: int = 5  # recent sessions to check for dedup in discovery
+	worker_allowed_tools: list[str] = field(default_factory=lambda: [
+		"Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch",
+	])
 	git: GitConfig = field(default_factory=GitConfig)
 	budget: BudgetConfig = field(default_factory=BudgetConfig)
 	parallel: ParallelConfig = field(default_factory=ParallelConfig)
@@ -584,6 +587,8 @@ def _build_scheduler(data: dict[str, Any]) -> SchedulerConfig:
 		sc.budget = _build_budget(data["budget"])
 	if "parallel" in data:
 		sc.parallel = _build_parallel(data["parallel"])
+	if "worker_allowed_tools" in data:
+		sc.worker_allowed_tools = [str(t) for t in data["worker_allowed_tools"]]
 	return sc
 
 
@@ -645,6 +650,10 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 		cc.circuit_breaker_max_failures = int(data["circuit_breaker_max_failures"])
 	if "circuit_breaker_cooldown_seconds" in data:
 		cc.circuit_breaker_cooldown_seconds = int(data["circuit_breaker_cooldown_seconds"])
+	if "layer_drain_timeout_base" in data:
+		cc.layer_drain_timeout_base = int(data["layer_drain_timeout_base"])
+	if "layer_drain_timeout_per_unit" in data:
+		cc.layer_drain_timeout_per_unit = int(data["layer_drain_timeout_per_unit"])
 	return cc
 
 
@@ -1019,6 +1028,32 @@ def claude_subprocess_env(config: MissionConfig | None = None) -> dict[str, str]
 	}
 
 
+# Per-unit-type tool access: maps unit_type to tools beyond the base set
+_UNIT_TYPE_EXTRA_TOOLS: dict[str, list[str]] = {
+	"research": ["WebSearch", "WebFetch"],
+	"experiment": ["WebSearch", "WebFetch"],
+	"audit": ["WebSearch", "WebFetch"],
+	"design": ["WebSearch", "WebFetch"],
+}
+
+# Read-only unit types should NOT have Write/Edit/Bash
+_READONLY_UNIT_TYPES = {"research", "audit", "design"}
+
+
+def allowed_tools_for_unit(base_tools: list[str], unit_type: str) -> list[str]:
+	"""Build the allowed_tools list for a given unit type.
+
+	Implementation units get the full base set.
+	Read-only units (research, audit, design) get Read/Glob/Grep/WebSearch/WebFetch only.
+	"""
+	if unit_type in _READONLY_UNIT_TYPES:
+		readonly = {"Read", "Glob", "Grep", "WebSearch", "WebFetch"}
+		return sorted(readonly | set(_UNIT_TYPE_EXTRA_TOOLS.get(unit_type, [])))
+	extras = _UNIT_TYPE_EXTRA_TOOLS.get(unit_type, [])
+	combined = set(base_tools) | set(extras)
+	return sorted(combined)
+
+
 def build_claude_cmd(
 	config: MissionConfig,
 	*,
@@ -1052,7 +1087,7 @@ def build_claude_cmd(
 		cmd.extend(["--session-id", session_id])
 	if config.mcp.enabled and config.mcp.config_path:
 		resolved = str(Path(os.path.expanduser(config.mcp.config_path)))
-		cmd.extend(["--mcp-config", resolved])
+		cmd.extend(["--mcp-config", resolved, "--strict-mcp-config"])
 	if allowed_tools:
 		for tool in allowed_tools:
 			cmd.extend(["--allowedTools", tool])

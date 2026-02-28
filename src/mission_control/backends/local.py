@@ -79,6 +79,32 @@ class LocalBackend(WorkerBackend):
 				f"{base_stdout.decode(errors='replace')}"
 			)
 
+		# Sync uncommitted working-tree changes from source into clone.
+		# This ensures fixes not yet committed (e.g. config changes) are
+		# available to workers immediately.
+		src_dir = Path(source_repo) / "src"
+		dst_dir = Path(workspace) / "src"
+		if src_dir.is_dir() and dst_dir.is_dir():
+			sync_proc = await asyncio.create_subprocess_exec(
+				"rsync", "-a", "--delete",
+				str(src_dir) + "/",
+				str(dst_dir) + "/",
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.STDOUT,
+			)
+			sync_out, _ = await sync_proc.communicate()
+			if sync_proc.returncode != 0:
+				logger.warning(
+					"rsync src/ to workspace failed (rc=%d): %s",
+					sync_proc.returncode,
+					sync_out.decode(errors="replace") if sync_out else "",
+				)
+			else:
+				logger.info(
+					"Synced source working tree to workspace %s",
+					workspace.name if isinstance(workspace, Path) else workspace,
+				)
+
 		branch_name = f"mc/unit-{worker_id}"
 		proc = await asyncio.create_subprocess_exec(
 			"git", "checkout", "-B", branch_name,
@@ -121,6 +147,7 @@ class LocalBackend(WorkerBackend):
 		proc = await asyncio.create_subprocess_exec(
 			*command,
 			cwd=workspace_path,
+			stdin=asyncio.subprocess.DEVNULL,
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.STDOUT,
 			env=claude_subprocess_env(self._config),
