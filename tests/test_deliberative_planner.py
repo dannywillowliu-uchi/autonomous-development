@@ -14,6 +14,7 @@ from mission_control.config import (
 	ResearchConfig,
 	TargetConfig,
 )
+from mission_control.context_gathering import get_intel_context
 from mission_control.db import Database
 from mission_control.deliberative_planner import DeliberativePlanner
 from mission_control.models import CriticFinding, Epoch, Mission, Plan, WorkUnit
@@ -434,3 +435,92 @@ class TestBackwardCompat:
 		db = Database(":memory:")
 		planner = DeliberativePlanner(_config(tmp_path), db)
 		planner.set_project_snapshot("snapshot text")
+
+
+class TestIntelContext:
+	@pytest.mark.asyncio
+	async def test_cached_intel_appears_in_prompt(self, tmp_path: Path) -> None:
+		"""Cached IntelReport proposals flow into the planner prompt without HTTP calls."""
+		import dataclasses
+		import json
+		from datetime import datetime, timezone
+
+		from mission_control.intelligence.models import AdaptationProposal
+		from mission_control.intelligence.scanner import IntelReport
+
+		# Build a cached report with 2 proposals
+		proposals = [
+			AdaptationProposal(
+				title="Adopt MCP v2",
+				description="Upgrade to MCP protocol version 2",
+				priority=1,
+			),
+			AdaptationProposal(
+				title="Add streaming support",
+				description="Enable streaming responses for workers",
+				priority=2,
+			),
+		]
+		report = IntelReport(
+			proposals=proposals,
+			timestamp=datetime.now(timezone.utc).isoformat(),
+			sources_scanned=["hackernews"],
+			scan_duration_seconds=1.5,
+		)
+
+		# Write cache file
+		cache_dir = tmp_path / ".cache"
+		cache_dir.mkdir()
+		payload = dataclasses.asdict(report)
+		payload["cached_at"] = datetime.now(timezone.utc).isoformat()
+		(cache_dir / "intel_report.json").write_text(json.dumps(payload))
+
+		# Test get_intel_context directly
+		cfg = _config(tmp_path)
+		result = await get_intel_context(cfg)
+		assert "Adopt MCP v2" in result
+		assert "Add streaming support" in result
+		assert "### Ecosystem Intelligence" in result
+
+		# Test it flows through _gather_project_context
+		db = Database(":memory:")
+		db.insert_mission(_mission())
+		planner = DeliberativePlanner(cfg, db)
+
+		with (
+			patch(
+				"mission_control.context_gathering.get_git_log",
+				new_callable=AsyncMock,
+				return_value="",
+			),
+			patch(
+				"mission_control.deliberative_planner.get_git_log",
+				new_callable=AsyncMock,
+				return_value="",
+			),
+			patch(
+				"mission_control.deliberative_planner.read_backlog",
+				return_value="",
+			),
+			patch(
+				"mission_control.deliberative_planner.get_past_missions",
+				return_value="",
+			),
+			patch(
+				"mission_control.deliberative_planner.get_strategic_context",
+				return_value="",
+			),
+			patch(
+				"mission_control.deliberative_planner.get_episodic_context",
+				return_value="",
+			),
+			patch(
+				"mission_control.deliberative_planner.get_human_preferences",
+				return_value="",
+			),
+		):
+			ctx = await planner._gather_project_context(_mission())
+
+		assert "### Ecosystem Intelligence" in ctx
+		assert "Adopt MCP v2" in ctx
+		assert "Add streaming support" in ctx
