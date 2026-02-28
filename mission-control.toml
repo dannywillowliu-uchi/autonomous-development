@@ -2,7 +2,7 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = "Give workers the autonomy and capability to do effective work by improving the tooling, context, and codebase access they receive before and during execution."
+objective = "Build an external intelligence system that monitors AI/agent ecosystem developments (X feeds, GitHub trending, Hacker News, arxiv, release announcements) and connects them to our framework. The system should: (1) discover and aggregate recent advancements in AI agents, tool use, MCP servers, Claude Code, and autonomous coding frameworks, (2) evaluate which developments are relevant to mission-control's architecture and capabilities, (3) generate actionable adaptation proposals (new integrations, pattern adoptions, architecture changes) as structured work units. Use WebSearch and Browser-use MCP tools to scan real sources. Store findings in a new src/mission_control/intelligence/ module with models for sources, findings, and proposals. Include a CLI subcommand `mc intel` that runs a scan and outputs a prioritized list of adaptation opportunities."
 
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
@@ -85,6 +85,10 @@ idle_threshold = 3
 on_heartbeat = true
 on_merge_fail = true
 on_mission_end = true
+
+[deliberation]
+max_rounds = 2
+critic_model = "sonnet"
 
 [mcp]
 config_path = "/Users/dannyliu/personal_projects/autonomous-development/mcp-workers.json"

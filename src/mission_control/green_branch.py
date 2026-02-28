@@ -143,6 +143,7 @@ class GreenBranchManager:
 			proc = await asyncio.create_subprocess_exec(
 				*shlex.split(setup_cmd),
 				cwd=self.workspace,
+				env=self._workspace_env(),
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.STDOUT,
 			)
@@ -702,6 +703,15 @@ class GreenBranchManager:
 		output = stdout.decode() if stdout else ""
 		return (proc.returncode == 0, output)
 
+	def _workspace_env(self) -> dict[str, str]:
+		"""Build env with .venv/bin prepended to PATH for the workspace."""
+		import os
+		env = os.environ.copy()
+		venv_bin = str(Path(self.workspace) / ".venv" / "bin")
+		env["PATH"] = venv_bin + ":" + env.get("PATH", "")
+		env["VIRTUAL_ENV"] = str(Path(self.workspace) / ".venv")
+		return env
+
 	async def _run_acceptance_criteria(self, criteria: str, timeout: int = 120) -> tuple[bool, str]:
 		"""Run acceptance criteria shell command(s) in the workspace.
 
@@ -712,6 +722,7 @@ class GreenBranchManager:
 			proc = await asyncio.create_subprocess_shell(
 				criteria,
 				cwd=self.workspace,
+				env=self._workspace_env(),
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.STDOUT,
 			)
@@ -775,10 +786,12 @@ class GreenBranchManager:
 	async def _run_command(self, cmd: str | list[str]) -> tuple[bool, str]:
 		"""Run a command in self.workspace using shell for string commands."""
 		timeout = self.config.target.verification.timeout
+		env = self._workspace_env()
 		if isinstance(cmd, str):
 			proc = await asyncio.create_subprocess_shell(
 				cmd,
 				cwd=self.workspace,
+				env=env,
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.STDOUT,
 			)
@@ -786,6 +799,7 @@ class GreenBranchManager:
 			proc = await asyncio.create_subprocess_exec(
 				*cmd,
 				cwd=self.workspace,
+				env=env,
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.STDOUT,
 			)
