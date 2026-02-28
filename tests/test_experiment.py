@@ -85,18 +85,31 @@ class TestExperimentResultDB:
 		assert all(r.mission_id == "m-1" for r in results)
 
 
-# -- Worker prompt template tests --
+# -- CLI parser test --
 
 
-class TestExperimentWorkerPrompt:
-	def test_render_mission_prompt_for_experiment_unit(self) -> None:
-		"""Experiment units with unit_type='research' use the research template (skip merge)."""
-		from mission_control.worker import render_mission_worker_prompt
+def test_experiment_cli_flag_exists() -> None:
+	parser = build_parser()
+	args = parser.parse_args(["mission"])
+	assert hasattr(args, "experiment")
+	assert args.experiment is False
 
+
+# -- Prompt rendering tests --
+
+
+class TestExperimentPrompt:
+	"""Verify prompt rendering for experiment and research unit types."""
+
+	def _make_config(self) -> MagicMock:
 		config = MagicMock()
 		config.target.name = "test-project"
-		config.target.verification.command = "pytest"
+		config.target.verification.command = "pytest -q"
+		return config
 
+	def test_research_unit_type_renders_prompt(self) -> None:
+		"""Experiment units with unit_type='research' use the research template (skip merge)."""
+		config = self._make_config()
 		unit = WorkUnit(
 			title="Compare caching strategies",
 			description="Try Redis vs Memcached",
@@ -111,30 +124,6 @@ class TestExperimentWorkerPrompt:
 		)
 		assert "Compare caching strategies" in prompt
 		assert "Try Redis vs Memcached" in prompt
-
-
-# -- CLI parser tests --
-
-
-class TestExperimentCLIFlag:
-	def test_experiment_flag_exists(self) -> None:
-		parser = build_parser()
-		args = parser.parse_args(["mission"])
-		assert hasattr(args, "experiment")
-		assert args.experiment is False
-
-
-# -- Experiment prompt rendering tests --
-
-
-class TestExperimentPromptRendering:
-	"""Verify template selection based on unit_type and experiment_mode."""
-
-	def _make_config(self) -> MagicMock:
-		config = MagicMock()
-		config.target.name = "test-project"
-		config.target.verification.command = "pytest -q"
-		return config
 
 	def test_experiment_unit_selects_experiment_template(self) -> None:
 		"""unit_type='experiment' should use EXPERIMENT_WORKER_PROMPT_TEMPLATE."""

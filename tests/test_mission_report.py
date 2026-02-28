@@ -57,8 +57,8 @@ def _seed_unit_and_handoff(
 	return unit, handoff
 
 
-class TestGenerateReportBasic:
-	def test_generate_report_basic(self, tmp_path: Path) -> None:
+class TestGenerateReport:
+	def test_basic(self, tmp_path: Path) -> None:
 		db = Database()
 		config = _make_config(tmp_path)
 		mission, epoch, plan = _seed_mission(db)
@@ -118,9 +118,7 @@ class TestGenerateReportBasic:
 
 		db.close()
 
-
-class TestGenerateReportEmptyMission:
-	def test_generate_report_empty_mission(self, tmp_path: Path) -> None:
+	def test_empty_mission(self, tmp_path: Path) -> None:
 		db = Database()
 		config = _make_config(tmp_path)
 		mission = Mission(objective="empty mission", status="running")
@@ -142,9 +140,7 @@ class TestGenerateReportEmptyMission:
 
 		db.close()
 
-
-class TestGenerateReportWritesFile:
-	def test_generate_report_writes_file(self, tmp_path: Path) -> None:
+	def test_writes_file(self, tmp_path: Path) -> None:
 		db = Database()
 		config = _make_config(tmp_path)
 		mission, epoch, plan = _seed_mission(db)
@@ -174,9 +170,7 @@ class TestGenerateReportWritesFile:
 
 		db.close()
 
-
-class TestGenerateReportTimelineOrdering:
-	def test_generate_report_timeline_ordering(self, tmp_path: Path) -> None:
+	def test_timeline_ordering(self, tmp_path: Path) -> None:
 		db = Database()
 		config = _make_config(tmp_path)
 		mission, epoch, plan = _seed_mission(db)
