@@ -139,6 +139,15 @@ class LocalBackend(WorkerBackend):
 		except OSError:
 			pass
 
+		# Write-protect the .pth file so workers can't overwrite the editable
+		# install path by running `pip install -e .` inside clones.
+		pth_glob = list(source_venv.glob("lib/*/site-packages/__editable__.mission_control*.pth"))
+		for pth in pth_glob:
+			try:
+				pth.chmod(0o444)
+			except OSError:
+				pass
+
 		return str(workspace)
 
 	async def spawn(
