@@ -188,9 +188,12 @@ class GreenBranchManager:
 				return UnitMergeResult(failure_output="Failed to fetch unit branch", failure_stage="fetch")
 
 			try:
-				# Clean slate
+				# Clean slate — reset tracked files AND remove untracked files
+				# so that files created by a previous unit merge don't block
+				# the next merge ("untracked working tree files would be overwritten")
 				await self._run_git("checkout", gb.green_branch)
 				await self._run_git("reset", "--hard", "HEAD")
+				await self._run_git("clean", "-fd")
 
 				# Merge
 				ok, output = await self._run_git(
