@@ -110,6 +110,11 @@ def build_parser() -> argparse.ArgumentParser:
 	vc = sub.add_parser("validate-config", help="Validate config file semantically")
 	vc.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
 
+	# mc intel
+	intel = sub.add_parser("intel", help="Scan external sources for AI/agent ecosystem intelligence")
+	intel.add_argument("--json", action="store_true", dest="json_output", help="Output as JSON")
+	intel.add_argument("--threshold", type=float, default=0.3, help="Relevance threshold for proposals (default: 0.3)")
+
 	return parser
 
 
@@ -816,6 +821,42 @@ def cmd_a2a(args: argparse.Namespace) -> int:
 
 
 
+def cmd_intel(args: argparse.Namespace) -> int:
+	"""Scan external sources for AI/agent ecosystem intelligence."""
+	import dataclasses
+	import json as json_mod
+
+	from mission_control.intelligence import run_scan
+
+	try:
+		report = asyncio.run(run_scan(threshold=args.threshold))
+	except Exception as exc:
+		print(f"Intel scan failed: {exc}")
+		return 1
+
+	if args.json_output:
+		print(json_mod.dumps(dataclasses.asdict(report), indent=2))
+	else:
+		print(f"Intel Report ({report.timestamp})")
+		print(f"Sources: {', '.join(report.sources_scanned)}")
+		print(f"Scan duration: {report.scan_duration_seconds}s")
+		print(f"Findings: {len(report.findings)}, Proposals: {len(report.proposals)}")
+		if report.findings:
+			print(f"\n{'Score':>6}  {'Source':<12} {'Title'}")
+			print("-" * 72)
+			for f in report.findings[:20]:
+				title = f.title[:50] + ".." if len(f.title) > 52 else f.title
+				print(f"{f.relevance_score:6.2f}  {f.source:<12} {title}")
+		if report.proposals:
+			print(f"\n{'Pri':>3}  {'Type':<14} {'Effort':<8} {'Title'}")
+			print("-" * 72)
+			for p in report.proposals:
+				title = p.title[:45] + ".." if len(p.title) > 47 else p.title
+				print(f"{p.priority:>3}  {p.proposal_type:<14} {p.effort_estimate:<8} {title}")
+
+	return 0
+
+
 COMMANDS = {
 	"status": cmd_status,
 	"history": cmd_history,
@@ -824,6 +865,7 @@ COMMANDS = {
 	"dashboard": cmd_dashboard,
 	"live": cmd_live,
 	"summary": cmd_summary,
+	"intel": cmd_intel,
 
 	"register": cmd_register,
 	"unregister": cmd_unregister,
