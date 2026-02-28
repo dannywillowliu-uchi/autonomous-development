@@ -195,18 +195,47 @@ class GreenBranchManager:
 				await self._run_git("reset", "--hard", "HEAD")
 				await self._run_git("clean", "-fd", "-e", ".venv")
 
-				# Merge
+				# Merge — on conflict, rebase the unit branch onto mc/green and retry.
+				# Parallel units often create the same files (add/add conflicts).
+				# Rebasing applies the unit's changes on top of already-merged work.
+				rebase_branch = f"mc/rebase-{branch_name}"
 				ok, output = await self._run_git(
 					"merge", "--no-ff", f"{remote_name}/{branch_name}",
 					"-m", f"Merge {branch_name} into {gb.green_branch}",
 				)
 				if not ok:
-					logger.warning("Merge conflict for %s: %s", branch_name, output)
 					await self._run_git("merge", "--abort")
-					return UnitMergeResult(
-						failure_output=f"Merge conflict: {output[:500]}",
-						failure_stage="merge_conflict",
+					logger.info("Merge conflict for %s, attempting rebase onto %s", branch_name, gb.green_branch)
+					# Create a local branch from the fetched unit, rebase onto green
+					await self._run_git("branch", "-D", rebase_branch)
+					await self._run_git("branch", rebase_branch, f"{remote_name}/{branch_name}")
+					rebase_ok, rebase_out = await self._run_git(
+						"rebase", gb.green_branch, rebase_branch,
 					)
+					if not rebase_ok:
+						await self._run_git("rebase", "--abort")
+						await self._run_git("checkout", gb.green_branch)
+						await self._run_git("branch", "-D", rebase_branch)
+						logger.warning("Rebase failed for %s: %s", branch_name, rebase_out)
+						return UnitMergeResult(
+							rebase_ok=False,
+							failure_output=f"Merge conflict (rebase failed): {rebase_out[:500]}",
+							failure_stage="merge_conflict",
+						)
+					# Now on rebase_branch — switch back to green and merge
+					await self._run_git("checkout", gb.green_branch)
+					ok, output = await self._run_git(
+						"merge", "--no-ff", rebase_branch,
+						"-m", f"Merge {branch_name} (rebased) into {gb.green_branch}",
+					)
+					await self._run_git("branch", "-D", rebase_branch)
+					if not ok:
+						await self._run_git("merge", "--abort")
+						logger.warning("Merge still failed after rebase for %s: %s", branch_name, output)
+						return UnitMergeResult(
+							failure_output=f"Merge conflict after rebase: {output[:500]}",
+							failure_stage="merge_conflict",
+						)
 
 				# Capture merge info
 				_, merge_hash = await self._run_git("rev-parse", "HEAD")
