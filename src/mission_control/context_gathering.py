@@ -8,7 +8,10 @@ without duplicating code.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import json
 import logging
+from datetime import datetime, timezone
 
 from mission_control.config import MissionConfig
 from mission_control.db import Database
@@ -129,4 +132,51 @@ def get_human_preferences(db: Database) -> str:
 		lines.append("Prefer work similar to highly-rated missions.")
 		return "\n".join(lines)
 	except Exception:
+		return ""
+
+
+async def get_intel_context(config: MissionConfig, ttl_hours: float = 6.0) -> str:
+	"""Return markdown summary of top intel proposals, with file-based TTL cache."""
+	try:
+		from mission_control.intelligence import AdaptationProposal, IntelReport, run_scan
+		from mission_control.intelligence.models import Finding
+
+		cache_path = config.target.resolved_path / ".cache" / "intel_report.json"
+
+		report: IntelReport | None = None
+
+		# Try loading from cache
+		if cache_path.exists():
+			try:
+				data = json.loads(cache_path.read_text())
+				cached_at = datetime.fromisoformat(data["cached_at"])
+				age_hours = (datetime.now(timezone.utc) - cached_at).total_seconds() / 3600
+				if age_hours < ttl_hours:
+					report = IntelReport(
+						findings=[Finding(**f) for f in data.get("findings", [])],
+						proposals=[AdaptationProposal(**p) for p in data.get("proposals", [])],
+						timestamp=data.get("timestamp", ""),
+						sources_scanned=data.get("sources_scanned", []),
+						scan_duration_seconds=data.get("scan_duration_seconds", 0.0),
+					)
+			except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+				log.debug("Intel cache invalid, will re-scan", exc_info=True)
+
+		# Cache miss or stale -- run a fresh scan
+		if report is None:
+			report = await run_scan(threshold=0.3)
+			cache_path.parent.mkdir(parents=True, exist_ok=True)
+			payload = dataclasses.asdict(report)
+			payload["cached_at"] = datetime.now(timezone.utc).isoformat()
+			cache_path.write_text(json.dumps(payload))
+
+		# Format top 5 proposals by priority (1 = highest)
+		top = sorted(report.proposals, key=lambda p: p.priority)[:5]
+		if not top:
+			return ""
+
+		lines = [f"{i}. **{p.title}** -- {p.description}" for i, p in enumerate(top, 1)]
+		return "### Ecosystem Intelligence\n" + "\n".join(lines)
+	except Exception:
+		log.debug("get_intel_context failed", exc_info=True)
 		return ""

@@ -20,6 +20,7 @@ from mission_control.context_gathering import (
 	get_episodic_context,
 	get_git_log,
 	get_human_preferences,
+	get_intel_context,
 	get_past_missions,
 	get_strategic_context,
 	read_backlog,
@@ -114,6 +115,10 @@ class DeliberativePlanner:
 		git_log = await get_git_log(self._config)
 		if git_log:
 			sections.insert(0, f"### Recent Git History\n{git_log}")
+
+		intel_ctx = await get_intel_context(self._config)
+		if intel_ctx:
+			sections.append(intel_ctx)
 
 		if knowledge_context:
 			sections.append(f"### Accumulated Knowledge\n{knowledge_context}")
