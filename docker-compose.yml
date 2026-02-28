@@ -1,0 +1,10 @@
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "4317:4317"   # OTLP gRPC (TracingConfig default)
+      - "4318:4318"   # OTLP HTTP
+      - "16686:16686" # Jaeger UI
+    restart: unless-stopped
