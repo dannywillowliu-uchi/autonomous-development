@@ -52,6 +52,10 @@ class LocalBackend(WorkerBackend):
 		if workspace is None:
 			raise RuntimeError(f"No workspace available for worker {worker_id}")
 
+		# Repair editable install if workers from a previous mission corrupted
+		# the .pth file to point at a (now-deleted) worker clone.
+		await self._repair_editable_install(source_repo)
+
 		# Fetch latest refs so that branches created after the clone (e.g.
 		# mc/green from GreenBranchManager.initialize()) are visible.
 		fetch_proc = await asyncio.create_subprocess_exec(
@@ -145,6 +149,36 @@ class LocalBackend(WorkerBackend):
 		# bypassing the .pth file entirely for verification/acceptance.
 
 		return str(workspace)
+
+	async def _repair_editable_install(self, source_repo: str) -> None:
+		"""Repair the editable .pth if it points to a stale worker clone."""
+		source_venv = Path(source_repo) / ".venv"
+		pth_files = list(source_venv.glob("lib/*/site-packages/__editable__.mission_control*.pth"))
+		if not pth_files:
+			return
+		pth = pth_files[0]
+		try:
+			current = pth.read_text().strip()
+		except OSError:
+			return
+		expected = str(Path(source_repo) / "src")
+		if current == expected:
+			return
+		logger.info("Repairing editable install: %s -> %s", current, expected)
+		venv_python = source_venv / "bin" / "python"
+		if not venv_python.exists():
+			return
+		proc = await asyncio.create_subprocess_exec(
+			"uv", "pip", "install", "-e", ".",
+			"--python", str(venv_python),
+			cwd=source_repo,
+			stdout=asyncio.subprocess.PIPE,
+			stderr=asyncio.subprocess.STDOUT,
+		)
+		stdout, _ = await proc.communicate()
+		if proc.returncode != 0:
+			output = stdout.decode(errors="replace") if stdout else ""
+			logger.warning("Failed to repair editable install: %s", output[:300])
 
 	async def spawn(
 		self, worker_id: str, workspace_path: str, command: list[str], timeout: int
