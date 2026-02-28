@@ -193,7 +193,7 @@ class GreenBranchManager:
 				# the next merge ("untracked working tree files would be overwritten")
 				await self._run_git("checkout", gb.green_branch)
 				await self._run_git("reset", "--hard", "HEAD")
-				await self._run_git("clean", "-fd")
+				await self._run_git("clean", "-fd", "-e", ".venv")
 
 				# Merge
 				ok, output = await self._run_git(
@@ -707,12 +707,19 @@ class GreenBranchManager:
 		return (proc.returncode == 0, output)
 
 	def _workspace_env(self) -> dict[str, str]:
-		"""Build env with .venv/bin prepended to PATH for the workspace."""
+		"""Build env with .venv/bin on PATH and PYTHONPATH pointing to workspace src/.
+
+		PYTHONPATH ensures imports resolve to the merged code on mc/green rather
+		than wherever the editable .pth file happens to point (which workers
+		can corrupt by running `pip install -e .` in their clones).
+		"""
 		import os
 		env = os.environ.copy()
 		venv_bin = str(Path(self.workspace) / ".venv" / "bin")
+		workspace_src = str(Path(self.workspace) / "src")
 		env["PATH"] = venv_bin + ":" + env.get("PATH", "")
 		env["VIRTUAL_ENV"] = str(Path(self.workspace) / ".venv")
+		env["PYTHONPATH"] = workspace_src
 		return env
 
 	async def _run_acceptance_criteria(self, criteria: str, timeout: int = 120) -> tuple[bool, str]:
@@ -753,38 +760,12 @@ class GreenBranchManager:
 		"""
 		from mission_control.state import _build_result_from_single_command
 
-		await self._reanchor_editable_install()
-
 		nodes = self.config.target.verification.nodes
 		if nodes:
 			return await run_verification_nodes(self.config, self.workspace)
 		# Single-command fallback using self._run_command
 		ok, output = await self._run_command(self.config.target.verification.command)
 		return _build_result_from_single_command(output, 0 if ok else 1)
-
-	async def _reanchor_editable_install(self) -> None:
-		"""Re-anchor the editable install to the source repo before verification.
-
-		Worker pool clones share the source .venv via symlink. If a worker runs
-		`pip install -e .` in its clone, the editable path gets hijacked to point
-		at the clone instead of the source repo. Must run from the SOURCE repo
-		directory (not the workspace clone) so the editable path resolves correctly.
-		"""
-		source_repo = self.config.target.path
-		venv_python = Path(source_repo) / ".venv" / "bin" / "python"
-		if not venv_python.exists():
-			return
-		proc = await asyncio.create_subprocess_exec(
-			"uv", "pip", "install", "-e", ".",
-			"--python", str(venv_python),
-			cwd=source_repo,
-			stdout=asyncio.subprocess.PIPE,
-			stderr=asyncio.subprocess.STDOUT,
-		)
-		stdout, _ = await proc.communicate()
-		if proc.returncode != 0:
-			output = stdout.decode(errors="replace") if stdout else ""
-			logger.warning("Failed to re-anchor editable install: %s", output[:300])
 
 	async def _run_command(self, cmd: str | list[str]) -> tuple[bool, str]:
 		"""Run a command in self.workspace using shell for string commands."""

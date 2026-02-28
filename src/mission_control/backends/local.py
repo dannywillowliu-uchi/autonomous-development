@@ -139,28 +139,10 @@ class LocalBackend(WorkerBackend):
 		except OSError:
 			pass
 
-		# Lock the .pth file so workers can't overwrite the editable install
-		# path by running `pip install -e .` inside clones. chmod 444 is not
-		# enough — uv unlinks and recreates the file. Use macOS immutable flag
-		# (chflags uchg) which prevents unlink/rename/write by non-root.
-		pth_glob = list(source_venv.glob("lib/*/site-packages/__editable__.mission_control*.pth"))
-		for pth in pth_glob:
-			try:
-				# Remove immutable flag first in case we need to update it
-				await asyncio.create_subprocess_exec(
-					"chflags", "nouchg", str(pth),
-					stdout=asyncio.subprocess.DEVNULL,
-					stderr=asyncio.subprocess.DEVNULL,
-				)
-				pth.chmod(0o444)
-				proc = await asyncio.create_subprocess_exec(
-					"chflags", "uchg", str(pth),
-					stdout=asyncio.subprocess.DEVNULL,
-					stderr=asyncio.subprocess.DEVNULL,
-				)
-				await proc.wait()
-			except OSError:
-				pass
+		# NOTE: Workers may corrupt the editable .pth file by running
+		# `pip install -e .` in their clones. This is harmless because
+		# _workspace_env() sets PYTHONPATH to the workspace src/ directory,
+		# bypassing the .pth file entirely for verification/acceptance.
 
 		return str(workspace)
 
