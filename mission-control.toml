@@ -86,5 +86,9 @@ on_heartbeat = true
 on_merge_fail = true
 on_mission_end = true
 
+[mcp]
+config_path = "/Users/dannyliu/personal_projects/autonomous-development/mcp-workers.json"
+enabled = true
+
 [backend]
 type = "local"
