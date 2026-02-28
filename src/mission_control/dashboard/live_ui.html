@@ -1348,6 +1348,219 @@ body {
 	color: var(--text-muted);
 	font-size: 13px;
 }
+
+/* Center panel tabs */
+.center-tabs {
+	display: flex;
+	gap: 0;
+	margin-bottom: 12px;
+}
+
+.center-tab-btn {
+	padding: 4px 14px;
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.3px;
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	transition: all 0.15s;
+}
+
+.center-tab-btn:first-child { border-radius: 4px 0 0 4px; }
+.center-tab-btn:last-child { border-radius: 0 4px 4px 0; }
+.center-tab-btn + .center-tab-btn { border-left: none; }
+
+.center-tab-btn:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+.center-tab-btn.active { color: var(--text); background: var(--border); }
+
+.center-panel-content { display: none; }
+.center-panel-content.active { display: block; }
+
+/* Timeline Gantt chart */
+.timeline-container {
+	overflow: auto;
+	height: 100%;
+	padding-bottom: 12px;
+}
+
+.timeline-empty {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	height: 120px;
+	color: var(--text-muted);
+	font-size: 14px;
+}
+
+.gantt-wrapper {
+	position: relative;
+	min-width: 600px;
+}
+
+.gantt-header {
+	display: flex;
+	position: sticky;
+	top: 0;
+	z-index: 2;
+	background: var(--surface);
+	border-bottom: 1px solid var(--border);
+}
+
+.gantt-label-col {
+	width: 140px;
+	min-width: 140px;
+	flex-shrink: 0;
+	padding: 4px 8px;
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.3px;
+	border-right: 1px solid var(--border);
+}
+
+.gantt-time-header {
+	flex: 1;
+	display: flex;
+	position: relative;
+	min-height: 24px;
+}
+
+.gantt-time-tick {
+	position: absolute;
+	top: 0;
+	font-size: 10px;
+	color: var(--text-muted);
+	padding: 4px 0 0 4px;
+	white-space: nowrap;
+}
+
+.gantt-body {
+	position: relative;
+}
+
+.gantt-lane {
+	display: flex;
+	align-items: center;
+	min-height: 32px;
+	border-bottom: 1px solid rgba(48, 54, 61, 0.3);
+}
+
+.gantt-lane:hover {
+	background: rgba(255, 255, 255, 0.02);
+}
+
+.gantt-lane-label {
+	width: 140px;
+	min-width: 140px;
+	flex-shrink: 0;
+	padding: 4px 8px;
+	font-size: 12px;
+	color: var(--purple);
+	font-weight: 500;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	border-right: 1px solid var(--border);
+}
+
+.gantt-lane-bars {
+	flex: 1;
+	position: relative;
+	height: 32px;
+}
+
+.gantt-bar {
+	position: absolute;
+	top: 6px;
+	height: 20px;
+	border-radius: 3px;
+	min-width: 4px;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	padding: 0 6px;
+	font-size: 10px;
+	font-weight: 600;
+	color: #000;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	transition: opacity 0.15s;
+}
+
+.gantt-bar:hover { opacity: 0.85; }
+
+.gantt-bar.running { background: var(--blue); }
+.gantt-bar.claimed { background: var(--blue); opacity: 0.7; }
+.gantt-bar.completed { background: var(--green); }
+.gantt-bar.failed { background: var(--red); color: #fff; }
+.gantt-bar.rejected { background: var(--yellow); }
+.gantt-bar.pending { background: var(--text-muted); }
+
+.gantt-bar.running { animation: gantt-pulse 2s ease-in-out infinite; }
+
+@keyframes gantt-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.7; }
+}
+
+.gantt-gridline {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 1px;
+	background: rgba(48, 54, 61, 0.4);
+	z-index: 0;
+}
+
+.gantt-now-line {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 2px;
+	background: var(--red);
+	z-index: 1;
+	opacity: 0.6;
+}
+
+.gantt-tooltip {
+	display: none;
+	position: fixed;
+	z-index: 500;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 8px 12px;
+	font-size: 12px;
+	max-width: 300px;
+	box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+	pointer-events: none;
+}
+
+.gantt-tooltip.visible { display: block; }
+
+.gantt-tooltip .tt-title {
+	font-weight: 600;
+	margin-bottom: 4px;
+}
+
+.gantt-tooltip .tt-meta {
+	color: var(--text-muted);
+	font-size: 11px;
+	line-height: 1.4;
+}
+
+.gantt-tooltip .tt-files {
+	color: var(--text-muted);
+	font-size: 10px;
+	margin-top: 4px;
+	font-family: monospace;
+	word-break: break-all;
+}
 </style>
 </head>
 <body>
@@ -1388,10 +1601,23 @@ body {
 			<div id="plan-tree-content"></div>
 		</div>
 
-		<!-- Worker cards -->
+		<!-- Worker cards / Timeline -->
 		<div class="workers">
-			<h2 class="panel-heading">Work Units</h2>
-			<div class="worker-grid" id="worker-grid"></div>
+			<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+				<h2 class="panel-heading" style="margin-bottom:0">View</h2>
+				<div class="center-tabs">
+					<button class="center-tab-btn active" onclick="switchCenterTab('units')" data-tab="units">Work Units</button>
+					<button class="center-tab-btn" onclick="switchCenterTab('timeline')" data-tab="timeline">Timeline</button>
+				</div>
+			</div>
+			<div id="center-units" class="center-panel-content active">
+				<div class="worker-grid" id="worker-grid"></div>
+			</div>
+			<div id="center-timeline" class="center-panel-content">
+				<div class="timeline-container" id="timeline-container">
+					<div class="timeline-empty">No timeline data</div>
+				</div>
+			</div>
 		</div>
 
 		<!-- Event log -->
@@ -1592,6 +1818,7 @@ function updateAll(snapshot) {
 	updateEventLog(snapshot.events);
 	updateHistory(snapshot.history);
 	updateBacklog(snapshot.backlog, snapshot.active_backlog_ids);
+	updateTimeline(snapshot.timeline);
 }
 
 function updateMissionStatement(mission, summary, currentEpochUnits) {
@@ -2172,6 +2399,9 @@ document.addEventListener("keydown", function(e) {
 	} else if (e.key === "o" || e.key === "O") {
 		e.preventDefault();
 		if (missionActive) openAddObjective();
+	} else if (e.key === "t" || e.key === "T") {
+		e.preventDefault();
+		switchCenterTab(activeCenterTab === "timeline" ? "units" : "timeline");
 	}
 });
 
@@ -2592,6 +2822,184 @@ function scrollToBacklogItem(id) {
 			setTimeout(() => row.classList.remove("backlog-highlight"), 1500);
 		}
 	}, 100);
+}
+
+// -- Center panel tab switching --
+
+let activeCenterTab = "units";
+
+function switchCenterTab(tab) {
+	activeCenterTab = tab;
+	document.querySelectorAll(".center-tab-btn").forEach(b => {
+		b.classList.toggle("active", b.dataset.tab === tab);
+	});
+	document.getElementById("center-units").classList.toggle("active", tab === "units");
+	document.getElementById("center-timeline").classList.toggle("active", tab === "timeline");
+}
+
+// -- Timeline Gantt rendering --
+
+let lastTimelineData = [];
+const ganttTooltip = document.createElement("div");
+ganttTooltip.className = "gantt-tooltip";
+document.body.appendChild(ganttTooltip);
+
+function updateTimeline(timeline) {
+	lastTimelineData = timeline || [];
+	renderGantt(lastTimelineData);
+}
+
+function renderGantt(entries) {
+	const container = document.getElementById("timeline-container");
+	if (!entries || entries.length === 0) {
+		container.innerHTML = '<div class="timeline-empty">No timeline data</div>';
+		return;
+	}
+
+	const now = Date.now();
+
+	// Parse times
+	const parsed = entries.map(e => ({
+		...e,
+		startMs: new Date(e.start_time).getTime(),
+		endMs: e.end_time ? new Date(e.end_time).getTime() : (e.status === "running" || e.status === "claimed" ? now : new Date(e.start_time).getTime() + 60000),
+	}));
+
+	// Compute time range
+	let minTime = Infinity, maxTime = -Infinity;
+	for (const e of parsed) {
+		if (e.startMs < minTime) minTime = e.startMs;
+		if (e.endMs > maxTime) maxTime = e.endMs;
+	}
+	// Extend slightly for padding
+	const range = maxTime - minTime || 60000;
+	const padded = range * 0.05;
+	minTime -= padded;
+	maxTime += padded;
+	const totalRange = maxTime - minTime;
+
+	// Group by worker
+	const workerMap = new Map();
+	for (const e of parsed) {
+		const wid = e.worker_id || "unassigned";
+		if (!workerMap.has(wid)) workerMap.set(wid, []);
+		workerMap.get(wid).push(e);
+	}
+
+	// Sort workers by earliest start
+	const workers = [...workerMap.entries()].sort((a, b) => {
+		const aMin = Math.min(...a[1].map(e => e.startMs));
+		const bMin = Math.min(...b[1].map(e => e.startMs));
+		return aMin - bMin;
+	});
+
+	// Time ticks (~6-8 ticks)
+	const tickCount = 7;
+	const tickInterval = totalRange / tickCount;
+
+	// Build HTML
+	let html = '<div class="gantt-wrapper">';
+
+	// Header
+	html += '<div class="gantt-header">';
+	html += '<div class="gantt-label-col">Worker</div>';
+	html += '<div class="gantt-time-header">';
+	for (let i = 0; i <= tickCount; i++) {
+		const t = minTime + i * tickInterval;
+		const pct = ((t - minTime) / totalRange) * 100;
+		const d = new Date(t);
+		const label = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+		html += `<span class="gantt-time-tick" style="left:${pct}%">${label}</span>`;
+	}
+	html += '</div></div>';
+
+	// Body
+	html += '<div class="gantt-body">';
+
+	for (const [wid, entries] of workers) {
+		const label = wid === "unassigned" ? "Unassigned" : wid.substring(0, 10);
+		html += '<div class="gantt-lane">';
+		html += `<div class="gantt-lane-label" title="${escapeHtml(wid)}">${escapeHtml(label)}</div>`;
+		html += '<div class="gantt-lane-bars">';
+
+		// Gridlines
+		for (let i = 0; i <= tickCount; i++) {
+			const t = minTime + i * tickInterval;
+			const pct = ((t - minTime) / totalRange) * 100;
+			html += `<div class="gantt-gridline" style="left:${pct}%"></div>`;
+		}
+
+		// Now line
+		if (now >= minTime && now <= maxTime) {
+			const nowPct = ((now - minTime) / totalRange) * 100;
+			html += `<div class="gantt-now-line" style="left:${nowPct}%"></div>`;
+		}
+
+		// Bars
+		for (const e of entries) {
+			const left = ((e.startMs - minTime) / totalRange) * 100;
+			const width = Math.max(((e.endMs - e.startMs) / totalRange) * 100, 0.5);
+			const title = e.title || e.unit_id.substring(0, 8);
+			const duration = formatDuration(e.start_time, e.end_time);
+			const filesJson = escapeHtml(JSON.stringify(e.files_changed || []));
+			html += `<div class="gantt-bar ${e.status}" style="left:${left}%;width:${width}%"
+				data-title="${escapeHtml(e.title)}"
+				data-unit-id="${escapeHtml(e.unit_id)}"
+				data-status="${e.status}"
+				data-duration="${duration}"
+				data-files="${filesJson}"
+				data-start="${e.start_time}"
+				data-end="${e.end_time || ""}"
+				onmouseenter="showGanttTooltip(event,this)"
+				onmousemove="moveGanttTooltip(event)"
+				onmouseleave="hideGanttTooltip()"
+				onclick="scrollToCard('${escapeHtml(e.unit_id)}')"
+			>${escapeHtml(title)}</div>`;
+		}
+
+		html += '</div></div>';
+	}
+
+	html += '</div></div>';
+	container.innerHTML = html;
+}
+
+function showGanttTooltip(event, el) {
+	const title = el.dataset.title;
+	const status = el.dataset.status;
+	const duration = el.dataset.duration;
+	const start = el.dataset.start;
+	const end = el.dataset.end;
+	let files = [];
+	try { files = JSON.parse(el.dataset.files.replace(/&quot;/g, '"').replace(/&amp;/g, '&')); } catch {}
+
+	let html = `<div class="tt-title">${escapeHtml(title)}</div>`;
+	html += `<div class="tt-meta">`;
+	html += `Status: <strong>${status}</strong><br>`;
+	html += `Duration: ${duration}<br>`;
+	if (start) html += `Start: ${formatTimestamp(start)}<br>`;
+	if (end) html += `End: ${formatTimestamp(end)}`;
+	html += `</div>`;
+	if (files.length > 0) {
+		html += `<div class="tt-files">${files.slice(0, 5).map(f => escapeHtml(f)).join("<br>")}`;
+		if (files.length > 5) html += `<br>...+${files.length - 5} more`;
+		html += `</div>`;
+	}
+
+	ganttTooltip.innerHTML = html;
+	ganttTooltip.classList.add("visible");
+	moveGanttTooltip(event);
+}
+
+function moveGanttTooltip(event) {
+	const x = event.clientX + 12;
+	const y = event.clientY + 12;
+	ganttTooltip.style.left = x + "px";
+	ganttTooltip.style.top = y + "px";
+}
+
+function hideGanttTooltip() {
+	ganttTooltip.classList.remove("visible");
 }
 
 // Start

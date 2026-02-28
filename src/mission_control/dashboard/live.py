@@ -221,6 +221,14 @@ class LiveDashboard:
 			chain_mids = self._get_chain_mission_ids(mission)
 			return self._build_plan_tree(chain_mids)
 
+		@self.app.get("/api/timeline", dependencies=[Depends(verify_token)])
+		async def get_timeline() -> list[dict[str, Any]]:
+			mission = self._current_mission()
+			if mission is None:
+				return []
+			chain_mids = self._get_chain_mission_ids(mission)
+			return self._build_timeline(chain_mids)
+
 		@self.app.get("/api/workers", dependencies=[Depends(verify_token)])
 		async def get_workers() -> list[dict[str, Any]]:
 			workers = self.db.get_all_workers()
@@ -344,6 +352,7 @@ class LiveDashboard:
 			"ratings": rating_data,
 			"unit_reviews": review_by_unit,
 			"current_epoch_units": current_epoch_units,
+			"timeline": self._build_timeline(chain_mids),
 		}
 
 	def _build_plan_tree(self, mission_ids: list[str]) -> list[dict[str, Any]]:
@@ -413,6 +422,31 @@ class LiveDashboard:
 			"current_epoch": len(all_epochs),
 			"started_at": first_mission.started_at if first_mission else mission.started_at,
 		}
+
+	def _build_timeline(self, chain_mids: list[str]) -> list[dict[str, Any]]:
+		"""Build timeline entries from work units for Gantt visualization."""
+		all_units: list[Any] = []
+		for mid in chain_mids:
+			all_units.extend(self.db.get_work_units_for_mission(mid))
+
+		timeline: list[dict[str, Any]] = []
+		for u in all_units:
+			if not u.started_at:
+				continue
+			files_changed: list[str] = []
+			if u.files_hint:
+				files_changed = [f.strip() for f in u.files_hint.split(",") if f.strip()]
+			timeline.append({
+				"unit_id": u.id,
+				"title": u.title,
+				"worker_id": u.worker_id or "",
+				"start_time": u.started_at,
+				"end_time": u.finished_at,
+				"status": u.status,
+				"files_changed": files_changed,
+			})
+		timeline.sort(key=lambda t: t["start_time"])
+		return timeline
 
 	def _build_history(self) -> list[dict[str, Any]]:
 		"""Build mission history from all past missions."""
