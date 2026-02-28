@@ -13,3 +13,5 @@ build/
 events.jsonl
 MISSION_STATE.md
 .mc-pool-*/
+mcp-workers.json
+.env

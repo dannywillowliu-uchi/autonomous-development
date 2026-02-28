@@ -82,7 +82,10 @@ Run: {verification_command}
 ## Research & MCP Tools
 - Use WebSearch to find latest best practices, libraries, and API docs before implementing unfamiliar patterns
 - Use WebFetch to read specific documentation pages found via search
-- Use Context7 MCP tools (resolve-library-id, query-docs) to look up library documentation directly
+- Use GitHub MCP tools to search repos, read files, create issues/PRs, and manage code
+- Use Vercel MCP tools to manage deployments, environment variables, and project settings
+- Use Supabase MCP tools for database operations and project management
+- Use Browser-use MCP tools for web browser automation and interaction
 - Use claude-flow MCP tools for memory storage/retrieval, agent coordination, and swarm orchestration
 - Prefer discovering existing solutions over building from scratch
 - Include research findings and MCP tool usage in the 'discoveries' field of MC_RESULT
@@ -161,8 +164,11 @@ You are a research agent for {target_name} at {workspace_path}.
 ## Available Tools
 - WebSearch: Search the web for documentation, prior art, best practices, and solutions
 - WebFetch: Fetch content from a specific URL for detailed reading
-- Context7 MCP: Use resolve-library-id then query-docs to look up library documentation
-- claude-flow MCP: Use for memory storage/retrieval, agent coordination, and swarm orchestration
+- GitHub MCP: Search repos, read files, create issues/PRs, manage code
+- Vercel MCP: Manage deployments, environment variables, project settings
+- Supabase MCP: Database operations and project management
+- Browser-use MCP: Web browser automation and interaction
+- claude-flow MCP: Memory storage/retrieval, agent coordination, swarm orchestration
 Use these actively to supplement codebase analysis with external knowledge.
 
 ## Guidelines
@@ -202,8 +208,11 @@ You are an experiment agent for {target_name} at {workspace_path}.
 ## Available Tools
 - WebSearch: Search for benchmarks, implementation alternatives, and performance comparisons
 - WebFetch: Fetch content from a specific URL for detailed reading
-- Context7 MCP: Use resolve-library-id then query-docs to look up library documentation
-- claude-flow MCP: Use for memory storage/retrieval, agent coordination, and swarm orchestration
+- GitHub MCP: Search repos, read files, create issues/PRs, manage code
+- Vercel MCP: Manage deployments, environment variables, project settings
+- Supabase MCP: Database operations and project management
+- Browser-use MCP: Web browser automation and interaction
+- claude-flow MCP: Memory storage/retrieval, agent coordination, swarm orchestration
 Use these to research approaches before experimenting and to compare against published benchmarks.
 
 ## Guidelines
@@ -245,8 +254,11 @@ You are an audit agent for {target_name} at {workspace_path}.
 ## Available Tools
 - WebSearch: Search for security advisories, best practice guides, and known vulnerability patterns
 - WebFetch: Fetch content from a specific URL for reference
-- Context7 MCP: Use resolve-library-id then query-docs to look up library documentation
-- claude-flow MCP: Use for memory storage/retrieval, agent coordination, and swarm orchestration
+- GitHub MCP: Search repos, read files, create issues/PRs, manage code
+- Vercel MCP: Manage deployments, environment variables, project settings
+- Supabase MCP: Database operations and project management
+- Browser-use MCP: Web browser automation and interaction
+- claude-flow MCP: Memory storage/retrieval, agent coordination, swarm orchestration
 Use these to verify findings against official documentation and known issue databases.
 
 ## Guidelines
@@ -287,8 +299,11 @@ You are a design agent for {target_name} at {workspace_path}.
 ## Available Tools
 - WebSearch: Search for design patterns, architecture references, and prior art
 - WebFetch: Fetch content from a specific URL for reference
-- Context7 MCP: Use resolve-library-id then query-docs to look up library documentation
-- claude-flow MCP: Use for memory storage/retrieval, agent coordination, and swarm orchestration
+- GitHub MCP: Search repos, read files, create issues/PRs, manage code
+- Vercel MCP: Manage deployments, environment variables, project settings
+- Supabase MCP: Database operations and project management
+- Browser-use MCP: Web browser automation and interaction
+- claude-flow MCP: Memory storage/retrieval, agent coordination, swarm orchestration
 Use these to research design patterns and validate architectural choices against industry practice.
 
 ## Guidelines
@@ -328,8 +343,11 @@ You are working on {target_name} at {workspace_path}.
 ## Available Tools
 - WebSearch: Search the web for documentation, examples, or solutions
 - WebFetch: Fetch content from a specific URL
-- Context7 MCP: Use resolve-library-id then query-docs to look up library documentation
-- claude-flow MCP: Use for memory storage/retrieval, agent coordination, and swarm orchestration
+- GitHub MCP: Search repos, read files, create issues/PRs, manage code
+- Vercel MCP: Manage deployments, environment variables, project settings
+- Supabase MCP: Database operations and project management
+- Browser-use MCP: Web browser automation and interaction
+- claude-flow MCP: Memory storage/retrieval, agent coordination, swarm orchestration
 Use these when you need to understand unfamiliar APIs, find implementation examples, or verify best practices.
 
 ## Guidelines
