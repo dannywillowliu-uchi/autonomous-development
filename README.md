@@ -96,14 +96,30 @@ Each mission:
 10. **Evaluator agent** -- At mission end, a Claude subprocess with shell/file access runs the software, checks endpoints, and inspects output
 11. **Strategize** -- Strategist proposes follow-up objectives; `--chain` auto-starts the next mission
 
-## Quick start
+## Quickstart
 
 ```bash
-# Clone and install
 git clone git@github.com:dannywillowliu-uchi/autonomous-development.git
 cd autonomous-development
-uv venv && uv pip install -e .
+make setup && make traces && make run
+```
 
+This installs dependencies (including tracing), starts Jaeger for trace collection, and launches a mission. Open http://localhost:16686 for the Jaeger UI and http://localhost:8080 for the live dashboard.
+
+### Make targets
+
+| Target | Description |
+|--------|-------------|
+| `make setup` | Create venv and install all deps (`uv sync --extra dev --extra tracing`) |
+| `make test` | Run pytest and ruff |
+| `make traces` | Start Jaeger (OTLP on :4317/:4318, UI on :16686) |
+| `make dashboard` | Start live web dashboard on :8080 |
+| `make run` | Run a mission with default config |
+| `make clean` | Stop Docker containers |
+
+### Manual setup
+
+```bash
 # Configure (edit to point at your repo)
 cp mission-control.toml.example mission-control.toml
 # Edit: target.path, target.objective, target.verification.command
@@ -231,7 +247,7 @@ port = 5000
 
 [tracing]
 enabled = false
-endpoint = "http://localhost:4318"  # OTLP endpoint
+otlp_endpoint = "http://localhost:4317"  # OTLP gRPC (Jaeger via docker-compose)
 service_name = "mission-control"
 ```
 
