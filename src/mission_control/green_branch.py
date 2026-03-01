@@ -19,6 +19,7 @@ from mission_control.config import MissionConfig
 from mission_control.db import Database
 from mission_control.models import VerificationNodeKind, VerificationReport
 from mission_control.state import run_verification_nodes
+from mission_control.trace_log import TraceEvent, TraceLogger
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +70,20 @@ class UnitMergeResult:
 class GreenBranchManager:
 	"""Manages the mc/green branch lifecycle."""
 
-	def __init__(self, config: MissionConfig, db: Database) -> None:
+	def __init__(self, config: MissionConfig, db: Database, trace_logger: TraceLogger | None = None) -> None:
 		self.config = config
 		self.db = db
 		self.workspace: str = ""
 		self._merge_lock = asyncio.Lock()
 		self._hitl_gate: object | None = None  # ApprovalGate, lazily typed to avoid circular import
 		self._merges_since_push: int = 0
+		self._trace_logger = trace_logger
+
+	def _trace(self, event_type: str, **details: object) -> None:
+		"""Emit a trace event if a logger is configured."""
+		if self._trace_logger is None:
+			return
+		self._trace_logger.write(TraceEvent(event_type=event_type, details=details))
 
 	def configure_hitl(self, gate: object) -> None:
 		"""Set the HITL approval gate for push and large merge checks."""
@@ -134,6 +142,7 @@ class GreenBranchManager:
 			if not ok:
 				logger.info("Creating branch %s in source repo from %s", branch, base)
 				await self._run_git_in(source_repo, "branch", branch, base)
+				self._trace("branch_created", branch=branch, base=base, repo="source")
 			elif gb.reset_on_init:
 				logger.info("Resetting branch %s in source repo to %s", branch, base)
 				await self._run_git_in(
@@ -148,6 +157,7 @@ class GreenBranchManager:
 			ok, _ = await self._run_git("rev-parse", "--verify", branch)
 			if not ok:
 				await self._run_git("branch", branch, f"origin/{branch}")
+				self._trace("branch_created", branch=branch, base=f"origin/{branch}", repo="workspace")
 			elif gb.reset_on_init:
 				await self._run_git("update-ref", f"refs/heads/{branch}", base)
 
@@ -587,8 +597,13 @@ class GreenBranchManager:
 				rebase_branch = f"mc/rebase-{branch_name}"
 				await self._run_git("branch", "-D", rebase_branch)
 				await self._run_git("branch", rebase_branch, f"{remote_name}/{branch_name}")
+				self._trace("rebase_attempted", branch=branch_name, onto=gb.green_branch)
 				rebase_ok, rebase_out = await self._run_git(
 					"rebase", gb.green_branch, rebase_branch,
+				)
+				self._trace(
+					"rebase_result", branch=branch_name,
+					success=rebase_ok, output=rebase_out[:500],
 				)
 				if not rebase_ok:
 					await self._run_git("rebase", "--abort")
@@ -899,6 +914,8 @@ class GreenBranchManager:
 			if not ok:
 				logger.warning("Failed to sync %s to source repo: %s", branch, output)
 				all_ok = False
+			else:
+				self._trace("git_push", branch=branch, target="source")
 		return all_ok
 
 	async def push_green_to_main(self) -> bool:
@@ -958,6 +975,7 @@ class GreenBranchManager:
 				logger.error("Failed to push %s: %s", push_branch, output)
 				return False
 
+			self._trace("git_push", branch=push_branch, target="origin")
 			logger.info("Pushed mc/green to origin/%s", push_branch)
 			return True
 		finally:

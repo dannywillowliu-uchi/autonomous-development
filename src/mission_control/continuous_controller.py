@@ -737,7 +737,7 @@ class ContinuousController:
 			self._backend = backend
 
 		# Green branch manager
-		self._green_branch = GreenBranchManager(self.config, self.db)
+		self._green_branch = GreenBranchManager(self.config, self.db, trace_logger=self._trace_logger)
 		if isinstance(self._backend, (LocalBackend, ContainerBackend)):
 			gb_workspace = await self._backend.provision_workspace(
 				"green-branch-mgr", source_repo, self.config.target.branch,
@@ -2888,7 +2888,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				unit.id, workspace, cmd,
 				timeout=effective_timeout,
 			)
-			self._trace(unit.id, unit.id, "worker_spawned", prompt_length=len(prompt))
+			self._trace(unit.id, unit.id, "worker_spawned", prompt_length=len(prompt), prompt_summary=prompt[:200])
 
 			# Track worker subprocess lifecycle
 			worker = Worker(

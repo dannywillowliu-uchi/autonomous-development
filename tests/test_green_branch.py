@@ -15,6 +15,7 @@ from mission_control.config import (
 	GreenBranchConfig,
 	MissionConfig,
 	TargetConfig,
+	TraceLogConfig,
 	VerificationConfig,
 )
 from mission_control.continuous_controller import (
@@ -41,6 +42,7 @@ from mission_control.models import (
 	VerificationResult,
 	WorkUnit,
 )
+from mission_control.trace_log import TraceLogger
 
 
 def _config() -> MissionConfig:
@@ -2783,3 +2785,141 @@ class TestReconcilerSweep:
 
 		# With verify_before_merge=True, reconciler only fires at interval (3rd merge)
 		assert mock_gbm.run_reconciliation_check.await_count == 1
+
+
+def _traced_manager(tmp_path: Path) -> tuple[GreenBranchManager, Path]:
+	"""Create a GreenBranchManager with an enabled TraceLogger backed by a temp file."""
+	config = _config()
+	trace_file = tmp_path / "trace.jsonl"
+	trace_cfg = TraceLogConfig(enabled=True, path=str(trace_file))
+	trace_logger = TraceLogger(trace_cfg)
+	db = Database(":memory:")
+	mgr = GreenBranchManager(config, db, trace_logger=trace_logger)
+	mgr.workspace = "/tmp/test-workspace"
+	return mgr, trace_file
+
+
+def _read_trace_events(trace_file: Path) -> list[dict]:
+	import json
+	lines = trace_file.read_text().strip().splitlines()
+	return [json.loads(line) for line in lines]
+
+
+class TestTraceLogging:
+	"""Verify TraceLogger integration in GreenBranchManager."""
+
+	async def test_merge_unit_emits_rebase_events(self, tmp_path: Path) -> None:
+		"""Successful merge emits rebase_attempted and rebase_result events."""
+		mgr, trace_file = _traced_manager(tmp_path)
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/traced")
+		assert result.merged is True
+
+		events = _read_trace_events(trace_file)
+		event_types = [e["event_type"] for e in events]
+		assert "rebase_attempted" in event_types
+		assert "rebase_result" in event_types
+
+		rebase_attempted = next(e for e in events if e["event_type"] == "rebase_attempted")
+		assert rebase_attempted["details"]["branch"] == "feat/traced"
+
+		rebase_result = next(e for e in events if e["event_type"] == "rebase_result")
+		assert rebase_result["details"]["success"] is True
+		assert rebase_result["details"]["branch"] == "feat/traced"
+
+	async def test_merge_rebase_failure_emits_rebase_result_false(self, tmp_path: Path) -> None:
+		"""Rebase failure emits rebase_result with success=False."""
+		mgr, trace_file = _traced_manager(tmp_path)
+
+		async def side_effect(*args: str) -> tuple[bool, str]:
+			if args[0] == "rebase":
+				return (False, "CONFLICT")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=side_effect)
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/conflict")
+		assert result.merged is False
+
+		events = _read_trace_events(trace_file)
+		rebase_result = next(e for e in events if e["event_type"] == "rebase_result")
+		assert rebase_result["details"]["success"] is False
+
+	async def test_sync_to_source_emits_git_push(self, tmp_path: Path) -> None:
+		"""Successful sync emits git_push events for green and working branches."""
+		mgr, trace_file = _traced_manager(tmp_path)
+
+		async def mock_run_git_in(cwd: str, *args: str) -> tuple[bool, str]:
+			return (True, "")
+
+		mgr._run_git_in = mock_run_git_in  # type: ignore[assignment]
+
+		result = await mgr._sync_to_source()
+		assert result is True
+
+		events = _read_trace_events(trace_file)
+		push_events = [e for e in events if e["event_type"] == "git_push"]
+		assert len(push_events) == 2
+		targets = {e["details"]["target"] for e in push_events}
+		assert targets == {"source"}
+
+	async def test_push_green_to_main_emits_git_push(self, tmp_path: Path) -> None:
+		"""Successful push emits git_push event with target=origin."""
+		mgr, trace_file = _traced_manager(tmp_path)
+		mgr.config.green_branch.auto_push = True
+		mgr.config.green_branch.push_branch = "main"
+
+		async def mock_run_git_in(cwd: str, *args: str) -> tuple[bool, str]:
+			return (True, "")
+
+		mgr._run_git_in = mock_run_git_in  # type: ignore[assignment]
+
+		result = await mgr.push_green_to_main()
+		assert result is True
+
+		events = _read_trace_events(trace_file)
+		push_events = [e for e in events if e["event_type"] == "git_push"]
+		assert len(push_events) >= 1
+		origin_push = next(e for e in push_events if e["details"]["target"] == "origin")
+		assert origin_push["details"]["branch"] == "main"
+
+	async def test_no_trace_when_logger_is_none(self) -> None:
+		"""Without a trace logger, merge_unit works normally with no trace output."""
+		mgr = _manager()  # No trace logger
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr._sync_to_source = AsyncMock()  # type: ignore[method-assign]
+
+		result = await mgr.merge_unit("/tmp/worker", "feat/no-trace")
+		assert result.merged is True
+		assert mgr._trace_logger is None
+
+	async def test_initialize_emits_branch_created(self, tmp_path: Path) -> None:
+		"""Branch creation during initialize() emits branch_created events."""
+		mgr, trace_file = _traced_manager(tmp_path)
+		mgr.config.green_branch.reset_on_init = False
+
+		async def mock_run_git_in(cwd: str, *args: str) -> tuple[bool, str]:
+			# rev-parse --verify returns False (branch doesn't exist)
+			if args[0] == "rev-parse" and args[1] == "--verify":
+				return (False, "")
+			return (True, "")
+
+		async def mock_run_git(*args: str) -> tuple[bool, str]:
+			if args[0] == "rev-parse" and args[1] == "--verify":
+				return (False, "")
+			return (True, "")
+
+		mgr._run_git_in = mock_run_git_in  # type: ignore[assignment]
+		mgr._run_git = AsyncMock(side_effect=mock_run_git)
+
+		await mgr.initialize("/tmp/workspace")
+
+		events = _read_trace_events(trace_file)
+		created_events = [e for e in events if e["event_type"] == "branch_created"]
+		# Should have at least 2 branch_created events (source + workspace for each branch)
+		assert len(created_events) >= 2
+		repos = [e["details"]["repo"] for e in created_events]
+		assert "source" in repos
+		assert "workspace" in repos
