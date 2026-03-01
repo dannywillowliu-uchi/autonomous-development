@@ -12,7 +12,6 @@ from mission_control.config import MissionConfig, build_claude_cmd
 from mission_control.db import Database
 from mission_control.models import Handoff, MergeRequest, Worker, WorkUnit, _now_iso
 from mission_control.session import parse_mc_result, validate_mc_result
-from mission_control.trace_log import TraceEvent, TraceLogger
 
 logger = logging.getLogger(__name__)
 
@@ -610,7 +609,6 @@ class WorkerAgent:
 		config: MissionConfig,
 		backend: WorkerBackend,
 		heartbeat_interval: int = 30,
-		trace_logger: TraceLogger | None = None,
 	) -> None:
 		self.worker = worker
 		self.db = db
@@ -620,18 +618,6 @@ class WorkerAgent:
 		self.running = True
 		self._heartbeat_task: asyncio.Task[None] | None = None
 		self._current_handle: WorkerHandle | None = None
-		self._trace_logger = trace_logger
-
-	def _trace(self, event_type: str, **details: object) -> None:
-		"""Emit a trace event if a logger is configured."""
-		if self._trace_logger is None:
-			return
-		self._trace_logger.write(TraceEvent(
-			worker_id=self.worker.id,
-			unit_id=self.worker.current_unit_id or "",
-			event_type=event_type,
-			details=details,
-		))
 
 	async def run(self) -> None:
 		"""Main loop: claim -> execute -> report, until stopped."""
@@ -644,7 +630,6 @@ class WorkerAgent:
 			self.worker.status = "working"
 			self.worker.current_unit_id = unit.id
 			await self.db.locked_call("update_worker", self.worker)
-			self._trace("worker_claimed", unit_title=unit.title)
 
 			try:
 				await self._execute_unit(unit)
@@ -721,12 +706,6 @@ class WorkerAgent:
 			timeout=effective_timeout,
 		)
 		self._current_handle = handle
-		self._trace(
-			"session_started",
-			pid=handle.pid,
-			prompt_length=len(prompt),
-			prompt_summary=prompt[:200],
-		)
 
 		deadline = time.monotonic() + effective_timeout
 		while True:
@@ -741,7 +720,6 @@ class WorkerAgent:
 
 		output = await self.backend.get_output(handle)
 		exit_code = 0 if status == "completed" else 1
-		self._trace("session_ended", exit_code=exit_code)
 		return output, exit_code
 
 	async def _execute_unit(self, unit: WorkUnit) -> None:

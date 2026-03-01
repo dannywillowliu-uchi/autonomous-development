@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -1377,62 +1376,3 @@ class TestPipInstallConstraint:
 		unit = WorkUnit(title="X", description="Y")
 		prompt = render_editor_prompt(unit, config, "/tmp/ws", architect_output="Do Z")
 		assert self._PIP_CONSTRAINT in prompt
-
-
-class TestWorkerAgentTraceLogger:
-	"""Tests for TraceLogger integration in WorkerAgent."""
-
-	def test_construction_accepts_trace_logger(
-		self, db: Database, config: MissionConfig, mock_backend: MockBackend,
-	) -> None:
-		"""WorkerAgent.__init__ accepts an optional trace_logger param."""
-		from mission_control.config import TraceLogConfig
-		from mission_control.trace_log import TraceLogger
-
-		w = Worker(id="w-trace")
-		tl = TraceLogger(TraceLogConfig(enabled=True, path="/tmp/trace.jsonl"))
-		agent = WorkerAgent(w, db, config, mock_backend, trace_logger=tl)
-		assert agent._trace_logger is tl  # noqa: SLF001
-
-	def test_construction_without_trace_logger(
-		self, db: Database, config: MissionConfig, mock_backend: MockBackend,
-	) -> None:
-		"""WorkerAgent defaults trace_logger to None."""
-		w = Worker(id="w-none")
-		agent = WorkerAgent(w, db, config, mock_backend)
-		assert agent._trace_logger is None  # noqa: SLF001
-
-	def test_trace_noop_when_logger_is_none(
-		self, db: Database, config: MissionConfig, mock_backend: MockBackend,
-	) -> None:
-		"""_trace() should silently do nothing when no logger is set."""
-		w = Worker(id="w-noop")
-		agent = WorkerAgent(w, db, config, mock_backend)
-		# Should not raise
-		agent._trace("test_event", key="value")  # noqa: SLF001
-
-	def test_trace_writes_event_when_logger_provided(
-		self, db: Database, config: MissionConfig, mock_backend: MockBackend, tmp_path: Path,
-	) -> None:
-		"""_trace() should write a TraceEvent with correct event_type and details."""
-		import json
-
-		from mission_control.config import TraceLogConfig
-		from mission_control.trace_log import TraceLogger
-
-		trace_path = tmp_path / "trace.jsonl"
-		tl = TraceLogger(TraceLogConfig(enabled=True, path=str(trace_path)))
-		w = Worker(id="w-emit")
-		w.current_unit_id = "unit-42"
-		agent = WorkerAgent(w, db, config, mock_backend, trace_logger=tl)
-
-		agent._trace("session_started", pid=12345, prompt_length=500)  # noqa: SLF001
-
-		lines = trace_path.read_text().strip().splitlines()
-		assert len(lines) == 1
-		event = json.loads(lines[0])
-		assert event["event_type"] == "session_started"
-		assert event["worker_id"] == "w-emit"
-		assert event["unit_id"] == "unit-42"
-		assert event["details"]["pid"] == 12345
-		assert event["details"]["prompt_length"] == 500
