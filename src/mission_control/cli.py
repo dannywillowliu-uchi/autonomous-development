@@ -106,6 +106,13 @@ def build_parser() -> argparse.ArgumentParser:
 	a2a = sub.add_parser("a2a", help="Start the A2A protocol server")
 	a2a.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
 
+	# mc trace
+	trace = sub.add_parser("trace", help="Read trace file and print human-readable timeline")
+	trace.add_argument("file", nargs="?", default="trace.jsonl", help="Trace JSONL file (default: trace.jsonl)")
+	trace.add_argument("--worker", default=None, help="Filter by worker ID")
+	trace.add_argument("--type", default=None, dest="event_type", help="Filter by event type")
+	trace.add_argument("--json", action="store_true", dest="json_output", help="Output raw JSON instead of formatted")
+
 	# mc validate-config
 	vc = sub.add_parser("validate-config", help="Validate config file semantically")
 	vc.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
@@ -821,6 +828,81 @@ def cmd_a2a(args: argparse.Namespace) -> int:
 
 
 
+def cmd_trace(args: argparse.Namespace) -> int:
+	"""Read a trace JSONL file and print a human-readable timeline."""
+	import json as json_mod
+	from collections import defaultdict
+	from datetime import datetime, timezone
+
+	from mission_control.trace_log import TraceEvent
+
+	trace_path = Path(args.file)
+	if not trace_path.exists():
+		print(f"Error: trace file not found: {trace_path}")
+		return 1
+
+	# Parse all events
+	events: list[TraceEvent] = []
+	with open(trace_path) as f:
+		for line_num, line in enumerate(f, 1):
+			line = line.strip()
+			if not line:
+				continue
+			try:
+				data = json_mod.loads(line)
+				events.append(TraceEvent.from_dict(data))
+			except (json_mod.JSONDecodeError, TypeError) as exc:
+				print(f"Warning: skipping invalid line {line_num}: {exc}")
+
+	if not events:
+		print("No trace events found.")
+		return 0
+
+	# Apply filters
+	if args.worker:
+		events = [e for e in events if e.worker_id == args.worker]
+	if args.event_type:
+		events = [e for e in events if e.event_type == args.event_type]
+
+	if not events:
+		print("No events match the given filters.")
+		return 0
+
+	# JSON passthrough mode
+	if args.json_output:
+		for e in events:
+			print(json_mod.dumps(e.to_dict()))
+		return 0
+
+	# Parse the earliest timestamp as the baseline for relative times
+	def _parse_ts(ts: str) -> datetime:
+		try:
+			return datetime.fromisoformat(ts)
+		except ValueError:
+			return datetime.now(timezone.utc)
+
+	t0 = _parse_ts(events[0].timestamp)
+
+	# Group events by unit_id
+	groups: dict[str, list[TraceEvent]] = defaultdict(list)
+	for e in events:
+		key = e.unit_id or "(no unit)"
+		groups[key].append(e)
+
+	for unit_id, unit_events in groups.items():
+		print(f"\n== Unit: {unit_id} ==")
+		for e in unit_events:
+			dt = _parse_ts(e.timestamp)
+			rel = (dt - t0).total_seconds()
+			details_str = ""
+			if e.details:
+				parts = [f"{k}={v}" for k, v in e.details.items()]
+				details_str = " " + " ".join(parts)
+			print(f"  +{rel:>8.1f}s  {e.event_type:<20} worker={e.worker_id}{details_str}")
+
+	return 0
+
+
 def cmd_intel(args: argparse.Namespace) -> int:
 	"""Scan external sources for AI/agent ecosystem intelligence."""
 	import dataclasses
@@ -865,6 +947,7 @@ COMMANDS = {
 	"dashboard": cmd_dashboard,
 	"live": cmd_live,
 	"summary": cmd_summary,
+	"trace": cmd_trace,
 	"intel": cmd_intel,
 
 	"register": cmd_register,

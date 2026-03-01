@@ -12,6 +12,7 @@ from mission_control.cli import (
 	cmd_live,
 	cmd_mission,
 	cmd_summary,
+	cmd_trace,
 	main,
 )
 from mission_control.db import Database
@@ -233,3 +234,91 @@ class TestCmdLive:
 		assert db_path.exists()
 
 
+SAMPLE_EVENTS = [
+	'{"timestamp":"2026-01-15T10:00:00+00:00","worker_id":"w1","unit_id":"u1","event_type":"spawn","details":{"branch":"mc/unit-1"}}',
+	'{"timestamp":"2026-01-15T10:00:05+00:00","worker_id":"w1","unit_id":"u1","event_type":"session_start","details":{}}',
+	'{"timestamp":"2026-01-15T10:00:30+00:00","worker_id":"w2","unit_id":"u2","event_type":"spawn","details":{"branch":"mc/unit-2"}}',
+	'{"timestamp":"2026-01-15T10:01:00+00:00","worker_id":"w1","unit_id":"u1","event_type":"merge","details":{"result":"ok"}}',
+	'{"timestamp":"2026-01-15T10:01:10+00:00","worker_id":"w2","unit_id":"u2","event_type":"merge","details":{"result":"conflict"}}',
+]
+
+
+class TestCmdTrace:
+	def _write_trace(self, tmp_path: Path, lines: list[str] | None = None) -> Path:
+		trace_file = tmp_path / "trace.jsonl"
+		trace_file.write_text("\n".join(lines or SAMPLE_EVENTS) + "\n")
+		return trace_file
+
+	def test_timeline_output_format(self, tmp_path: Path, capsys: object) -> None:
+		"""Timeline groups by unit_id and shows relative timestamps."""
+		trace_file = self._write_trace(tmp_path)
+		parser = build_parser()
+		args = parser.parse_args(["trace", str(trace_file)])
+		result = cmd_trace(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "== Unit: u1 ==" in out
+		assert "== Unit: u2 ==" in out
+		assert "spawn" in out
+		assert "worker=w1" in out
+		# First event should be +0.0s relative
+		assert "+     0.0s" in out
+
+	def test_worker_filter(self, tmp_path: Path, capsys: object) -> None:
+		"""--worker filters to a single worker's events."""
+		trace_file = self._write_trace(tmp_path)
+		parser = build_parser()
+		args = parser.parse_args(["trace", str(trace_file), "--worker", "w2"])
+		result = cmd_trace(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "worker=w2" in out
+		assert "worker=w1" not in out
+
+	def test_type_filter(self, tmp_path: Path, capsys: object) -> None:
+		"""--type filters to a specific event type."""
+		trace_file = self._write_trace(tmp_path)
+		parser = build_parser()
+		args = parser.parse_args(["trace", str(trace_file), "--type", "merge"])
+		result = cmd_trace(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "merge" in out
+		assert "spawn" not in out
+
+	def test_json_passthrough(self, tmp_path: Path, capsys: object) -> None:
+		"""--json outputs raw JSON lines."""
+		import json
+
+		trace_file = self._write_trace(tmp_path)
+		parser = build_parser()
+		args = parser.parse_args(["trace", str(trace_file), "--json"])
+		result = cmd_trace(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		lines = [line for line in out.strip().splitlines() if line]
+		assert len(lines) == 5
+		# Each line should be valid JSON
+		for line in lines:
+			parsed = json.loads(line)
+			assert "event_type" in parsed
+
+	def test_missing_file(self, tmp_path: Path, capsys: object) -> None:
+		"""Missing trace file returns error code 1."""
+		parser = build_parser()
+		args = parser.parse_args(["trace", str(tmp_path / "nonexistent.jsonl")])
+		result = cmd_trace(args)
+		assert result == 1
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "not found" in out
+
+	def test_empty_file(self, tmp_path: Path, capsys: object) -> None:
+		"""Empty trace file prints message and returns 0."""
+		trace_file = tmp_path / "trace.jsonl"
+		trace_file.write_text("")
+		parser = build_parser()
+		args = parser.parse_args(["trace", str(trace_file)])
+		result = cmd_trace(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "No trace events" in out
