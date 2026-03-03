@@ -815,6 +815,58 @@ class ContinuousController:
 			enable_recovery=hb.enable_recovery,
 		)
 
+	def _handle_completion_common(
+		self,
+		unit: WorkUnit,
+		handoff: Handoff | None,
+		epoch: Epoch,
+		mission: Mission,
+		merged: bool,
+		changelog_label: str | None = None,
+	) -> None:
+		"""Shared bookkeeping for all unit-type completions.
+
+		Handles cost accounting, EMA updates, mission DB persistence,
+		causal signal recording, and MISSION_STATE.md changelog updates.
+
+		Args:
+			changelog_label: If set, a changelog entry is appended and
+				MISSION_STATE.md is updated.  Pass None to skip (e.g. when
+				the caller manages its own changelog).
+		"""
+		# Cost accounting and EMA
+		mission.total_cost_usd += unit.cost_usd
+		if unit.cost_usd > 0:
+			self._ema.update(unit.cost_usd)
+
+		# Persist mission cost
+		try:
+			self.db.update_mission(mission)
+		except Exception as exc:
+			logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
+
+		# Causal attribution
+		try:
+			signal = self._build_causal_signal(unit, epoch, mission, merged=merged)
+			self._causal_attributor.record(signal)
+		except Exception:
+			pass
+
+		# Changelog + MISSION_STATE.md
+		if changelog_label is not None:
+			timestamp = unit.finished_at or _now_iso()
+			summary = (handoff.summary[:80] if handoff and handoff.summary else unit.output_summary[:80])
+			self._state_changelog.append(
+				f"- {timestamp} | {unit.id[:8]} {changelog_label} -- {summary}"
+			)
+			try:
+				update_mission_state(
+					self.db, mission, self.config, self._state_changelog,
+					degradation_status=self._degradation.get_status_dict(),
+				)
+			except Exception as exc:
+				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
+
 	async def _process_single_completion(
 		self,
 		completion: WorkerCompletion,
@@ -831,257 +883,41 @@ class ContinuousController:
 		epoch = completion.epoch
 		workspace = completion.workspace
 
-		# Research units: skip merge, just record findings
-		if unit.unit_type == "research":
+		# Non-merge unit types: research, experiment, audit, design
+		no_merge_types = {"research", "experiment", "audit", "design"}
+		no_merge_event_types = {
+			"research": UNIT_EVENT_RESEARCH_COMPLETED,
+			"experiment": "experiment_completed",
+			"audit": UNIT_EVENT_AUDIT_COMPLETED,
+			"design": UNIT_EVENT_DESIGN_COMPLETED,
+		}
+
+		if unit.unit_type in no_merge_types:
 			if unit.status != "completed":
 				self._total_failed += 1
-				logger.info("Research unit %s failed", unit.id)
-				mission.total_cost_usd += unit.cost_usd
-				if unit.cost_usd > 0:
-					self._ema.update(unit.cost_usd)
-				try:
-					self.db.update_mission(mission)
-				except Exception as exc:
-					logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
-				try:
-					signal = self._build_causal_signal(unit, epoch, mission, merged=False)
-					self._causal_attributor.record(signal)
-				except Exception:
-					pass
+				logger.info("%s unit %s failed", unit.unit_type.capitalize(), unit.id)
+				self._handle_completion_common(unit, handoff, epoch, mission, merged=False)
 				return
-			logger.info("Research unit %s completed -- skipping merge", unit.id)
+
+			logger.info("%s unit %s completed -- skipping merge", unit.unit_type.capitalize(), unit.id)
 			self._total_merged += 1
 			self._completed_unit_ids.add(unit.id)
-			self._log_unit_event(
-				mission_id=mission.id,
-				epoch_id=epoch.id,
-				work_unit_id=unit.id,
-				event_type=UNIT_EVENT_RESEARCH_COMPLETED,
-			)
-			self._extract_knowledge(unit, handoff, mission)
-
-			timestamp = unit.finished_at or _now_iso()
-			summary = (handoff.summary[:80] if handoff and handoff.summary else unit.output_summary[:80])
-			self._state_changelog.append(
-				f"- {timestamp} | {unit.id[:8]} research completed -- {summary}"
-			)
-
-			try:
-				update_mission_state(
-					self.db, mission, self.config, self._state_changelog,
-					degradation_status=self._degradation.get_status_dict(),
-				)
-			except Exception as exc:
-				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
-
-			mission.total_cost_usd += unit.cost_usd
-			if unit.cost_usd > 0:
-				self._ema.update(unit.cost_usd)
-			try:
-				self.db.update_mission(mission)
-			except Exception as exc:
-				logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
-			try:
-				signal = self._build_causal_signal(unit, epoch, mission, merged=True)
-				self._causal_attributor.record(signal)
-			except Exception:
-				pass
-			return
-
-		# Experiment units: skip merge, store comparison report
-		if unit.unit_type == "experiment":
-			if unit.status != "completed":
-				self._total_failed += 1
-				logger.info("Experiment unit %s failed", unit.id)
-				mission.total_cost_usd += unit.cost_usd
-				if unit.cost_usd > 0:
-					self._ema.update(unit.cost_usd)
-				try:
-					self.db.update_mission(mission)
-				except Exception as exc:
-					logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
-				try:
-					signal = self._build_causal_signal(unit, epoch, mission, merged=False)
-					self._causal_attributor.record(signal)
-				except Exception:
-					pass
-				return
-			logger.info("Experiment unit %s completed -- skipping merge", unit.id)
-			self._total_merged += 1
-			self._completed_unit_ids.add(unit.id)
-
-			# Parse comparison report from handoff and store as ExperimentResult
-			comparison_report = ""
-			recommended_approach = ""
-			approach_count = 2
-			if handoff:
-				try:
-					for item in handoff.discoveries:
-						if isinstance(item, str) and "approach" in item.lower():
-							comparison_report = item
-							break
-				except (json.JSONDecodeError, TypeError):
-					pass
-				# Also check the handoff summary for report data
-				if handoff.summary:
-					if not comparison_report:
-						comparison_report = handoff.summary
-					recommended_approach = handoff.summary[:200]
-
-			try:
-				experiment_result = ExperimentResult(
-					work_unit_id=unit.id,
-					epoch_id=epoch.id,
-					mission_id=mission.id,
-					approach_count=approach_count,
-					comparison_report=comparison_report,
-					recommended_approach=recommended_approach,
-				)
-				self.db.insert_experiment_result(experiment_result)
-			except Exception as exc:
-				logger.warning("Failed to insert experiment result for unit %s: %s", unit.id, exc)
 
 			self._log_unit_event(
 				mission_id=mission.id,
 				epoch_id=epoch.id,
 				work_unit_id=unit.id,
-				event_type="experiment_completed",
+				event_type=no_merge_event_types[unit.unit_type],
 			)
 
-			timestamp = unit.finished_at or _now_iso()
-			summary = (handoff.summary[:80] if handoff and handoff.summary else unit.output_summary[:80])
-			self._state_changelog.append(
-				f"- {timestamp} | {unit.id[:8]} experiment completed -- {summary}"
-			)
+			# Type-specific logic
+			if unit.unit_type in ("research", "audit", "design"):
+				self._extract_knowledge(unit, handoff, mission)
+			elif unit.unit_type == "experiment":
+				self._store_experiment_result(unit, handoff, epoch, mission)
 
-			try:
-				update_mission_state(
-					self.db, mission, self.config, self._state_changelog,
-					degradation_status=self._degradation.get_status_dict(),
-				)
-			except Exception as exc:
-				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
-
-			mission.total_cost_usd += unit.cost_usd
-			if unit.cost_usd > 0:
-				self._ema.update(unit.cost_usd)
-			try:
-				self.db.update_mission(mission)
-			except Exception as exc:
-				logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
-			try:
-				signal = self._build_causal_signal(unit, epoch, mission, merged=True)
-				self._causal_attributor.record(signal)
-			except Exception:
-				pass
-			return
-
-		# Audit units: skip merge, extract knowledge
-		if unit.unit_type == "audit":
-			if unit.status != "completed":
-				self._total_failed += 1
-				logger.info("Audit unit %s failed", unit.id)
-				mission.total_cost_usd += unit.cost_usd
-				if unit.cost_usd > 0:
-					self._ema.update(unit.cost_usd)
-				try:
-					self.db.update_mission(mission)
-				except Exception as exc:
-					logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
-				try:
-					signal = self._build_causal_signal(unit, epoch, mission, merged=False)
-					self._causal_attributor.record(signal)
-				except Exception:
-					pass
-				return
-			logger.info("Audit unit %s completed -- skipping merge", unit.id)
-			self._total_merged += 1
-			self._completed_unit_ids.add(unit.id)
-			self._log_unit_event(
-				mission_id=mission.id,
-				epoch_id=epoch.id,
-				work_unit_id=unit.id,
-				event_type=UNIT_EVENT_AUDIT_COMPLETED,
-			)
-			self._extract_knowledge(unit, handoff, mission)
-			timestamp = unit.finished_at or _now_iso()
-			summary = (handoff.summary[:80] if handoff and handoff.summary else unit.output_summary[:80])
-			self._state_changelog.append(
-				f"- {timestamp} | {unit.id[:8]} audit completed -- {summary}"
-			)
-			try:
-				update_mission_state(
-					self.db, mission, self.config, self._state_changelog,
-					degradation_status=self._degradation.get_status_dict(),
-				)
-			except Exception as exc:
-				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
-			mission.total_cost_usd += unit.cost_usd
-			if unit.cost_usd > 0:
-				self._ema.update(unit.cost_usd)
-			try:
-				self.db.update_mission(mission)
-			except Exception as exc:
-				logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
-			try:
-				signal = self._build_causal_signal(unit, epoch, mission, merged=True)
-				self._causal_attributor.record(signal)
-			except Exception:
-				pass
-			return
-
-		# Design units: skip merge, store design decisions
-		if unit.unit_type == "design":
-			if unit.status != "completed":
-				self._total_failed += 1
-				logger.info("Design unit %s failed", unit.id)
-				mission.total_cost_usd += unit.cost_usd
-				if unit.cost_usd > 0:
-					self._ema.update(unit.cost_usd)
-				try:
-					self.db.update_mission(mission)
-				except Exception as exc:
-					logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
-				try:
-					signal = self._build_causal_signal(unit, epoch, mission, merged=False)
-					self._causal_attributor.record(signal)
-				except Exception:
-					pass
-				return
-			logger.info("Design unit %s completed -- skipping merge", unit.id)
-			self._total_merged += 1
-			self._completed_unit_ids.add(unit.id)
-			self._log_unit_event(
-				mission_id=mission.id,
-				epoch_id=epoch.id,
-				work_unit_id=unit.id,
-				event_type=UNIT_EVENT_DESIGN_COMPLETED,
-			)
-			self._extract_knowledge(unit, handoff, mission)
-			timestamp = unit.finished_at or _now_iso()
-			summary = (handoff.summary[:80] if handoff and handoff.summary else unit.output_summary[:80])
-			self._state_changelog.append(
-				f"- {timestamp} | {unit.id[:8]} design completed -- {summary}"
-			)
-			try:
-				update_mission_state(
-					self.db, mission, self.config, self._state_changelog,
-					degradation_status=self._degradation.get_status_dict(),
-				)
-			except Exception as exc:
-				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
-			mission.total_cost_usd += unit.cost_usd
-			if unit.cost_usd > 0:
-				self._ema.update(unit.cost_usd)
-			try:
-				self.db.update_mission(mission)
-			except Exception as exc:
-				logger.error("Failed to update mission cost for unit %s: %s", unit.id, exc)
-			try:
-				signal = self._build_causal_signal(unit, epoch, mission, merged=True)
-				self._causal_attributor.record(signal)
-			except Exception:
-				pass
+			label = f"{unit.unit_type} completed"
+			self._handle_completion_common(unit, handoff, epoch, mission, merged=True, changelog_label=label)
 			return
 
 		# Speculation branch: collect and run selection gate when all done
@@ -1263,39 +1099,23 @@ class ContinuousController:
 			except Exception as exc:
 				logger.debug("Failed to promote tools to MCP registry: %s", exc)
 
-		# Append changelog entry before updating state file
-		timestamp = unit.finished_at or _now_iso()
-		summary = (handoff.summary[:80] if handoff and handoff.summary else unit.output_summary[:80])
+		# Build changelog label for the default (implementation) path
 		if merged:
 			commit_str = unit.commit_hash or "no-commit"
-			self._state_changelog.append(
-				f"- {timestamp} | {unit.id[:8]} merged (commit: {commit_str}) -- {summary}"
-			)
+			changelog_label: str | None = f"merged (commit: {commit_str})"
 		elif unit.status == "failed":
-			self._state_changelog.append(
-				f"- {timestamp} | {unit.id[:8]} failed -- {summary}"
-			)
+			changelog_label = "failed"
+		else:
+			changelog_label = None
 
-		# Update MISSION_STATE.md in target repo
+		# Shared bookkeeping: cost, EMA, DB, causal, changelog, state
+		self._handle_completion_common(unit, handoff, epoch, mission, merged, changelog_label=changelog_label)
+
+		# DB success/error tracking (implementation-specific)
 		try:
-			update_mission_state(
-				self.db, mission, self.config, self._state_changelog,
-				degradation_status=self._degradation.get_status_dict(),
-			)
-		except Exception as exc:
-			logger.warning("Failed to update MISSION_STATE.md: %s", exc)
-
-		# Accumulate cost and feed EMA tracker
-		mission.total_cost_usd += unit.cost_usd
-		if unit.cost_usd > 0:
-			self._ema.update(unit.cost_usd)
-
-		try:
-			self.db.update_mission(mission)
 			self._record_db_success()
 		except Exception:
 			self._record_db_error()
-
 
 		# Prompt evolution: record outcome
 		if self._prompt_evolution is not None and completion.prompt_variant_id:
@@ -1314,12 +1134,12 @@ class ContinuousController:
 				scope_tokens = [
 					t.strip() for t in (unit.files_hint or "").split(",") if t.strip()
 				]
-				summary = (
+				ep_summary = (
 					handoff.summary[:200] if handoff and handoff.summary else unit.output_summary[:200]
 				)
 				self._memory_manager.store_episode(
 					event_type=event_type,
-					content=summary,
+					content=ep_summary,
 					outcome="pass" if merged else "fail",
 					scope_tokens=scope_tokens,
 				)
@@ -1332,13 +1152,6 @@ class ContinuousController:
 				self._circuit_breakers.record_success(workspace)
 			else:
 				self._circuit_breakers.record_failure(workspace)
-
-		# Causal attribution: record signal for this unit outcome
-		try:
-			signal = self._build_causal_signal(unit, epoch, mission, merged)
-			self._causal_attributor.record(signal)
-		except Exception as exc:
-			logger.debug("Failed to record causal signal: %s", exc)
 
 		# Reconciler sweep: verify combined green state after new merges
 		# Runs when verify_before_merge is off (each merge not pre-verified),
@@ -2272,7 +2085,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		if self._merge_queue_timer is not None:
 			return  # timer already running
 		wait = self.config.green_branch.batch_merge_wait_seconds
-		loop = asyncio.get_event_loop()
+		loop = asyncio.get_running_loop()
 		self._merge_queue_timer = loop.call_later(
 			wait, lambda: asyncio.ensure_future(self._flush_merge_batch()),
 		)
@@ -2730,6 +2543,39 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 					self._record_db_success()
 				except Exception:
 					self._record_db_error()
+
+	def _store_experiment_result(
+		self, unit: WorkUnit, handoff: Handoff | None, epoch: Epoch, mission: Mission,
+	) -> None:
+		"""Parse comparison report from handoff and store as ExperimentResult."""
+		comparison_report = ""
+		recommended_approach = ""
+		approach_count = 2
+		if handoff:
+			try:
+				for item in handoff.discoveries:
+					if isinstance(item, str) and "approach" in item.lower():
+						comparison_report = item
+						break
+			except (json.JSONDecodeError, TypeError):
+				pass
+			if handoff.summary:
+				if not comparison_report:
+					comparison_report = handoff.summary
+				recommended_approach = handoff.summary[:200]
+
+		try:
+			experiment_result = ExperimentResult(
+				work_unit_id=unit.id,
+				epoch_id=epoch.id,
+				mission_id=mission.id,
+				approach_count=approach_count,
+				comparison_report=comparison_report,
+				recommended_approach=recommended_approach,
+			)
+			self.db.insert_experiment_result(experiment_result)
+		except Exception as exc:
+			logger.warning("Failed to insert experiment result for unit %s: %s", unit.id, exc)
 
 	def _extract_knowledge(self, unit: WorkUnit, handoff: Handoff | None, mission: Mission) -> None:
 		"""Extract and persist knowledge from a non-code unit completion."""
