@@ -880,7 +880,9 @@ class TestVenvSymlink:
 class TestWorkerRecordPersistence:
 	"""Tests that Worker DB records are created/updated during _execute_single_unit."""
 
-	def _setup(self, config: MissionConfig, db: Database) -> tuple:
+	@pytest.fixture()
+	def worker_env(self, config: MissionConfig, db: Database):
+		"""Set up controller, epoch, and mock build_claude_cmd with automatic teardown."""
 		db.insert_mission(Mission(id="m1", objective="test"))
 		plan = Plan(id="p1", objective="test")
 		db.insert_plan(plan)
@@ -893,73 +895,67 @@ class TestWorkerRecordPersistence:
 			return getattr(db, method)(*args)
 		db.locked_call = mock_locked_call  # type: ignore[attr-defined]
 
-		patcher = patch("mission_control.continuous_controller.build_claude_cmd", return_value=["echo", "test"])
-		patcher.start()
-
-		return db, config, ctrl, epoch, patcher
+		with patch("mission_control.continuous_controller.build_claude_cmd", return_value=["echo", "test"]):
+			yield db, ctrl, epoch
 
 	@pytest.mark.asyncio
-	async def test_worker_created_on_spawn(self, config: MissionConfig, db: Database) -> None:
+	async def test_worker_created_on_spawn(self, worker_env) -> None:
 		"""Worker record is inserted after backend.spawn() succeeds."""
-		db, config, ctrl, epoch, patcher = self._setup(config, db)
-		try:
-			mock_backend = AsyncMock()
-			mock_handle = MagicMock()
-			mock_handle.pid = 42
-			mock_handle.workspace_path = "/tmp/ws/wu1"
-			mock_backend.spawn.return_value = mock_handle
-			mock_backend.check_status.return_value = "completed"
-			mock_backend.get_output.return_value = ""
-			ctrl._backend = mock_backend
+		db, ctrl, epoch = worker_env
 
-			unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
-			db.insert_work_unit(unit)
-			ctrl._semaphore = DynamicSemaphore(1)
+		mock_backend = AsyncMock()
+		mock_handle = MagicMock()
+		mock_handle.pid = 42
+		mock_handle.workspace_path = "/tmp/ws/wu1"
+		mock_backend.spawn.return_value = mock_handle
+		mock_backend.check_status.return_value = "completed"
+		mock_backend.get_output.return_value = ""
+		ctrl._backend = mock_backend
 
-			await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+		ctrl._semaphore = DynamicSemaphore(1)
 
-			worker = db.get_worker("wu1")
-			assert worker is not None
-			assert worker.workspace_path == "/tmp/ws/wu1"
-			assert worker.backend_type == "local"
-		finally:
-			patcher.stop()
+		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
+
+		worker = db.get_worker("wu1")
+		assert worker is not None
+		assert worker.workspace_path == "/tmp/ws/wu1"
+		assert worker.backend_type == "local"
 
 	@pytest.mark.asyncio
-	async def test_worker_idle_on_completion(self, config: MissionConfig, db: Database) -> None:
+	async def test_worker_idle_on_completion(self, worker_env) -> None:
 		"""Worker status set to idle after successful completion."""
-		db, config, ctrl, epoch, patcher = self._setup(config, db)
-		try:
-			mc_result = json.dumps({
-				"status": "completed", "commits": ["abc123"],
-				"summary": "Done", "files_changed": [], "discoveries": [], "concerns": [],
-			})
-			output = f"MC_RESULT:{mc_result}"
+		db, ctrl, epoch = worker_env
 
-			mock_backend = AsyncMock()
-			mock_handle = MagicMock()
-			mock_handle.pid = 42
-			mock_handle.workspace_path = "/tmp/ws"
-			mock_backend.spawn.return_value = mock_handle
-			mock_backend.check_status.return_value = "completed"
-			mock_backend.get_output.return_value = output
-			ctrl._backend = mock_backend
+		mc_result = json.dumps({
+			"status": "completed", "commits": ["abc123"],
+			"summary": "Done", "files_changed": [], "discoveries": [], "concerns": [],
+		})
+		output = f"MC_RESULT:{mc_result}"
 
-			unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
-			db.insert_work_unit(unit)
-			ctrl._semaphore = DynamicSemaphore(1)
+		mock_backend = AsyncMock()
+		mock_handle = MagicMock()
+		mock_handle.pid = 42
+		mock_handle.workspace_path = "/tmp/ws"
+		mock_backend.spawn.return_value = mock_handle
+		mock_backend.check_status.return_value = "completed"
+		mock_backend.get_output.return_value = output
+		ctrl._backend = mock_backend
 
-			await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+		ctrl._semaphore = DynamicSemaphore(1)
 
-			worker = db.get_worker("wu1")
-			assert worker is not None
-			assert worker.status == "idle"
-			assert worker.current_unit_id is None
-			assert worker.pid is None
-			assert worker.units_completed == 1
-			assert worker.units_failed == 0
-		finally:
-			patcher.stop()
+		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
+
+		worker = db.get_worker("wu1")
+		assert worker is not None
+		assert worker.status == "idle"
+		assert worker.current_unit_id is None
+		assert worker.pid is None
+		assert worker.units_completed == 1
+		assert worker.units_failed == 0
 
 
 
