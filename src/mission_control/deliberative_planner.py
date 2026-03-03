@@ -240,8 +240,8 @@ class DeliberativePlanner:
 		units = units[:max_units]
 
 		log.info(
-			"Deliberation complete: epoch=%d, units=%d, planner_cost=$%.2f",
-			self._epoch_counter, len(units), total_cost,
+			"Deliberation complete: epoch=%d, units=%d",
+			self._epoch_counter, len(units),
 		)
 
 		return plan, units, epoch
