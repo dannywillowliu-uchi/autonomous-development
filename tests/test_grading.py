@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
-from mission_control.grading import compute_decomposition_grade, format_decomposition_feedback
-from mission_control.models import UnitReview, WorkUnit
+from unittest.mock import MagicMock
+
+from mission_control.grading import (
+	compute_decomposition_grade,
+	format_decomposition_feedback,
+	get_epoch_grade_feedback,
+)
+from mission_control.models import Epoch, UnitReview, WorkUnit
 
 
 def _make_unit(
@@ -128,3 +134,96 @@ class TestFormatDecompositionFeedback:
 		text = format_decomposition_feedback(grade)
 		assert "retry_rate" in text
 		assert "decompose units more independently" in text
+
+
+def _mock_db(
+	epochs: list[Epoch] | None = None,
+	units: list[WorkUnit] | None = None,
+	reviews: list[UnitReview] | None = None,
+) -> MagicMock:
+	db = MagicMock()
+	db.get_epochs_for_mission.return_value = epochs or []
+	db.get_work_units_for_mission.return_value = units or []
+	db.get_unit_reviews_for_mission.return_value = reviews or []
+	return db
+
+
+class TestGetEpochGradeFeedback:
+	def test_empty_epochs_returns_empty(self) -> None:
+		"""No epochs at all -> empty feedback."""
+		db = _mock_db()
+		assert get_epoch_grade_feedback(db, "m1") == ""
+
+	def test_no_completed_epochs_returns_empty(self) -> None:
+		"""Epochs exist but none have finished_at set."""
+		db = _mock_db(epochs=[Epoch(id="ep1", mission_id="m1", finished_at=None)])
+		assert get_epoch_grade_feedback(db, "m1") == ""
+
+	def test_epoch_with_no_units_returns_empty(self) -> None:
+		"""Completed epoch exists but has no work units."""
+		db = _mock_db(
+			epochs=[Epoch(id="ep1", mission_id="m1", finished_at="2026-01-01T00:00:00")],
+			units=[],
+		)
+		assert get_epoch_grade_feedback(db, "m1") == ""
+
+	def test_single_epoch_mixed_results(self) -> None:
+		"""Epoch with mixed completed/failed units and reviews."""
+		epoch = Epoch(id="ep1", mission_id="m1", number=1, finished_at="2026-01-01T00:00:00")
+		units = [
+			WorkUnit(
+				id="u1", plan_id="p1", title="A", status="completed",
+				attempt=1, epoch_id="ep1", files_hint="a.py",
+			),
+			WorkUnit(
+				id="u2", plan_id="p1", title="B", status="failed",
+				attempt=2, epoch_id="ep1", files_hint="b.py",
+			),
+			WorkUnit(
+				id="u3", plan_id="p1", title="C", status="completed",
+				attempt=1, epoch_id="ep1", files_hint="a.py",
+			),
+		]
+		reviews = [
+			UnitReview(
+				work_unit_id="u1", epoch_id="ep1", mission_id="m1",
+				avg_score=8.0, alignment_score=8, approach_score=8, test_score=8,
+			),
+			UnitReview(
+				work_unit_id="u3", epoch_id="ep1", mission_id="m1",
+				avg_score=6.0, alignment_score=6, approach_score=6, test_score=6,
+			),
+		]
+		db = _mock_db(epochs=[epoch], units=units, reviews=reviews)
+		feedback = get_epoch_grade_feedback(db, "m1")
+
+		assert "Composite:" in feedback
+		assert "Completion: 67%" in feedback
+		assert "Retry: 33%" in feedback
+
+	def test_feedback_text_contains_quality_header(self) -> None:
+		"""Feedback starts with the decomposition quality header."""
+		epoch = Epoch(id="ep1", mission_id="m1", number=1, finished_at="2026-01-01T00:00:00")
+		units = [
+			WorkUnit(id="u1", plan_id="p1", title="A", status="completed", attempt=1, epoch_id="ep1"),
+		]
+		db = _mock_db(epochs=[epoch], units=units)
+		feedback = get_epoch_grade_feedback(db, "m1")
+
+		assert feedback.startswith("## Decomposition Quality")
+		assert "Reviews:" in feedback
+
+	def test_uses_latest_completed_epoch(self) -> None:
+		"""When multiple completed epochs exist, uses the last one."""
+		ep_old = Epoch(id="ep1", mission_id="m1", number=1, finished_at="2026-01-01T00:00:00")
+		ep_new = Epoch(id="ep2", mission_id="m1", number=2, finished_at="2026-01-02T00:00:00")
+		units = [
+			WorkUnit(id="u1", plan_id="p1", title="Old", status="failed", attempt=3, epoch_id="ep1"),
+			WorkUnit(id="u2", plan_id="p2", title="New", status="completed", attempt=1, epoch_id="ep2"),
+		]
+		db = _mock_db(epochs=[ep_old, ep_new], units=units)
+		feedback = get_epoch_grade_feedback(db, "m1")
+
+		# Only u2 (epoch ep2) should be graded: 100% completion, 0% retry
+		assert "Completion: 100%" in feedback
+		assert "Retry: 0%" in feedback
