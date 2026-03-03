@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
 from mission_control.db import Database
@@ -33,11 +33,90 @@ class BatchSignals:
 	knowledge_gaps: list[str] = field(default_factory=list)
 
 
+@dataclass
+class EpochCostSummary:
+	"""Per-epoch cost and throughput metrics."""
+
+	epoch_id: str = ""
+	total_cost_usd: float = 0.0
+	total_input_tokens: int = 0
+	total_output_tokens: int = 0
+	units_dispatched: int = 0
+	units_merged: int = 0
+	units_failed: int = 0
+	avg_cost_per_unit: float = 0.0
+	success_rate: float = 0.0
+
+
 class BatchAnalyzer:
 	"""Analyzes execution patterns from DB data -- no LLM calls."""
 
 	def __init__(self, db: Database) -> None:
 		self._db = db
+
+	def get_epoch_cost_summary(self, mission_id: str) -> list[EpochCostSummary]:
+		"""Return per-epoch cost/throughput metrics from work_units and unit_events."""
+		try:
+			epochs = self._db.get_epochs_for_mission(mission_id)
+		except Exception:
+			return []
+		if not epochs:
+			return []
+
+		try:
+			units = self._db.get_work_units_for_mission(mission_id)
+		except Exception:
+			units = []
+		try:
+			events = self._db.get_unit_events_for_mission(mission_id, limit=10000)
+		except Exception:
+			events = []
+
+		# Group work units by epoch_id
+		units_by_epoch: dict[str, list] = defaultdict(list)
+		for u in units:
+			if u.epoch_id:
+				units_by_epoch[u.epoch_id].append(u)
+
+		# Count event types by epoch_id
+		dispatched_by_epoch: Counter[str] = Counter()
+		merged_by_epoch: Counter[str] = Counter()
+		failed_by_epoch: Counter[str] = Counter()
+		for ev in events:
+			if ev.event_type == "dispatched":
+				dispatched_by_epoch[ev.epoch_id] += 1
+			elif ev.event_type == "merged":
+				merged_by_epoch[ev.epoch_id] += 1
+			elif ev.event_type in ("failed", "merge_failed"):
+				failed_by_epoch[ev.epoch_id] += 1
+
+		summaries: list[EpochCostSummary] = []
+		for epoch in epochs:
+			eid = epoch.id
+			epoch_units = units_by_epoch.get(eid, [])
+			planner_cost = getattr(epoch, "planner_cost_usd", 0.0) or 0.0
+			total_cost = sum(u.cost_usd for u in epoch_units) + planner_cost
+			total_input = sum(u.input_tokens for u in epoch_units)
+			total_output = sum(u.output_tokens for u in epoch_units)
+			dispatched = dispatched_by_epoch.get(eid, 0)
+			merged = merged_by_epoch.get(eid, 0)
+			failed = failed_by_epoch.get(eid, 0)
+			avg_cost = total_cost / dispatched if dispatched > 0 else 0.0
+			success = merged / dispatched if dispatched > 0 else 0.0
+
+			summaries.append(EpochCostSummary(
+				epoch_id=eid,
+				total_cost_usd=round(total_cost, 4),
+				total_input_tokens=total_input,
+				total_output_tokens=total_output,
+				units_dispatched=dispatched,
+				units_merged=merged,
+				units_failed=failed,
+				avg_cost_per_unit=round(avg_cost, 4),
+				success_rate=round(success, 2),
+			))
+
+		return summaries
 
 	def analyze(self, mission_id: str) -> BatchSignals:
 		"""Compute heuristic signals from mission execution data."""
@@ -174,4 +253,26 @@ def format_failure_stages(stages: dict[str, int]) -> str:
 	lines = [f"Failure breakdown ({total} total):"]
 	for stage, count in sorted(stages.items(), key=lambda x: -x[1]):
 		lines.append(f"  - {stage}: {count}")
+	return "\n".join(lines)
+
+
+def format_cost_trend(summaries: list[EpochCostSummary], last_n: int = 5) -> str:
+	"""Render the last N epoch cost summaries as a compact markdown table.
+
+	Returns an empty string if summaries is empty.
+	"""
+	if not summaries:
+		return ""
+	recent = summaries[-last_n:]
+	lines = [
+		"| Epoch | Cost ($) | In Tokens | Out Tokens | Dispatched | Merged | Failed | Avg $/Unit | Success % |",
+		"|-------|----------|-----------|------------|------------|--------|--------|------------|-----------|",
+	]
+	for s in recent:
+		pct = int(s.success_rate * 100)
+		lines.append(
+			f"| {s.epoch_id[:8]} | {s.total_cost_usd:.2f} | {s.total_input_tokens:,} "
+			f"| {s.total_output_tokens:,} | {s.units_dispatched} | {s.units_merged} "
+			f"| {s.units_failed} | {s.avg_cost_per_unit:.2f} | {pct}% |"
+		)
 	return "\n".join(lines)

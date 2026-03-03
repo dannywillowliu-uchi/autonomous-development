@@ -6,6 +6,7 @@ import logging
 from collections import defaultdict
 from pathlib import Path
 
+from mission_control.batch_analyzer import BatchAnalyzer, format_cost_trend
 from mission_control.config import MissionConfig
 from mission_control.db import Database
 from mission_control.models import Mission
@@ -43,6 +44,17 @@ def build_planner_context(db: Database, mission_id: str) -> str:
 			for sm in semantic_memories:
 				conf = f" (confidence: {sm.confidence:.1f})" if sm.confidence < 1.0 else ""
 				lines.append(f"- {sm.content}{conf}")
+	except Exception:
+		pass
+
+	# Epoch cost trend (last 5 epochs)
+	try:
+		analyzer = BatchAnalyzer(db)
+		summaries = analyzer.get_epoch_cost_summary(mission_id)
+		trend = format_cost_trend(summaries)
+		if trend:
+			lines.append("\n## Cost Trend (recent epochs)")
+			lines.append(trend)
 	except Exception:
 		pass
 
