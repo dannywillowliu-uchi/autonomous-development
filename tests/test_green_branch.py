@@ -732,6 +732,7 @@ class TestMergeBatch:
 	async def test_batch_empty_returns_empty(self) -> None:
 		"""An empty batch returns an empty list."""
 		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
 		results = await mgr.merge_batch([])
 		assert results == []
 
@@ -2923,3 +2924,110 @@ class TestTraceLogging:
 		repos = [e["details"]["repo"] for e in created_events]
 		assert "source" in repos
 		assert "workspace" in repos
+
+
+class TestCleanupStaleRemotes:
+	"""Tests for cleanup_stale_remotes()."""
+
+	async def test_removes_worker_remotes(self) -> None:
+		"""Stale worker-* remotes are removed."""
+		mgr = _manager()
+		git_calls: list[tuple[str, ...]] = []
+
+		async def mock_git(*args: str) -> tuple[bool, str]:
+			git_calls.append(args)
+			if args == ("remote",):
+				return (True, "origin\nworker-feat/foo\nworker-feat/bar\n")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=mock_git)
+
+		removed = await mgr.cleanup_stale_remotes()
+
+		assert removed == 2
+		remove_calls = [c for c in git_calls if c[:2] == ("remote", "remove")]
+		assert ("remote", "remove", "worker-feat/foo") in remove_calls
+		assert ("remote", "remove", "worker-feat/bar") in remove_calls
+
+	async def test_ignores_non_worker_remotes(self) -> None:
+		"""Non worker-* remotes (like origin) are not removed."""
+		mgr = _manager()
+
+		async def mock_git(*args: str) -> tuple[bool, str]:
+			if args == ("remote",):
+				return (True, "origin\nupstream\n")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=mock_git)
+
+		removed = await mgr.cleanup_stale_remotes()
+
+		assert removed == 0
+
+	async def test_no_remotes(self) -> None:
+		"""No crash when git remote returns empty output."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+
+		removed = await mgr.cleanup_stale_remotes()
+
+		assert removed == 0
+
+	async def test_git_remote_failure(self) -> None:
+		"""Returns 0 when git remote fails."""
+		mgr = _manager()
+		mgr._run_git = AsyncMock(return_value=(False, "fatal: not a git repository"))
+
+		removed = await mgr.cleanup_stale_remotes()
+
+		assert removed == 0
+
+	async def test_called_during_initialize(self) -> None:
+		"""cleanup_stale_remotes is called during initialize()."""
+		mgr = _manager()
+		mgr.config.green_branch.reset_on_init = False
+
+		async def mock_run_git_in(cwd: str, *args: str) -> tuple[bool, str]:
+			if args[0] == "rev-parse" and args[1] == "--verify":
+				return (True, "")
+			return (True, "")
+
+		mgr._run_git_in = mock_run_git_in  # type: ignore[assignment]
+		mgr._run_git = AsyncMock(return_value=(True, ""))
+		mgr.cleanup_stale_remotes = AsyncMock(return_value=0)  # type: ignore[method-assign]
+
+		await mgr.initialize("/tmp/workspace")
+
+		mgr.cleanup_stale_remotes.assert_awaited_once()
+
+	async def test_called_during_merge_batch(self) -> None:
+		"""cleanup_stale_remotes is called at merge_batch entry."""
+		mgr = _manager()
+		mgr.cleanup_stale_remotes = AsyncMock(return_value=0)  # type: ignore[method-assign]
+		mgr.merge_unit = AsyncMock(return_value=UnitMergeResult(merged=True))  # type: ignore[method-assign]
+
+		await mgr.merge_batch([("/tmp/ws", "feat/x", "")])
+
+		mgr.cleanup_stale_remotes.assert_awaited_once()
+
+	async def test_partial_remove_failure(self) -> None:
+		"""Counts only successfully removed remotes."""
+		mgr = _manager()
+		call_count = 0
+
+		async def mock_git(*args: str) -> tuple[bool, str]:
+			nonlocal call_count
+			if args == ("remote",):
+				return (True, "worker-a\nworker-b\n")
+			if args[:2] == ("remote", "remove"):
+				call_count += 1
+				if call_count == 1:
+					return (False, "error")
+				return (True, "")
+			return (True, "")
+
+		mgr._run_git = AsyncMock(side_effect=mock_git)
+
+		removed = await mgr.cleanup_stale_remotes()
+
+		assert removed == 1

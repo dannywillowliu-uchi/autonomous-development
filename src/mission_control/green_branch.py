@@ -104,6 +104,29 @@ class GreenBranchManager:
 			return result
 		return False
 
+	async def cleanup_stale_remotes(self) -> int:
+		"""Remove stale worker-* remotes left by interrupted merge operations.
+
+		Returns the number of remotes removed.
+		"""
+		ok, output = await self._run_git("remote")
+		if not ok:
+			return 0
+
+		removed = 0
+		for line in output.splitlines():
+			name = line.strip()
+			if name.startswith("worker-"):
+				ok_rm, _ = await self._run_git("remote", "remove", name)
+				if ok_rm:
+					logger.info("Removed stale remote: %s", name)
+					removed += 1
+				else:
+					logger.warning("Failed to remove stale remote: %s", name)
+		if removed:
+			self._trace("cleanup_stale_remotes", removed=removed)
+		return removed
+
 	async def initialize(self, workspace: str) -> None:
 		"""Create mc/working and mc/green branches if they don't exist.
 
@@ -114,6 +137,7 @@ class GreenBranchManager:
 		(which clone from origin = source repo) can check them out.
 		"""
 		self.workspace = workspace
+		await self.cleanup_stale_remotes()
 		base = self.config.target.branch
 		gb = self.config.green_branch
 		source_repo = self.config.target.path
@@ -306,6 +330,8 @@ class GreenBranchManager:
 
 		Falls back to individual merge_unit() for single-item lists.
 		"""
+		await self.cleanup_stale_remotes()
+
 		if len(units) <= 1:
 			if not units:
 				return []
