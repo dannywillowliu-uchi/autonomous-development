@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -204,3 +204,127 @@ class TestHeartbeatRecovery:
 		stuck_ids = await hb.recover()
 
 		assert stuck_ids == ["unit-111", "unit-222"]
+
+
+class TestCostMonitoring:
+	def test_record_cost_stores_entries(self) -> None:
+		hb = Heartbeat(interval=0, idle_threshold=3)
+		hb.record_cost(0.50)
+		hb.record_cost(0.25)
+		assert len(hb._cost_entries) == 2
+
+	def test_get_cost_rate_zero_with_no_entries(self) -> None:
+		hb = Heartbeat(interval=0, idle_threshold=3)
+		assert hb.get_cost_rate() == 0.0
+
+	def test_get_cost_rate_zero_with_single_entry(self) -> None:
+		hb = Heartbeat(interval=0, idle_threshold=3)
+		hb.record_cost(1.0)
+		assert hb.get_cost_rate() == 0.0
+
+	def test_get_cost_rate_calculation(self) -> None:
+		hb = Heartbeat(interval=0, idle_threshold=3, cost_window_seconds=600.0)
+		base = time.monotonic()
+		# Simulate entries spread over 60 seconds: $0.50 + $0.50 = $1.00 over 1 min
+		hb._cost_entries.append((base - 60, 0.50))
+		hb._cost_entries.append((base - 30, 0.50))
+		with patch("mission_control.heartbeat.time.monotonic", return_value=base):
+			rate = hb.get_cost_rate()
+		# $1.00 total over 60s span = $1.00/min
+		assert abs(rate - 1.0) < 0.01
+
+	def test_cost_rate_window_rollover(self) -> None:
+		"""Old entries outside the window are pruned."""
+		hb = Heartbeat(interval=0, idle_threshold=3, cost_window_seconds=60.0)
+		base = time.monotonic()
+		# Entry well outside the 60s window
+		hb._cost_entries.append((base - 200, 5.00))
+		# Entries inside the window
+		hb._cost_entries.append((base - 30, 0.30))
+		hb._cost_entries.append((base - 10, 0.20))
+		with patch("mission_control.heartbeat.time.monotonic", return_value=base):
+			rate = hb.get_cost_rate()
+		# After pruning: $0.30 + $0.20 = $0.50 over 30s span = $1.00/min
+		assert abs(rate - 1.0) < 0.05
+
+	def test_project_budget_exhaustion_returns_none_at_zero_rate(self) -> None:
+		hb = Heartbeat(interval=0, idle_threshold=3)
+		assert hb.project_budget_exhaustion(10.0) is None
+
+	def test_project_budget_exhaustion_calculation(self) -> None:
+		hb = Heartbeat(interval=0, idle_threshold=3, cost_window_seconds=600.0)
+		base = time.monotonic()
+		# $2.00 over 120s = $1.00/min
+		hb._cost_entries.append((base - 120, 1.00))
+		hb._cost_entries.append((base - 60, 1.00))
+		with patch("mission_control.heartbeat.time.monotonic", return_value=base):
+			minutes = hb.project_budget_exhaustion(5.0)
+		assert minutes is not None
+		assert abs(minutes - 5.0) < 0.1
+
+	@pytest.mark.asyncio
+	async def test_check_cost_health_alerts_on_high_rate(self, notifier: AsyncMock) -> None:
+		hb = Heartbeat(
+			interval=0, idle_threshold=3, notifier=notifier,
+			cost_rate_threshold=0.50,
+		)
+		base = time.monotonic()
+		# $2.00 over 60s = $2.00/min, well above 0.50 threshold
+		hb._cost_entries.append((base - 60, 1.00))
+		hb._cost_entries.append((base - 30, 1.00))
+		with patch("mission_control.heartbeat.time.monotonic", return_value=base):
+			await hb.check_cost_health(remaining_budget=100.0)
+		notifier.send.assert_called_once()
+		msg = notifier.send.call_args[0][0]
+		assert "Cost alert" in msg
+		assert "exceeds threshold" in msg
+
+	@pytest.mark.asyncio
+	async def test_check_cost_health_alerts_on_exhaustion(self, notifier: AsyncMock) -> None:
+		hb = Heartbeat(
+			interval=0, idle_threshold=3, notifier=notifier,
+			cost_rate_threshold=100.0,  # High threshold so rate alert doesn't fire
+			exhaustion_warning_minutes=10.0,
+		)
+		base = time.monotonic()
+		# $2.00 over 60s = $2.00/min; remaining $5 => ~2.5 min left (< 10 min warning)
+		hb._cost_entries.append((base - 60, 1.00))
+		hb._cost_entries.append((base - 30, 1.00))
+		with patch("mission_control.heartbeat.time.monotonic", return_value=base):
+			await hb.check_cost_health(remaining_budget=5.0)
+		notifier.send.assert_called_once()
+		msg = notifier.send.call_args[0][0]
+		assert "Budget exhaustion" in msg
+
+	@pytest.mark.asyncio
+	async def test_check_cost_health_no_alert_when_healthy(self, notifier: AsyncMock) -> None:
+		hb = Heartbeat(
+			interval=0, idle_threshold=3, notifier=notifier,
+			cost_rate_threshold=10.0,
+			exhaustion_warning_minutes=10.0,
+		)
+		base = time.monotonic()
+		# $0.10 over 60s = $0.10/min, well below threshold; budget lasts 1000 min
+		hb._cost_entries.append((base - 60, 0.05))
+		hb._cost_entries.append((base - 30, 0.05))
+		with patch("mission_control.heartbeat.time.monotonic", return_value=base):
+			await hb.check_cost_health(remaining_budget=100.0)
+		notifier.send.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_check_wires_cost_health(self, notifier: AsyncMock) -> None:
+		"""Verify check() calls check_cost_health with remaining_budget."""
+		hb = Heartbeat(
+			interval=0, idle_threshold=3, notifier=notifier,
+			cost_rate_threshold=0.01,
+		)
+		base = time.monotonic()
+		hb._cost_entries.append((base - 60, 1.00))
+		hb._cost_entries.append((base - 30, 1.00))
+		with patch("mission_control.heartbeat.time.monotonic", return_value=base):
+			await hb.check(total_merged=0, total_failed=0, remaining_budget=50.0)
+		# Should have sent a cost alert (first call) since rate exceeds 0.01
+		cost_alert_sent = any(
+			"Cost alert" in str(call) for call in notifier.send.call_args_list
+		)
+		assert cost_alert_sent
