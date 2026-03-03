@@ -64,6 +64,51 @@ def _is_parse_fallback(result: PlannerResult) -> bool:
 	)
 
 
+_LOCKED_FILES_CAP = 30
+
+
+def _format_locked_files(locked_files: dict[str, list[str]], cap: int = _LOCKED_FILES_CAP) -> str:
+	"""Render locked_files dict as a markdown table for the planner prompt.
+
+	Returns empty string when locked_files is empty.
+	Caps output at ``cap`` entries to avoid context bloat.
+	"""
+	if not locked_files:
+		return ""
+
+	lines = [
+		"\n## Locked Files (DO NOT TARGET)",
+		"The following files are currently being worked on or have already been merged.",
+		"Creating units that target these files will be REJECTED by the dispatcher.\n",
+		"| File | Reason | Locked By |",
+		"|------|--------|-----------|",
+	]
+
+	sorted_files = sorted(locked_files.items())
+	shown = sorted_files[:cap]
+
+	for fpath, reasons in shown:
+		reason_parts: list[str] = []
+		locked_by_parts: list[str] = []
+		for r in reasons:
+			if r.startswith("in-flight:"):
+				locked_by_parts.append(r[len("in-flight:"):].strip())
+				reason_parts.append("in-flight")
+			else:
+				reason_parts.append(r)
+				locked_by_parts.append("-")
+		reason_str = "; ".join(reason_parts)
+		locked_by_str = "; ".join(locked_by_parts)
+		lines.append(f"| {fpath} | {reason_str} | {locked_by_str} |")
+
+	remaining = len(sorted_files) - cap
+	if remaining > 0:
+		lines.append(f"\n... and {remaining} more")
+
+	lines.append("")
+	return "\n".join(lines)
+
+
 _PLAN_BLOCK_RE = re.compile(r"<!--\s*PLAN\s*-->(.*?)<!--\s*/PLAN\s*-->", re.DOTALL)
 
 
@@ -226,19 +271,7 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 		if feedback_text:
 			feedback_section = f"\n## Past Round Performance\n{feedback_text}\n"
 
-		locked_files = self._locked_files
-		locked_section = ""
-		if locked_files:
-			lines = []
-			for fpath, reasons in sorted(locked_files.items()):
-				reason_str = "; ".join(reasons)
-				lines.append(f"- {fpath} ({reason_str})")
-			locked_section = (
-				"\n## Locked Files (DO NOT target these)\n"
-				"The following files are currently being worked on or have already been merged.\n"
-				"Creating units that target these files will be REJECTED by the dispatcher.\n"
-				+ "\n".join(lines) + "\n"
-			)
+		locked_section = _format_locked_files(self._locked_files)
 
 		causal_section = ""
 		if self._causal_risks:
@@ -262,7 +295,7 @@ You have WebSearch and WebFetch tools. Use them to:
 - Look up best practices and state-of-the-art approaches
 - Find Claude Code plugins, MCP servers, or agentic tooling
 - Check documentation for APIs or libraries relevant to the objective
-{feedback_section}{locked_section}{causal_section}{snapshot_section}
+{feedback_section}{causal_section}{snapshot_section}
 ## Planning Philosophy
 - Think ambitiously. The best plan integrates external capabilities, not just internal fixes.
 - If the objective mentions tooling or capability, research what exists before proposing to build from scratch.
@@ -273,7 +306,7 @@ You have WebSearch and WebFetch tools. Use them to:
 - Units targeting locked files will be AUTOMATICALLY DROPPED. This is enforced, not optional.
 - If the objective has been fully achieved based on MISSION_STATE.md and past discoveries, return EMPTY units:
   <!-- PLAN -->{{"type":"leaves","units":[]}}<!-- /PLAN -->
-
+{locked_section}
 ## Output Format
 Reason in prose first (include your research findings), then emit your plan inside a <!-- PLAN --> block.
 
