@@ -617,6 +617,7 @@ class Database:
 		self._migrate_write_scope_column()
 		self._migrate_chain_id_column()
 		self._migrate_knowledge_items()
+		self._migrate_parent_unit_id_column()
 
 	def _migrate_degradation_level_column(self) -> None:
 		"""Add degradation_level column to missions table (idempotent)."""
@@ -853,6 +854,18 @@ class Database:
 			);
 			CREATE INDEX IF NOT EXISTS idx_knowledge_items_mission ON knowledge_items(mission_id);
 		""")
+
+	def _migrate_parent_unit_id_column(self) -> None:
+		"""Add parent_unit_id column to work_units for retry lineage (idempotent)."""
+		try:
+			self.conn.execute("ALTER TABLE work_units ADD COLUMN parent_unit_id TEXT DEFAULT ''")
+			logger.debug("Migration: added column work_units.parent_unit_id")
+		except sqlite3.OperationalError as exc:
+			if "duplicate column name" in str(exc):
+				pass
+			else:
+				logger.warning("Migration failed for work_units.parent_unit_id: %s", exc)
+				raise
 
 	def close(self) -> None:
 		logger.debug("Closing database connection")
@@ -1138,9 +1151,10 @@ class Database:
 			 unit_type, timeout, verification_command,
 			 epoch_id, input_tokens, output_tokens, cost_usd, experiment_mode,
 			 acceptance_criteria, specialist,
-			 speculation_score, speculation_parent_id, session_id, write_scope)
+			 speculation_score, speculation_parent_id, session_id, write_scope,
+			 parent_unit_id)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+			 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
 			(
 				unit.id, unit.plan_id, unit.title, unit.description,
 				unit.files_hint, unit.verification_hint, unit.priority,
@@ -1154,6 +1168,7 @@ class Database:
 				int(unit.experiment_mode), unit.acceptance_criteria, unit.specialist,
 				unit.speculation_score, unit.speculation_parent_id, unit.session_id,
 				json.dumps(unit.write_scope) if unit.write_scope else "",
+				unit.parent_unit_id,
 			),
 		)
 		self.conn.commit()
@@ -1172,7 +1187,7 @@ class Database:
 			epoch_id=?, input_tokens=?, output_tokens=?, cost_usd=?,
 			experiment_mode=?, acceptance_criteria=?, specialist=?,
 			speculation_score=?, speculation_parent_id=?, session_id=?,
-			write_scope=?
+			write_scope=?, parent_unit_id=?
 			WHERE id=?""",
 			(
 				unit.plan_id, unit.title, unit.description, unit.files_hint,
@@ -1187,6 +1202,7 @@ class Database:
 				int(unit.experiment_mode), unit.acceptance_criteria, unit.specialist,
 				unit.speculation_score, unit.speculation_parent_id, unit.session_id,
 				json.dumps(unit.write_scope) if unit.write_scope else "",
+				unit.parent_unit_id,
 				unit.id,
 			),
 		)
@@ -1369,6 +1385,7 @@ class Database:
 			speculation_parent_id=row["speculation_parent_id"] if "speculation_parent_id" in keys else "",
 			session_id=row["session_id"] if "session_id" in keys else "",
 			write_scope=json.loads(row["write_scope"]) if "write_scope" in keys and row["write_scope"] else [],
+			parent_unit_id=row["parent_unit_id"] if "parent_unit_id" in keys else "",
 		)
 
 	def update_degradation_level(self, level: str) -> None:

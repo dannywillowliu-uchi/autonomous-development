@@ -66,7 +66,12 @@ from mission_control.session import parse_mc_result
 from mission_control.token_parser import compute_token_cost, parse_stream_json
 from mission_control.trace_log import TraceEvent, TraceLogger
 from mission_control.tracing import MissionTracer
-from mission_control.worker import CONFLICT_RESOLUTION_PROMPT, load_specialist_template, render_mission_worker_prompt
+from mission_control.worker import (
+	CONFLICT_RESOLUTION_PROMPT,
+	load_specialist_template,
+	render_mission_worker_prompt,
+	render_retry_worker_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1030,7 +1035,7 @@ class ContinuousController:
 						failure_reason = merge_result.failure_output[-1000:]
 
 						# Check if retryable
-						if unit.attempt < unit.max_attempts:
+						if unit.attempt < cont.max_retry_attempts:
 							self._schedule_retry(unit, epoch, mission, failure_reason, cont)
 						else:
 							self._total_failed += 1
@@ -1065,7 +1070,7 @@ class ContinuousController:
 					stream_details=_exc_details,
 				)
 				failure_reason = str(exc)[:300]
-				if unit.attempt < unit.max_attempts:
+				if unit.attempt < cont.max_retry_attempts:
 					self._schedule_retry(unit, epoch, mission, failure_reason, cont)
 				else:
 					self._total_failed += 1
@@ -1076,7 +1081,7 @@ class ContinuousController:
 		else:
 			# Unit failed during execution
 			failure_reason = (unit.output_summary or "unknown error")[:300]
-			if unit.attempt < unit.max_attempts:
+			if unit.attempt < cont.max_retry_attempts:
 				self._schedule_retry(unit, epoch, mission, failure_reason, cont)
 			else:
 				self._total_failed += 1
@@ -2192,7 +2197,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 							f"Merge failed: {merge_result.failure_output[-500:]}",
 						)
 					failure_reason = merge_result.failure_output[-1000:]
-					if unit.attempt < unit.max_attempts:
+					if unit.attempt < cont.max_retry_attempts:
 						self._schedule_retry(unit, epoch, mission, failure_reason, cont)
 					else:
 						self._total_failed += 1
@@ -2274,7 +2279,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 						f"Merge failed: {merge_result.failure_output[-500:]}",
 					)
 				failure_reason = merge_result.failure_output[-1000:]
-				if unit.attempt < unit.max_attempts:
+				if unit.attempt < cont.max_retry_attempts:
 					self._schedule_retry(unit, epoch, mission, failure_reason, cont)
 				else:
 					self._total_failed += 1
@@ -2445,38 +2450,58 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		failure_reason: str,
 		cont: ContinuousConfig,
 	) -> None:
-		"""Prepare a unit for retry and schedule delayed re-dispatch."""
-		# Increment attempt BEFORE delay calculation
-		unit.attempt += 1
+		"""Create a new retry WorkUnit and schedule delayed re-dispatch.
+
+		Instead of mutating the original unit, a new WorkUnit is created with
+		parent_unit_id set for lineage tracking. The retry prompt includes
+		targeted failure diagnosis from diagnose_failure().
+		"""
+		from mission_control.feedback import diagnose_failure
+
+		attempt_number = unit.attempt + 1
+		diagnosis = diagnose_failure(failure_reason)
 
 		delay = min(
-			cont.retry_base_delay_seconds * (2 ** (unit.attempt - 1)),
+			cont.retry_base_delay_seconds * (2 ** (attempt_number - 1)),
 			cont.retry_max_delay_seconds,
 		)
 
-		# Append failure context with targeted diagnosis
-		from mission_control.feedback import diagnose_failure
-
-		diagnosis = diagnose_failure(failure_reason)
-		unit.description += (
-			f"\n\n[Retry attempt {unit.attempt}] Previous failure: "
-			f"{failure_reason[-1000:]}\n\n{diagnosis}"
+		# Create a new WorkUnit inheriting parent's task context
+		retry_unit = WorkUnit(
+			plan_id=unit.plan_id,
+			title=unit.title,
+			description=unit.description,
+			files_hint=unit.files_hint,
+			verification_hint=unit.verification_hint,
+			priority=unit.priority,
+			status="pending",
+			depends_on=unit.depends_on,
+			attempt=attempt_number,
+			max_attempts=unit.max_attempts,
+			unit_type=unit.unit_type,
+			timeout=unit.timeout,
+			verification_command=unit.verification_command,
+			epoch_id=epoch.id,
+			acceptance_criteria=unit.acceptance_criteria,
+			specialist=unit.specialist,
+			parent_unit_id=unit.id,
 		)
 
-		# Reset unit for re-dispatch
-		unit.status = "pending"
-		unit.commit_hash = None
-		unit.branch_name = ""
-		unit.output_summary = ""
-
-		# Persist updated attempt count and status
+		# Persist the retry unit
 		try:
-			self.db.update_work_unit(unit)
+			self.db.insert_work_unit(retry_unit)
 		except Exception as exc:
-			logger.error("Failed to persist retry state for %s: %s", unit.id, exc)
+			logger.error("Failed to persist retry unit for %s: %s", unit.id, exc)
+			self._total_failed += 1
+			return
 
-		# Log retry event
-		_retry_details = {"delay": delay, "failure_reason": failure_reason[-1000:]}
+		# Log retry event on the original unit
+		_retry_details = {
+			"delay": delay,
+			"failure_reason": failure_reason[-1000:],
+			"retry_unit_id": retry_unit.id,
+			"diagnosis": diagnosis[:500],
+		}
 		self._log_unit_event(
 			mission_id=mission.id,
 			epoch_id=epoch.id,
@@ -2487,14 +2512,21 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		)
 
 		logger.info(
-			"Retrying unit %s (attempt %d/%d) after %.0fs delay",
-			unit.id, unit.attempt, unit.max_attempts, delay,
+			"Retrying unit %s as %s (attempt %d/%d) after %.0fs delay",
+			unit.id, retry_unit.id, attempt_number,
+			cont.max_retry_attempts, delay,
 		)
 
-		# Schedule delayed re-dispatch
-		task = asyncio.create_task(
-			self._retry_unit(unit, epoch, mission, delay),
-		)
+		# Schedule delayed re-dispatch with completion processing
+		async def _retry_and_process() -> None:
+			completion = await self._retry_unit(
+				retry_unit, epoch, mission, delay, failure_reason, diagnosis,
+			)
+			if completion is not None:
+				result = ContinuousMissionResult(mission_id=mission.id)
+				await self._process_single_completion(completion, mission, result)
+
+		task = asyncio.create_task(_retry_and_process())
 		self._active_tasks.add(task)
 		task.add_done_callback(self._task_done_callback)
 
@@ -2504,20 +2536,206 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		epoch: Epoch,
 		mission: Mission,
 		delay: float,
+		failure_reason: str = "",
+		diagnosis: str = "",
 	) -> None:
-		"""Wait for backoff delay, then re-dispatch a failed unit."""
+		"""Wait for backoff delay, provision workspace, render retry prompt, and dispatch.
+
+		Uses render_retry_worker_prompt() with diagnose_failure() output instead
+		of the standard worker prompt, giving the retry worker targeted failure context.
+		"""
 		await asyncio.sleep(delay)
 		if not self.running:
 			return
-		if self._semaphore is None:
+		if self._semaphore is None or self._backend is None:
 			raise RuntimeError("Controller not initialized: call start() first")
+
 		await self._semaphore.acquire()
 		self._in_flight_count += 1
-		task = asyncio.create_task(
-			self._execute_single_unit(unit, epoch, mission),
-		)
-		self._active_tasks.add(task)
-		task.add_done_callback(self._task_done_callback)
+
+		source_repo = str(self.config.target.resolved_path)
+		base_branch = self.config.green_branch.green_branch
+		workspace = ""
+		worker: Worker | None = None
+
+		try:
+			try:
+				workspace = await self._backend.provision_workspace(
+					unit.id, source_repo, base_branch,
+				)
+			except RuntimeError as e:
+				logger.error("Failed to provision workspace for retry %s: %s", unit.id, e)
+				await self._fail_unit(unit, None, epoch, str(e), "")
+				return
+
+			branch_name = f"mc/unit-{unit.id}"
+			unit.branch_name = branch_name
+			unit.status = "running"
+			unit.started_at = _now_iso()
+			await self.db.locked_call("update_work_unit", unit)
+
+			# Render retry prompt with failure diagnosis
+			from mission_control.memory import load_context_for_mission_worker
+			context = load_context_for_mission_worker(unit, self.config)
+
+			prompt = render_retry_worker_prompt(
+				unit=unit,
+				config=self.config,
+				workspace_path=(workspace if "::" not in workspace else workspace.split("::")[0]),
+				branch_name=branch_name,
+				failure_summary=diagnosis,
+				error_output=failure_reason[-2000:],
+				attempt_number=unit.attempt,
+				context=context or "",
+			)
+
+			budget = self.config.scheduler.budget.max_per_session_usd
+			models_cfg = getattr(self.config, "models", None)
+			model = getattr(models_cfg, "worker_model", None) or self.config.scheduler.model
+			session_id = str(uuid.uuid4())
+			unit.session_id = session_id
+			cmd = build_claude_cmd(
+				self.config, model=model, output_format="stream-json",
+				permission_mode="bypassPermissions", budget=budget,
+				session_id=session_id, prompt=prompt,
+				setting_sources="project",
+			)
+
+			effective_timeout = unit.timeout or self.config.scheduler.session_timeout
+			handle = await self._backend.spawn(
+				unit.id, workspace, cmd,
+				timeout=effective_timeout,
+			)
+			self._trace(unit.id, unit.id, "retry_worker_spawned", attempt=unit.attempt)
+
+			worker = Worker(
+				id=unit.id,
+				workspace_path=handle.workspace_path or workspace,
+				status="working",
+				current_unit_id=unit.id,
+				pid=handle.pid,
+				backend_type=self.config.backend.type,
+			)
+			try:
+				await self.db.locked_call("insert_worker", worker)
+			except Exception:
+				logger.debug("Worker record insert failed for retry %s", unit.id)
+
+			# Wait for completion using same poll pattern as _execute_single_unit
+			poll_deadline = int(
+				effective_timeout * self.config.continuous.timeout_multiplier,
+			)
+			monitor_interval = self.config.scheduler.monitor_interval
+			start = time.monotonic()
+			while time.monotonic() - start < poll_deadline:
+				status = await self._backend.check_status(handle)
+				if status != "running":
+					break
+				if not self.running:
+					await self._backend.kill(handle)
+					await self._fail_unit(unit, worker, epoch, "Stopped by signal", workspace)
+					return
+				await asyncio.sleep(monitor_interval)
+			else:
+				await self._backend.kill(handle)
+				await self._fail_unit(unit, worker, epoch, f"Timed out after {effective_timeout}s", workspace)
+				return
+
+			output = await self._backend.get_output(handle)
+
+			# Parse result
+			handoff = None
+			stream_result = parse_stream_json(output)
+			mc_result = stream_result.mc_result
+			if mc_result is None:
+				mc_result = parse_mc_result(output)
+
+			unit.input_tokens = stream_result.usage.input_tokens
+			unit.output_tokens = stream_result.usage.output_tokens
+			unit.cost_usd = compute_token_cost(stream_result.usage, self.config.pricing)
+
+			if mc_result:
+				unit_status = str(mc_result.get("status", "completed"))
+				unit.output_summary = str(mc_result.get("summary", ""))
+				commits = mc_result.get("commits", [])
+				if isinstance(commits, list) and commits:
+					unit.commit_hash = str(commits[0])
+
+				disc = mc_result.get("discoveries", [])
+				conc = mc_result.get("concerns", [])
+				fc = mc_result.get("files_changed", [])
+				handoff = Handoff(
+					work_unit_id=unit.id,
+					round_id="",
+					epoch_id=epoch.id,
+					status=unit_status,
+					commits=commits if isinstance(commits, list) else [],
+					summary=unit.output_summary,
+					discoveries=disc if isinstance(disc, list) else [],
+					concerns=conc if isinstance(conc, list) else [],
+					files_changed=fc if isinstance(fc, list) else [],
+				)
+				await self.db.locked_call("insert_handoff", handoff)
+				unit.handoff_id = handoff.id
+			else:
+				unit_status = "completed" if status == "completed" else "failed"
+				max_chars = self.config.scheduler.output_summary_max_chars
+				unit.output_summary = (output[-max_chars:] if output else "No output")
+
+			if unit_status in ("completed", "blocked"):
+				unit.status = unit_status
+			else:
+				unit.attempt += 1
+				unit.status = "failed"
+
+			unit.finished_at = _now_iso()
+			await self.db.locked_call("update_work_unit", unit)
+
+			if worker is not None:
+				if unit.status == "failed":
+					worker.units_failed += 1
+				else:
+					worker.units_completed += 1
+				worker.status = "idle"
+				worker.current_unit_id = None
+				worker.pid = None
+				worker.total_cost_usd += unit.cost_usd
+				try:
+					await self.db.locked_call("update_worker", worker)
+				except Exception:
+					pass
+
+			completion = WorkerCompletion(
+				unit=unit, handoff=handoff, workspace=workspace, epoch=epoch,
+			)
+			return completion
+
+		except (RuntimeError, OSError) as e:
+			logger.error("Infrastructure error in retry unit %s: %s", unit.id, e)
+			await self._fail_unit(unit, worker, epoch, f"Infrastructure error: {e}", workspace)
+		except asyncio.CancelledError:
+			logger.info("Retry unit %s execution cancelled", unit.id)
+			await self._fail_unit(unit, worker, epoch, "Cancelled", workspace)
+		except Exception as e:
+			logger.error("Error in retry unit %s: %s", unit.id, e)
+			await self._fail_unit(unit, worker, epoch, f"Error: {e}", workspace)
+		finally:
+			if worker is not None and worker.status == "working":
+				worker.status = "idle"
+				worker.current_unit_id = None
+				worker.pid = None
+				try:
+					await self.db.locked_call("update_worker", worker)
+				except Exception:
+					pass
+			self._file_locks.release(unit.id)
+			if workspace:
+				try:
+					await self._backend.release_workspace(workspace)
+				except Exception:
+					pass
+			self._in_flight_count = max(self._in_flight_count - 1, 0)
+			self._semaphore.release()
 
 	async def _fail_unit(
 		self,
