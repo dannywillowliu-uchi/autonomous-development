@@ -27,6 +27,7 @@ from mission_control.context_gathering import (
 )
 from mission_control.critic_agent import CriticAgent
 from mission_control.db import Database
+from mission_control.grading import get_epoch_grade_feedback
 from mission_control.models import (
 	CriticFinding,
 	Epoch,
@@ -122,6 +123,10 @@ class DeliberativePlanner:
 
 		if knowledge_context:
 			sections.append(f"### Accumulated Knowledge\n{knowledge_context}")
+
+		grade_feedback = get_epoch_grade_feedback(self._db, mission.id)
+		if grade_feedback:
+			sections.append(f"### Decomposition Quality\n{grade_feedback}")
 
 		return "\n\n".join(sections) if sections else "(No project context available)"
 

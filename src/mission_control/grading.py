@@ -9,7 +9,7 @@ from mission_control.constants import GRADING_WEIGHTS
 from mission_control.models import DecompositionGrade, UnitReview, WorkUnit
 
 if TYPE_CHECKING:
-	pass
+	from mission_control.db import Database
 
 logger = logging.getLogger(__name__)
 
@@ -116,3 +116,34 @@ def format_decomposition_feedback(grade: DecompositionGrade) -> str:
 		lines.append(f"Weakest area: {weakest} -- {advice[weakest]}")
 
 	return "\n".join(lines)
+
+
+def get_epoch_grade_feedback(db: Database, mission_id: str) -> str:
+	"""Get decomposition grade feedback for the latest completed epoch.
+
+	Returns formatted feedback text, or empty string if no completed epochs.
+	"""
+	epochs = db.get_epochs_for_mission(mission_id)
+	completed_epochs = [e for e in epochs if e.finished_at]
+	if not completed_epochs:
+		return ""
+
+	latest = completed_epochs[-1]  # ordered by number ASC
+
+	# Get work units belonging to this epoch
+	all_units = db.get_work_units_for_mission(mission_id)
+	epoch_units = [u for u in all_units if u.epoch_id == latest.id]
+	if not epoch_units:
+		return ""
+
+	# Get reviews scoped to this epoch
+	all_reviews = db.get_unit_reviews_for_mission(mission_id)
+	epoch_reviews = [r for r in all_reviews if r.epoch_id == latest.id]
+
+	grade = compute_decomposition_grade(
+		epoch_units,
+		epoch_reviews,
+		epoch_id=latest.id,
+		mission_id=mission_id,
+	)
+	return format_decomposition_feedback(grade)
