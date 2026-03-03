@@ -15,8 +15,9 @@ from mission_control.critic_agent import (
 	CriticAgent,
 	_build_batch_signals_text,
 	_parse_critic_output,
+	validate_units_preflight,
 )
-from mission_control.models import CriticFinding, Mission
+from mission_control.models import CriticFinding, Mission, WorkUnit
 
 
 def _config(tmp_path: Path | None = None) -> MissionConfig:
@@ -183,7 +184,11 @@ class TestCriticReviewPlan:
 	async def test_review_sufficient(self, tmp_path: Path) -> None:
 		db = MagicMock()
 		agent = CriticAgent(_config(tmp_path), db)
-		from mission_control.models import WorkUnit
+		# Create files referenced by files_hint so preflight passes
+		(tmp_path / "src").mkdir()
+		(tmp_path / "src" / "auth.py").write_text("")
+		(tmp_path / "tests").mkdir()
+		(tmp_path / "tests" / "test_auth.py").write_text("")
 		units = [
 			WorkUnit(title="Add auth", description="JWT auth", files_hint="src/auth.py", priority=1),
 			WorkUnit(title="Add tests", description="Test auth", files_hint="tests/test_auth.py", priority=2),
@@ -203,7 +208,6 @@ class TestCriticReviewPlan:
 	async def test_review_needs_refinement(self, tmp_path: Path) -> None:
 		db = MagicMock()
 		agent = CriticAgent(_config(tmp_path), db)
-		from mission_control.models import WorkUnit
 		units = [WorkUnit(title="Fix everything", description="all in one", priority=1)]
 		prev = CriticFinding(findings=["complex codebase"])
 		verdict_data = {"verdict": "needs_refinement", "gaps": ["too coarse-grained"]}
@@ -220,7 +224,8 @@ class TestCriticReviewPlan:
 		"""review_plan prompt uses feasibility framing, not strategic."""
 		db = MagicMock()
 		agent = CriticAgent(_config(tmp_path), db)
-		from mission_control.models import WorkUnit
+		# Create file referenced by files_hint so preflight passes
+		(tmp_path / "a.py").write_text("")
 		units = [WorkUnit(title="Task", description="x", files_hint="a.py", priority=1)]
 		prev = CriticFinding()
 		fake_output = f'{CRITIC_RESULT_MARKER}{json.dumps({"verdict": "sufficient"})}'
@@ -267,3 +272,158 @@ class TestCriticProposeNext:
 
 		assert result.proposed_objective == "Add auth system"
 		assert cost == 0.50
+
+
+class TestValidateUnitsPreflight:
+	def test_valid_units_pass(self, tmp_path: Path) -> None:
+		"""Units with existing files, valid criteria, and non-empty fields pass."""
+		(tmp_path / "src").mkdir()
+		(tmp_path / "src" / "auth.py").write_text("# auth")
+		(tmp_path / "tests").mkdir()
+		(tmp_path / "tests" / "test_auth.py").write_text("# test")
+
+		units = [
+			WorkUnit(
+				title="Add auth",
+				description="JWT authentication module",
+				files_hint="src/auth.py, tests/test_auth.py",
+				acceptance_criteria="pytest tests/test_auth.py -q",
+			),
+		]
+		failures = validate_units_preflight(units, tmp_path)
+		assert failures == []
+
+	def test_missing_files_detected(self, tmp_path: Path) -> None:
+		"""files_hint referencing non-existent paths produces failures."""
+		units = [
+			WorkUnit(
+				title="Add auth",
+				description="JWT auth",
+				files_hint="src/auth.py, src/missing.py",
+			),
+		]
+		failures = validate_units_preflight(units, tmp_path)
+		assert len(failures) == 2
+		assert "src/auth.py" in failures[0]
+		assert "non-existent" in failures[0]
+		assert "src/missing.py" in failures[1]
+
+	def test_malformed_shell_command_caught(self, tmp_path: Path) -> None:
+		"""Acceptance criteria with unmatched quotes is flagged."""
+		units = [
+			WorkUnit(
+				title="Fix bug",
+				description="Fix the parsing bug",
+				acceptance_criteria="echo 'unterminated string",
+			),
+		]
+		failures = validate_units_preflight(units, tmp_path)
+		assert len(failures) == 1
+		assert "malformed shell syntax" in failures[0]
+
+	def test_empty_title_rejected(self, tmp_path: Path) -> None:
+		"""A unit with an empty title is rejected."""
+		units = [
+			WorkUnit(title="", description="Some work"),
+		]
+		failures = validate_units_preflight(units, tmp_path)
+		assert any("empty title" in f for f in failures)
+
+	def test_empty_description_rejected(self, tmp_path: Path) -> None:
+		"""A unit with an empty description is rejected."""
+		units = [
+			WorkUnit(title="Do stuff", description=""),
+		]
+		failures = validate_units_preflight(units, tmp_path)
+		assert any("empty description" in f for f in failures)
+
+	def test_whitespace_only_title_rejected(self, tmp_path: Path) -> None:
+		"""A unit with whitespace-only title is treated as empty."""
+		units = [
+			WorkUnit(title="   ", description="Real work"),
+		]
+		failures = validate_units_preflight(units, tmp_path)
+		assert any("empty title" in f for f in failures)
+
+	def test_partial_validity(self, tmp_path: Path) -> None:
+		"""Mix of valid and invalid units -- only invalid ones produce failures."""
+		(tmp_path / "src").mkdir()
+		(tmp_path / "src" / "ok.py").write_text("# ok")
+
+		units = [
+			WorkUnit(
+				title="Good unit",
+				description="Well-formed",
+				files_hint="src/ok.py",
+				acceptance_criteria="pytest -q",
+			),
+			WorkUnit(
+				title="",
+				description="Missing title",
+				files_hint="src/nonexistent.py",
+			),
+			WorkUnit(
+				title="Bad criteria",
+				description="Has bad shell",
+				acceptance_criteria="echo 'broken",
+			),
+		]
+		failures = validate_units_preflight(units, tmp_path)
+		# Unit 1 is clean, units 2 and 3 have issues
+		assert not any("Good unit" in f for f in failures)
+		assert any("empty title" in f for f in failures)
+		assert any("non-existent" in f for f in failures)
+		assert any("malformed shell syntax" in f for f in failures)
+
+	def test_empty_files_hint_skipped(self, tmp_path: Path) -> None:
+		"""Units with no files_hint skip the file existence check."""
+		units = [
+			WorkUnit(title="Research", description="Look into options", files_hint=""),
+		]
+		failures = validate_units_preflight(units, tmp_path)
+		assert failures == []
+
+	def test_empty_acceptance_criteria_skipped(self, tmp_path: Path) -> None:
+		"""Units with no acceptance_criteria skip the shell parse check."""
+		units = [
+			WorkUnit(
+				title="Refactor",
+				description="Clean up code",
+				acceptance_criteria="",
+			),
+		]
+		failures = validate_units_preflight(units, tmp_path)
+		assert failures == []
+
+	def test_valid_complex_shell_command(self, tmp_path: Path) -> None:
+		"""Complex but valid shell commands pass validation."""
+		units = [
+			WorkUnit(
+				title="Run suite",
+				description="Full test suite",
+				acceptance_criteria='pytest -q && ruff check src/ --select "E501,W503"',
+			),
+		]
+		failures = validate_units_preflight(units, tmp_path)
+		assert failures == []
+
+
+class TestReviewPlanPreflightIntegration:
+	@pytest.mark.asyncio
+	async def test_review_plan_rejects_malformed_units(self, tmp_path: Path) -> None:
+		"""review_plan returns preflight failures without calling the LLM."""
+		db = MagicMock()
+		agent = CriticAgent(_config(tmp_path), db)
+		units = [
+			WorkUnit(title="", description="Missing title"),
+		]
+		prev = CriticFinding()
+
+		with patch.object(agent, "_invoke_llm", new_callable=AsyncMock) as mock_llm:
+			result, cost = await agent.review_plan("Build API", units, prev)
+
+		mock_llm.assert_not_called()
+		assert result.verdict == "needs_refinement"
+		assert result.confidence == 1.0
+		assert any("empty title" in f for f in result.findings)
+		assert cost == 0.0

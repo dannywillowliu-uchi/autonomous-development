@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
+from pathlib import Path
 from typing import Any
 
 from mission_control.batch_analyzer import BatchSignals
@@ -82,6 +84,58 @@ def _build_batch_signals_text(signals: BatchSignals) -> str:
 {effort}"""
 
 
+def validate_units_preflight(
+	units: list[WorkUnit],
+	target_path: Path,
+) -> list[str]:
+	"""Pre-dispatch validation of work units.
+
+	Checks:
+	1. files_hint references files that actually exist in the target repo
+	2. acceptance_criteria can be parsed as valid shell commands
+	3. Unit titles and descriptions are non-empty
+
+	Returns a list of validation failure strings (empty if all valid).
+	"""
+	failures: list[str] = []
+
+	for i, unit in enumerate(units, 1):
+		label = f"Unit {i}"
+
+		# Check title is non-empty
+		if not unit.title.strip():
+			failures.append(f"{label}: empty title")
+
+		# Check description is non-empty
+		if not unit.description.strip():
+			failures.append(f"{label} ({unit.title or '?'}): empty description")
+
+		# Check files_hint references existing files
+		if unit.files_hint and unit.files_hint.strip():
+			for raw in unit.files_hint.split(","):
+				path_str = raw.strip()
+				if not path_str:
+					continue
+				full = target_path / path_str
+				if not full.exists():
+					failures.append(
+						f"{label} ({unit.title}): files_hint references "
+						f"non-existent path '{path_str}'"
+					)
+
+		# Check acceptance_criteria can be parsed as shell commands
+		if unit.acceptance_criteria and unit.acceptance_criteria.strip():
+			try:
+				shlex.split(unit.acceptance_criteria)
+			except ValueError as exc:
+				failures.append(
+					f"{label} ({unit.title}): acceptance_criteria has "
+					f"malformed shell syntax: {exc}"
+				)
+
+	return failures
+
+
 class CriticAgent:
 	"""Builds critic prompts, spawns Claude subprocess, parses output."""
 
@@ -110,6 +164,20 @@ class CriticAgent:
 		batch_signals: BatchSignals | None = None,
 	) -> tuple[CriticFinding, float]:
 		"""Feasibility review: check whether proposed units are achievable."""
+		# Pre-dispatch validation -- reject obviously malformed units early
+		preflight_failures = validate_units_preflight(
+			units, self._config.target.resolved_path,
+		)
+		if preflight_failures:
+			log.warning(
+				"Preflight validation found %d issue(s)", len(preflight_failures),
+			)
+			return CriticFinding(
+				findings=preflight_failures,
+				verdict="needs_refinement",
+				confidence=1.0,
+			), 0.0
+
 		units_text = "\n".join(
 			f"  {i+1}. [{u.priority}] {u.title}: {u.description[:200]} "
 			f"(files: {u.files_hint or 'unspecified'})"
