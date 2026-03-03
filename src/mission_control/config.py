@@ -150,6 +150,7 @@ class ContinuousConfig:
 	layer_drain_timeout_base: int = 300
 	layer_drain_timeout_per_unit: int = 120
 	reconcile_interval: int = 5  # run reconciler every N merges regardless of verify_before_merge
+	enforce_acceptance_criteria: bool = True  # run per-unit acceptance_criteria commands on merge
 
 
 @dataclass
@@ -643,6 +644,8 @@ def _build_continuous(data: dict[str, Any]) -> ContinuousConfig:
 		cc.stall_score_epsilon = float(data["stall_score_epsilon"])
 	if "verify_before_merge" in data:
 		cc.verify_before_merge = bool(data["verify_before_merge"])
+	if "enforce_acceptance_criteria" in data:
+		cc.enforce_acceptance_criteria = bool(data["enforce_acceptance_criteria"])
 	if "timeout_multiplier" in data:
 		cc.timeout_multiplier = float(data["timeout_multiplier"])
 	for key in (

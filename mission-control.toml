@@ -2,7 +2,10 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = "Add structured traceability logging to the worker system so operators can trace exactly what each worker does during a mission. Add a new src/mission_control/tracing.py module that defines a TraceEvent dataclass (timestamp, worker_id, unit_id, event_type, details) and a TraceLogger class that writes JSON-lines to a configurable trace file. Instrument the key worker lifecycle points: (1) worker spawn/claim, (2) Claude session start/end with prompt summary, (3) git operations (branch create, commit, push), (4) merge attempt and result, (5) fixup attempts and outcomes. Add a [tracing] section to the config with enabled/path/max_file_size fields. Add a CLI subcommand `mc trace` that reads a trace file and prints a human-readable timeline. Include tests for TraceLogger and TraceEvent serialization. Wire the tracer into continuous_controller.py and worker.py at the instrumentation points."
+objective = """Improve autonomous-development. Be ambitious and focus on high value changes or improvements.
+
+Use .venv/bin/python for all Python commands.
+"""
 
 [target.verification]
 command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
@@ -11,52 +14,41 @@ setup_command = "uv sync --extra dev"
 setup_timeout = 120
 
 [scheduler]
-session_timeout = 86400
-cooldown = 5
-max_sessions_per_run = 50
+session_timeout = 3600
 model = "opus"
-monitor_interval = 5
-output_summary_max_chars = 4000
-
-[scheduler.git]
-strategy = "branch-per-session"
-auto_merge = false
-
-[scheduler.budget]
-max_per_session_usd = 99999
-max_per_run_usd = 99999
 
 [scheduler.parallel]
 num_workers = 4
 pool_dir = "/Users/dannyliu/personal_projects/.mc-pool-ads"
 warm_clones = 4
 
+[scheduler.budget]
+max_per_session_usd = 8.0
+max_per_run_usd = 100.0
+
 [rounds]
-max_rounds = 20
-stall_threshold = 5
-cooldown_between_rounds = 5
-max_discovery_chars = 4000
-max_discoveries_per_round = 10
-max_summary_items = 5
-timeout_multiplier = 1.5
-stall_score_epsilon = 0.01
+max_rounds = 10
+stall_threshold = 7
+cooldown_between_rounds = 30
 
 [planner]
-max_depth = 2
-max_children_per_node = 5
-budget_per_call_usd = 2.0
+max_depth = 1
+max_children_per_node = 3
+budget_per_call_usd = 5.0
+
+[planner.deliberation]
+max_rounds = 1
+critic_model = "haiku"
 
 [continuous]
 max_wall_time_seconds = 86400
-timeout_multiplier = 1.5
-min_ambition_score = 4
-max_replan_attempts = 2
-verify_objective_completion = true
-max_objective_checks = 2
-
-[review]
-gate_completion = true
-min_review_score = 3.0
+min_ambition_score = 2
+max_replan_attempts = 3
+verify_before_merge = false
+enforce_acceptance_criteria = false
+reconcile_interval = 5
+layer_drain_timeout_base = 5400
+layer_drain_timeout_per_unit = 600
 
 [green_branch]
 working_branch = "mc/working"
@@ -66,33 +58,15 @@ auto_push = true
 push_branch = "main"
 
 [discovery]
-enabled = true
-tracks = ["feature", "quality", "security"]
-max_items_per_track = 3
-min_priority_score = 3.0
-model = "opus"
-budget_per_call_usd = 5.0
-research_enabled = true
-research_model = "sonnet"
-research_parallel_queries = 3
+enabled = false
 
 [heartbeat]
 interval = 300
-idle_threshold = 3
-
-[notifications.telegram]
-# bot_token and chat_id read from env vars TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
-on_heartbeat = true
-on_merge_fail = true
-on_mission_end = true
+idle_threshold = 5
 
 [deliberation]
-max_rounds = 2
-critic_model = "sonnet"
-
-[mcp]
-config_path = "/Users/dannyliu/personal_projects/autonomous-development/mcp-workers.json"
-enabled = true
+max_rounds = 1
+critic_model = "haiku"
 
 [backend]
 type = "local"

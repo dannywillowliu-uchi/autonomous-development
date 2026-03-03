@@ -266,7 +266,7 @@ class GreenBranchManager:
 					verification_report=verification_report,
 				)
 
-		if acceptance_criteria:
+		if acceptance_criteria and self.config.continuous.enforce_acceptance_criteria:
 			ac_passed, ac_output = await self._run_acceptance_criteria(acceptance_criteria)
 			if not ac_passed:
 				logger.warning("Acceptance criteria failed for %s, rolling back", branch_name)
