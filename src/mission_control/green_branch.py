@@ -17,7 +17,7 @@ import httpx
 
 from mission_control.config import MissionConfig
 from mission_control.db import Database
-from mission_control.models import VerificationNodeKind, VerificationReport
+from mission_control.models import VerificationNodeKind, VerificationReport, WorkUnit
 from mission_control.state import run_verification_nodes
 from mission_control.trace_log import TraceEvent, TraceLogger
 
@@ -28,6 +28,92 @@ FIXUP_PROMPTS = [
 	"Fix by adjusting the test expectations to match the current implementation behavior.",
 	"Fix by refactoring the surrounding code to make both tests and implementation consistent.",
 ]
+
+MAX_DIFF_LINES = 5000
+
+
+@dataclass
+class SanityCheckResult:
+	"""Result of pre-merge diff sanity check."""
+
+	passed: bool = True
+	warnings: list[str] = field(default_factory=list)
+	rejection_reason: str = ""
+
+
+def _is_test_file(path: str) -> bool:
+	"""Check if a file path refers to a test file."""
+	basename = path.rsplit("/", 1)[-1] if "/" in path else path
+	return (
+		basename.startswith("test_")
+		or basename.endswith("_test.py")
+		or "/tests/" in f"/{path}"
+		or path.startswith("tests/")
+	)
+
+
+def _sanity_check_diff(diff: str, unit: WorkUnit | None) -> SanityCheckResult:
+	"""Validate a pre-merge diff for obvious issues.
+
+	Checks:
+	  1. Diff is non-empty (reject empty commits).
+	  2. Changed files overlap with unit.files_hint (warn if zero overlap).
+	  3. Diff doesn't only contain test files when unit_type != 'test-writer'.
+	  4. Diff size within bounds (reject > MAX_DIFF_LINES lines).
+	"""
+	result = SanityCheckResult()
+
+	# (1) Reject empty diff
+	if not diff.strip():
+		result.passed = False
+		result.rejection_reason = "Diff is empty -- no changes to merge"
+		return result
+
+	# Parse changed files from diff headers
+	changed_files: list[str] = []
+	for line in diff.splitlines():
+		if line.startswith("diff --git "):
+			parts = line.split()
+			if len(parts) >= 4:
+				changed_files.append(parts[3].removeprefix("b/"))
+
+	# (2) Warn if no overlap with declared scope
+	if unit and unit.files_hint:
+		hint_parts = [f.strip() for f in unit.files_hint.split(",") if f.strip()]
+		if hint_parts and changed_files:
+			overlap = False
+			for cf in changed_files:
+				for hf in hint_parts:
+					if cf == hf or cf.startswith(hf) or hf.startswith(cf):
+						overlap = True
+						break
+				if overlap:
+					break
+			if not overlap:
+				result.warnings.append(
+					f"No overlap between changed files and declared scope ({unit.files_hint})"
+				)
+
+	# (3) Implementation units must change implementation files
+	if unit and unit.unit_type != "test-writer":
+		if changed_files and all(_is_test_file(f) for f in changed_files):
+			result.passed = False
+			result.rejection_reason = (
+				f"Diff only contains test files but unit type is "
+				f"'{unit.unit_type}', not 'test-writer'"
+			)
+			return result
+
+	# (4) Reject oversized diffs
+	diff_line_count = len(diff.splitlines())
+	if diff_line_count > MAX_DIFF_LINES:
+		result.passed = False
+		result.rejection_reason = (
+			f"Diff too large ({diff_line_count} lines > {MAX_DIFF_LINES} max)"
+		)
+		return result
+
+	return result
 
 
 @dataclass
@@ -223,16 +309,49 @@ class GreenBranchManager:
 		worker_workspace: str,
 		branch_name: str,
 		acceptance_criteria: str = "",
+		unit: WorkUnit | None = None,
 	) -> UnitMergeResult:
 		"""Merge a unit branch into mc/green.
 
 		Optimistic concurrency flow:
+		  0. PRE-CHECK: fetch + diff sanity check (reject empty, oversized, scope mismatch).
 		  1. LOCK: fetch + rebase + merge (fast ~2s). Record merge commit hash. UNLOCK.
 		  2. UNLOCKED: run verification + acceptance criteria (slow 30-300s).
 		  3. LOCK: if passed, check HEAD unchanged, sync+push. If HEAD advanced,
 		     re-rebase and retry (up to 3 times). If failed, rollback via git revert.
 		"""
 		gb = self.config.green_branch
+
+		# --- Phase 0: pre-merge sanity check (when unit metadata is available) ---
+		if unit is not None:
+			remote_name = f"worker-{branch_name}"
+			await self._run_git("remote", "add", remote_name, worker_workspace)
+			ok, _ = await self._run_git("fetch", remote_name, branch_name)
+			if not ok:
+				await self._run_git("remote", "remove", remote_name)
+				return UnitMergeResult(
+					failure_output="Failed to fetch unit branch",
+					failure_stage="fetch",
+				)
+
+			_, diff_output = await self._run_git(
+				"diff", f"{gb.green_branch}...{remote_name}/{branch_name}",
+			)
+			sanity = _sanity_check_diff(diff_output, unit)
+			await self._run_git("remote", "remove", remote_name)
+
+			if not sanity.passed:
+				logger.warning(
+					"Sanity check failed for %s: %s", branch_name, sanity.rejection_reason,
+				)
+				self._trace("sanity_check_failed", branch=branch_name, reason=sanity.rejection_reason)
+				return UnitMergeResult(
+					merged=False,
+					failure_output=sanity.rejection_reason,
+					failure_stage="sanity_check",
+				)
+			for warning in sanity.warnings:
+				logger.warning("Sanity check warning for %s: %s", branch_name, warning)
 
 		# --- Phase 1: fast git ops under lock ---
 		merge_result = await self._merge_git_ops(worker_workspace, branch_name)
