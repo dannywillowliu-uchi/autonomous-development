@@ -17,6 +17,7 @@ from mission_control.continuous_controller import (
 	ContinuousMissionResult,
 	DynamicSemaphore,
 	WorkerCompletion,
+	_BatchMergeEntry,
 )
 from mission_control.db import Database
 from mission_control.green_branch import UnitMergeResult
@@ -2752,5 +2753,112 @@ class TestProcessBatch:
 
 		assert processed == ["wu0", "wu1", "wu2"]
 
+
+class TestFlushMergeBatchWorkspaceRelease:
+	"""Verify that _flush_merge_batch releases workspaces on exception."""
+
+	@pytest.mark.asyncio
+	async def test_workspace_released_on_merge_batch_exception(self, config: MissionConfig, db: Database) -> None:
+		ctrl = ContinuousController(config, db)
+		mock_backend = AsyncMock()
+		ctrl._backend = mock_backend
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_batch = AsyncMock(side_effect=RuntimeError("git exploded"))
+		ctrl._green_branch = mock_gbm
+
+		mission = Mission(id="m1", objective="test")
+		db.insert_mission(mission)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		entries = []
+		for i in range(3):
+			unit = WorkUnit(id=f"wu{i}", plan_id="p1", title=f"Task {i}", branch_name=f"branch-{i}")
+			completion = WorkerCompletion(
+				unit=unit,
+				handoff=None,
+				workspace=f"/tmp/ws/wu{i}",
+				epoch=epoch,
+			)
+			entries.append(_BatchMergeEntry(
+				completion=completion,
+				mission=mission,
+				result=ContinuousMissionResult(mission_id="m1"),
+			))
+
+		ctrl._merge_queue = entries
+
+		await ctrl._flush_merge_batch()
+
+		assert mock_backend.release_workspace.call_count == 3
+		released = {call.args[0] for call in mock_backend.release_workspace.call_args_list}
+		assert released == {"/tmp/ws/wu0", "/tmp/ws/wu1", "/tmp/ws/wu2"}
+
+	@pytest.mark.asyncio
+	async def test_workspace_release_failure_does_not_propagate(self, config: MissionConfig, db: Database) -> None:
+		"""Even if release_workspace itself raises, the method completes without error."""
+		ctrl = ContinuousController(config, db)
+		mock_backend = AsyncMock()
+		mock_backend.release_workspace = AsyncMock(side_effect=OSError("disk error"))
+		ctrl._backend = mock_backend
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_batch = AsyncMock(side_effect=RuntimeError("merge crash"))
+		ctrl._green_branch = mock_gbm
+
+		mission = Mission(id="m1", objective="test")
+		db.insert_mission(mission)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task", branch_name="branch-1")
+		completion = WorkerCompletion(
+			unit=unit,
+			handoff=None,
+			workspace="/tmp/ws/wu1",
+			epoch=epoch,
+		)
+		ctrl._merge_queue = [_BatchMergeEntry(
+			completion=completion,
+			mission=mission,
+			result=ContinuousMissionResult(mission_id="m1"),
+		)]
+
+		# Should not raise despite release_workspace failing
+		await ctrl._flush_merge_batch()
+		mock_backend.release_workspace.assert_called_once_with("/tmp/ws/wu1")
+
+	@pytest.mark.asyncio
+	async def test_no_release_when_workspace_is_empty(self, config: MissionConfig, db: Database) -> None:
+		"""Entries with empty workspace strings should not trigger release."""
+		ctrl = ContinuousController(config, db)
+		mock_backend = AsyncMock()
+		ctrl._backend = mock_backend
+
+		mock_gbm = MagicMock()
+		mock_gbm.merge_batch = AsyncMock(side_effect=RuntimeError("boom"))
+		ctrl._green_branch = mock_gbm
+
+		mission = Mission(id="m1", objective="test")
+		db.insert_mission(mission)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task", branch_name="branch-1")
+		completion = WorkerCompletion(
+			unit=unit,
+			handoff=None,
+			workspace="",
+			epoch=epoch,
+		)
+		ctrl._merge_queue = [_BatchMergeEntry(
+			completion=completion,
+			mission=mission,
+			result=ContinuousMissionResult(mission_id="m1"),
+		)]
+
+		await ctrl._flush_merge_batch()
+		mock_backend.release_workspace.assert_not_called()
 
 
