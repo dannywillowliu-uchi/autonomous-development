@@ -14,6 +14,7 @@ from mission_control.models import Plan, WorkUnit
 from mission_control.recursive_planner import (
 	PlannerResult,
 	RecursivePlanner,
+	_format_locked_files,
 	_is_parse_fallback,
 	_parse_planner_output,
 	_parse_subprocess_cost,
@@ -524,3 +525,131 @@ class TestContextSetters:
 		planner = _planner(tmp_path)
 		planner.set_project_snapshot("src/\ntests/")
 		assert planner._project_snapshot == "src/\ntests/"
+
+
+# -- _format_locked_files --
+
+
+class TestFormatLockedFiles:
+	"""Tests for _format_locked_files markdown table rendering."""
+
+	def test_empty_dict_produces_no_section(self) -> None:
+		"""Empty locked_files dict returns empty string (no section at all)."""
+		assert _format_locked_files({}) == ""
+
+	def test_locked_files_appear_as_markdown_table(self) -> None:
+		"""Locked files render as a markdown table with File | Reason | Locked By."""
+		locked = {
+			"src/auth.py": ["already merged"],
+			"src/db.py": ["in-flight: Add connection pooling"],
+		}
+		result = _format_locked_files(locked)
+		assert "## Locked Files (DO NOT TARGET)" in result
+		assert "| File | Reason | Locked By |" in result
+		assert "| src/auth.py | already merged | - |" in result
+		assert "| src/db.py | in-flight | Add connection pooling |" in result
+
+	def test_multiple_reasons_per_file(self) -> None:
+		"""Multiple reasons for a single file are semicolon-joined."""
+		locked = {"src/api.py": ["already merged", "in-flight: Refactor endpoints"]}
+		result = _format_locked_files(locked)
+		assert "| src/api.py | already merged; in-flight | -; Refactor endpoints |" in result
+
+	def test_cap_at_30_entries(self) -> None:
+		"""Table is capped at 30 entries with a '... and N more' footer."""
+		locked = {f"src/file_{i:03d}.py": ["already merged"] for i in range(50)}
+		result = _format_locked_files(locked)
+		# Count table data rows (exclude header row and separator)
+		table_rows = [line for line in result.split("\n") if line.startswith("| src/")]
+		assert len(table_rows) == 30
+		assert "... and 20 more" in result
+
+	def test_cap_exact_boundary_no_footer(self) -> None:
+		"""Exactly 30 entries produces no '... and N more' footer."""
+		locked = {f"src/file_{i:03d}.py": ["already merged"] for i in range(30)}
+		result = _format_locked_files(locked)
+		table_rows = [line for line in result.split("\n") if line.startswith("| src/")]
+		assert len(table_rows) == 30
+		assert "... and" not in result
+
+	def test_files_are_sorted(self) -> None:
+		"""Files appear in sorted order."""
+		locked = {
+			"src/z.py": ["already merged"],
+			"src/a.py": ["in-flight: Fix bug"],
+		}
+		result = _format_locked_files(locked)
+		lines = result.split("\n")
+		data_rows = [line for line in lines if line.startswith("| src/")]
+		assert data_rows[0].startswith("| src/a.py")
+		assert data_rows[1].startswith("| src/z.py")
+
+
+class TestLockedFilesInPrompt:
+	"""Tests that locked files are injected into the planner prompt correctly."""
+
+	@pytest.mark.asyncio
+	async def test_locked_files_appear_in_planner_prompt(self, tmp_path: Path) -> None:
+		"""Locked files table appears in the prompt sent to the subprocess."""
+		planner = _planner(tmp_path)
+		locked = {"src/locked.py": ["already merged"]}
+
+		response = json.dumps({"type": "leaves", "units": []})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		):
+			await planner.plan_round("Test", locked_files=locked)
+
+		# Extract the prompt sent via stdin
+		stdin_bytes = mock_proc.communicate.call_args[1].get("input") or mock_proc.communicate.call_args[0][0]
+		prompt_text = stdin_bytes.decode() if isinstance(stdin_bytes, bytes) else stdin_bytes
+		assert "## Locked Files (DO NOT TARGET)" in prompt_text
+		assert "| src/locked.py |" in prompt_text
+
+	@pytest.mark.asyncio
+	async def test_no_locked_section_when_empty(self, tmp_path: Path) -> None:
+		"""No locked files section appears when locked_files is empty."""
+		planner = _planner(tmp_path)
+
+		response = json.dumps({"type": "leaves", "units": []})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		):
+			await planner.plan_round("Test", locked_files={})
+
+		stdin_bytes = mock_proc.communicate.call_args[1].get("input") or mock_proc.communicate.call_args[0][0]
+		prompt_text = stdin_bytes.decode() if isinstance(stdin_bytes, bytes) else stdin_bytes
+		assert "## Locked Files" not in prompt_text
+
+	@pytest.mark.asyncio
+	async def test_locked_section_before_output_format(self, tmp_path: Path) -> None:
+		"""Locked files section appears before the Output Format section."""
+		planner = _planner(tmp_path)
+		locked = {"src/foo.py": ["in-flight: Task X"]}
+
+		response = json.dumps({"type": "leaves", "units": []})
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate.return_value = (response.encode(), b"")
+
+		with patch(
+			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
+			return_value=mock_proc,
+		):
+			await planner.plan_round("Test", locked_files=locked)
+
+		stdin_bytes = mock_proc.communicate.call_args[1].get("input") or mock_proc.communicate.call_args[0][0]
+		prompt_text = stdin_bytes.decode() if isinstance(stdin_bytes, bytes) else stdin_bytes
+		locked_pos = prompt_text.index("## Locked Files (DO NOT TARGET)")
+		output_pos = prompt_text.index("## Output Format")
+		assert locked_pos < output_pos

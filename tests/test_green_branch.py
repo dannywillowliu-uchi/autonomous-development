@@ -2560,9 +2560,9 @@ class TestLockedFilesInPlannerPrompt:
 			locked_files=locked,
 		)
 
-		assert "## Locked Files" in captured_prompt
-		assert "src/app.py (already merged)" in captured_prompt
-		assert "src/api.py (in-flight: Build API)" in captured_prompt
+		assert "## Locked Files (DO NOT TARGET)" in captured_prompt
+		assert "| src/api.py | in-flight | Build API |" in captured_prompt
+		assert "| src/app.py | already merged | - |" in captured_prompt
 		assert "AUTOMATICALLY DROPPED" in captured_prompt
 
 	@pytest.mark.asyncio
