@@ -3,18 +3,28 @@
 from mission_control.intelligence.evaluator import evaluate_findings, generate_proposals
 from mission_control.intelligence.models import AdaptationProposal, Finding, IntelSource
 from mission_control.intelligence.scanner import IntelReport, IntelScanner, run_scan
-from mission_control.intelligence.sources import scan_arxiv, scan_github, scan_hackernews
+from mission_control.intelligence.sources import (
+	IncrementalScanner,
+	ScanCache,
+	scan_arxiv,
+	scan_github,
+	scan_hackernews,
+	scan_incremental,
+)
 
 __all__ = [
 	"AdaptationProposal",
 	"Finding",
+	"IncrementalScanner",
 	"IntelReport",
 	"IntelScanner",
 	"IntelSource",
+	"ScanCache",
 	"evaluate_findings",
 	"generate_proposals",
 	"run_scan",
 	"scan_arxiv",
 	"scan_github",
 	"scan_hackernews",
+	"scan_incremental",
 ]
