@@ -1099,6 +1099,7 @@ def build_claude_cmd(
 	resume_session: str | None = None,
 	allowed_tools: list[str] | None = None,
 	setting_sources: str | None = None,
+	json_schema: str | None = None,
 ) -> list[str]:
 	"""Build the base claude subprocess command list.
 
@@ -1126,6 +1127,8 @@ def build_claude_cmd(
 			cmd.extend(["--allowedTools", tool])
 	if setting_sources:
 		cmd.extend(["--setting-sources", setting_sources])
+	if json_schema is not None:
+		cmd.extend(["--json-schema", json_schema])
 	if prompt is not None:
 		cmd.append(prompt)
 	return cmd
