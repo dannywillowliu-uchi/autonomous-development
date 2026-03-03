@@ -880,6 +880,37 @@ class TestBuildClaudeCmd:
 		idx = cmd.index("--mcp-config")
 		assert "~" not in cmd[idx + 1]
 
+	def test_json_schema_included_when_provided(self) -> None:
+		schema = '{"type":"object","properties":{"status":{"type":"string"}}}'
+		cmd = build_claude_cmd(_build_cmd_config(), model="sonnet", json_schema=schema)
+		assert "--json-schema" in cmd
+		idx = cmd.index("--json-schema")
+		assert cmd[idx + 1] == schema
+
+	def test_json_schema_absent_when_none(self) -> None:
+		cmd = build_claude_cmd(_build_cmd_config(), model="sonnet", json_schema=None)
+		assert "--json-schema" not in cmd
+
+	def test_json_schema_absent_by_default(self) -> None:
+		cmd = build_claude_cmd(_build_cmd_config(), model="sonnet")
+		assert "--json-schema" not in cmd
+
+	def test_json_schema_with_other_flags(self) -> None:
+		cfg = _build_cmd_config(mcp=MCPConfig(config_path="/mcp.json", enabled=True))
+		schema = '{"type":"object"}'
+		cmd = build_claude_cmd(
+			cfg, model="opus", budget=5.0, max_turns=10,
+			permission_mode="plan", json_schema=schema,
+		)
+		assert "--json-schema" in cmd
+		assert "--mcp-config" in cmd
+		assert "--model" in cmd
+		assert "--max-budget-usd" in cmd
+		assert "--max-turns" in cmd
+		assert "--permission-mode" in cmd
+		idx = cmd.index("--json-schema")
+		assert cmd[idx + 1] == schema
+
 	def test_all_flags_combined(self) -> None:
 		cfg = _build_cmd_config(mcp=MCPConfig(config_path="/mcp.json", enabled=True))
 		cmd = build_claude_cmd(
