@@ -1139,3 +1139,313 @@ class TestMissionWorkerFilePreviewsIntegration:
 		unit = WorkUnit(files_hint="nonexistent.py", title="task")
 		result = load_context_for_mission_worker(unit, config)
 		assert "### File Previews" not in result
+
+
+# -- auto_store_from_completion --
+
+
+class TestAutoStoreFromCompletion:
+	def test_success_stores_discoveries(self, manager: MemoryManager, db: Database) -> None:
+		unit = WorkUnit(files_hint="src/db.py,src/models.py", title="fix db layer")
+		handoff = Handoff(
+			status="completed",
+			summary="Fixed connection pooling",
+			discoveries=["WAL mode improves concurrency", "Connection reuse reduces latency"],
+			concerns=[],
+		)
+		result = manager.auto_store_from_completion(unit, handoff, "completed")
+		assert len(result) == 2
+		assert result[0].event_type == "unit_success"
+		assert result[0].content == "WAL mode improves concurrency"
+		assert result[0].confidence == 1.0
+		assert result[0].outcome == "completed"
+		assert "src/db.py" in result[0].scope_tokens
+		assert result[1].content == "Connection reuse reduces latency"
+		# Verify persisted
+		all_mems = db.get_all_episodic_memories()
+		assert len(all_mems) == 2
+
+	def test_failure_stores_concerns(self, manager: MemoryManager, db: Database) -> None:
+		unit = WorkUnit(files_hint="src/worker.py", title="update worker")
+		handoff = Handoff(
+			status="failed",
+			summary="Worker crashed on startup",
+			discoveries=[],
+			concerns=["Timeout on subprocess spawn", "Missing env variable"],
+		)
+		result = manager.auto_store_from_completion(unit, handoff, "failed")
+		assert len(result) == 2
+		assert result[0].event_type == "unit_failure"
+		assert result[0].content == "Timeout on subprocess spawn"
+		assert result[0].confidence == 0.5
+		assert result[0].outcome == "failed"
+		assert result[1].content == "Missing env variable"
+
+	def test_success_no_discoveries_falls_back_to_summary(self, manager: MemoryManager, db: Database) -> None:
+		unit = WorkUnit(files_hint="src/cli.py", title="add CLI flag")
+		handoff = Handoff(
+			status="completed",
+			summary="Added --verbose flag",
+			discoveries=[],
+			concerns=[],
+		)
+		result = manager.auto_store_from_completion(unit, handoff, "completed")
+		assert len(result) == 1
+		assert result[0].event_type == "unit_success"
+		assert result[0].content == "Added --verbose flag"
+		assert result[0].confidence == 1.0
+
+	def test_failure_no_concerns_falls_back_to_summary(self, manager: MemoryManager, db: Database) -> None:
+		unit = WorkUnit(files_hint="src/cli.py", title="add CLI flag")
+		handoff = Handoff(
+			status="failed",
+			summary="Build failed",
+			discoveries=[],
+			concerns=[],
+		)
+		result = manager.auto_store_from_completion(unit, handoff, "failed")
+		assert len(result) == 1
+		assert result[0].event_type == "unit_failure"
+		assert result[0].content == "Build failed"
+		assert result[0].confidence == 0.5
+
+	def test_empty_scope_returns_empty(self, manager: MemoryManager) -> None:
+		unit = WorkUnit(files_hint="", title="")
+		handoff = Handoff(status="completed", summary="Done", discoveries=["found thing"])
+		result = manager.auto_store_from_completion(unit, handoff, "completed")
+		assert result == []
+
+	def test_no_summary_no_discoveries_returns_empty(self, manager: MemoryManager, db: Database) -> None:
+		unit = WorkUnit(files_hint="src/db.py", title="task")
+		handoff = Handoff(status="completed", summary="", discoveries=[], concerns=[])
+		result = manager.auto_store_from_completion(unit, handoff, "completed")
+		assert result == []
+		assert db.get_all_episodic_memories() == []
+
+	def test_scope_tokens_include_filename_and_path(self, manager: MemoryManager) -> None:
+		unit = WorkUnit(files_hint="src/mission_control/memory.py", title="enhance memory")
+		handoff = Handoff(status="completed", summary="Enhanced", discoveries=["Found pattern"])
+		result = manager.auto_store_from_completion(unit, handoff, "completed")
+		assert len(result) == 1
+		tokens = result[0].scope_tokens
+		assert "src/mission_control/memory.py" in tokens
+		assert "memory.py" in tokens
+		assert "enhance memory" in tokens
+
+
+# -- get_cross_mission_context --
+
+
+class TestGetCrossMissionContext:
+	def test_returns_empty_for_empty_tokens(self, manager: MemoryManager) -> None:
+		assert manager.get_cross_mission_context([]) == ""
+
+	def test_returns_empty_when_no_matches(self, manager: MemoryManager) -> None:
+		result = manager.get_cross_mission_context(["nonexistent_module"])
+		assert result == ""
+
+	def test_returns_episodic_section(self, manager: MemoryManager, db: Database) -> None:
+		db.insert_episodic_memory(EpisodicMemory(
+			id="em1", event_type="unit_success", content="Auth works",
+			outcome="completed", scope_tokens="auth.py", confidence=0.9, ttl_days=30,
+		))
+		result = manager.get_cross_mission_context(["auth.py"])
+		assert "## Cross-Mission Memory" in result
+		assert "### Episodic Memories" in result
+		assert "[unit_success] Auth works -> completed" in result
+		assert "(confidence: 0.9)" in result
+
+	def test_returns_semantic_section(self, manager: MemoryManager, db: Database) -> None:
+		db.insert_episodic_memory(EpisodicMemory(
+			id="em1", scope_tokens="auth.py", ttl_days=30,
+		))
+		db.insert_semantic_memory(SemanticMemory(
+			id="sm1", content="Always validate auth tokens", confidence=0.85,
+		))
+		result = manager.get_cross_mission_context(["auth.py"])
+		assert "### Learned Rules" in result
+		assert "Always validate auth tokens" in result
+		assert "(confidence: 0.8)" in result
+
+	def test_returns_both_sections(self, manager: MemoryManager, db: Database) -> None:
+		db.insert_episodic_memory(EpisodicMemory(
+			id="em1", event_type="unit_success", content="Test passed",
+			outcome="pass", scope_tokens="db.py", confidence=1.0, ttl_days=30,
+		))
+		db.insert_semantic_memory(SemanticMemory(
+			id="sm1", content="Use WAL mode", confidence=0.9,
+		))
+		result = manager.get_cross_mission_context(["db.py"])
+		assert "### Episodic Memories" in result
+		assert "### Learned Rules" in result
+
+	def test_bumps_access_count(self, manager: MemoryManager, db: Database) -> None:
+		db.insert_episodic_memory(EpisodicMemory(
+			id="em1", scope_tokens="auth.py", access_count=0, ttl_days=30,
+		))
+		manager.get_cross_mission_context(["auth.py"])
+		all_mems = db.get_all_episodic_memories()
+		assert all_mems[0].access_count == 1
+
+	def test_respects_limit(self, manager: MemoryManager, db: Database) -> None:
+		for i in range(10):
+			db.insert_episodic_memory(EpisodicMemory(
+				id=f"em{i}", event_type="unit_success", content=f"Finding {i}",
+				outcome="pass", scope_tokens="auth.py", ttl_days=30,
+				access_count=10 - i,
+			))
+		result = manager.get_cross_mission_context(["auth.py"], limit=3)
+		# Should only have 3 episodic entries
+		assert result.count("[unit_success]") == 3
+
+	def test_full_confidence_no_annotation(self, manager: MemoryManager, db: Database) -> None:
+		db.insert_episodic_memory(EpisodicMemory(
+			id="em1", event_type="unit_success", content="Perfect",
+			outcome="pass", scope_tokens="db.py", confidence=1.0, ttl_days=30,
+		))
+		result = manager.get_cross_mission_context(["db.py"])
+		assert "confidence" not in result
+
+
+# -- distill_patterns --
+
+
+@pytest.mark.asyncio()
+async def test_distill_patterns_empty_db(manager: MemoryManager) -> None:
+	result = await manager.distill_patterns()
+	assert result == []
+
+
+@pytest.mark.asyncio()
+async def test_distill_patterns_below_min_cluster(manager: MemoryManager, db: Database) -> None:
+	db.insert_episodic_memory(EpisodicMemory(
+		id="em1", scope_tokens="auth.py", content="ep1",
+	))
+	db.insert_episodic_memory(EpisodicMemory(
+		id="em2", scope_tokens="auth.py", content="ep2",
+	))
+	result = await manager.distill_patterns(min_cluster_size=3)
+	assert result == []
+
+
+@pytest.mark.asyncio()
+async def test_distill_patterns_finds_cluster(manager: MemoryManager, db: Database) -> None:
+	for i in range(3):
+		db.insert_episodic_memory(EpisodicMemory(
+			id=f"em{i}", scope_tokens="auth.py",
+			event_type="unit_success", content=f"Auth finding {i}",
+			outcome="pass", confidence=0.8,
+		))
+
+	mock_proc = AsyncMock()
+	mock_proc.communicate = AsyncMock(return_value=(b"Auth modules need careful testing", b""))
+	mock_proc.returncode = 0
+
+	with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+		result = await manager.distill_patterns(min_cluster_size=3)
+
+	assert len(result) == 1
+	assert result[0].content == "Auth modules need careful testing"
+
+
+@pytest.mark.asyncio()
+async def test_distill_patterns_multiple_clusters(manager: MemoryManager, db: Database) -> None:
+	# Cluster 1: auth.py
+	for i in range(3):
+		db.insert_episodic_memory(EpisodicMemory(
+			id=f"auth-{i}", scope_tokens="auth.py",
+			event_type="unit_success", content=f"Auth {i}", outcome="pass", confidence=0.8,
+		))
+	# Cluster 2: db.py
+	for i in range(3):
+		db.insert_episodic_memory(EpisodicMemory(
+			id=f"db-{i}", scope_tokens="db.py",
+			event_type="unit_failure", content=f"DB {i}", outcome="fail", confidence=0.7,
+		))
+
+	call_count = 0
+
+	async def mock_communicate(input_data=None):
+		nonlocal call_count
+		call_count += 1
+		if call_count == 1:
+			return (b"Auth rule", b"")
+		return (b"DB rule", b"")
+
+	mock_proc = AsyncMock()
+	mock_proc.communicate = mock_communicate
+	mock_proc.returncode = 0
+
+	with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+		result = await manager.distill_patterns(min_cluster_size=3)
+
+	assert len(result) == 2
+	contents = {r.content for r in result}
+	assert "Auth rule" in contents
+	assert "DB rule" in contents
+
+
+@pytest.mark.asyncio()
+async def test_distill_patterns_deduplicates_clusters(manager: MemoryManager, db: Database) -> None:
+	# All 3 episodes share both tokens -- should produce one cluster, not two
+	for i in range(3):
+		db.insert_episodic_memory(EpisodicMemory(
+			id=f"em{i}", scope_tokens="auth.py,models.py",
+			event_type="unit_success", content=f"Finding {i}",
+			outcome="pass", confidence=0.8,
+		))
+
+	mock_proc = AsyncMock()
+	mock_proc.communicate = AsyncMock(return_value=(b"Combined rule", b""))
+	mock_proc.returncode = 0
+
+	with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+		result = await manager.distill_patterns(min_cluster_size=3)
+
+	assert len(result) == 1
+
+
+@pytest.mark.asyncio()
+async def test_distill_patterns_llm_failure_skips_cluster(manager: MemoryManager, db: Database) -> None:
+	for i in range(3):
+		db.insert_episodic_memory(EpisodicMemory(
+			id=f"em{i}", scope_tokens="auth.py",
+			event_type="unit_success", content=f"Finding {i}",
+			outcome="pass", confidence=0.8,
+		))
+
+	with patch("asyncio.create_subprocess_exec", side_effect=OSError("no claude")):
+		result = await manager.distill_patterns(min_cluster_size=3)
+
+	assert result == []
+
+
+@pytest.mark.asyncio()
+async def test_distill_patterns_no_scope_tokens_ignored(manager: MemoryManager, db: Database) -> None:
+	for i in range(5):
+		db.insert_episodic_memory(EpisodicMemory(
+			id=f"em{i}", scope_tokens="",
+			content=f"No scope {i}",
+		))
+	result = await manager.distill_patterns(min_cluster_size=3)
+	assert result == []
+
+
+@pytest.mark.asyncio()
+async def test_distill_patterns_custom_min_cluster_size(manager: MemoryManager, db: Database) -> None:
+	for i in range(2):
+		db.insert_episodic_memory(EpisodicMemory(
+			id=f"em{i}", scope_tokens="auth.py",
+			event_type="unit_success", content=f"Auth {i}",
+			outcome="pass", confidence=0.9,
+		))
+
+	mock_proc = AsyncMock()
+	mock_proc.communicate = AsyncMock(return_value=(b"Small cluster rule", b""))
+	mock_proc.returncode = 0
+
+	with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+		result = await manager.distill_patterns(min_cluster_size=2)
+
+	assert len(result) == 1
+	assert result[0].content == "Small cluster rule"

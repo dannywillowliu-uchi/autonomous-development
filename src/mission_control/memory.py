@@ -4,11 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from pathlib import Path
 
 from mission_control.config import EpisodicMemoryConfig, MissionConfig, claude_subprocess_env
 from mission_control.db import Database
-from mission_control.models import ContextItem, EpisodicMemory, SemanticMemory, Session, WorkUnit, _new_id, _now_iso
+from mission_control.models import (
+	ContextItem,
+	EpisodicMemory,
+	Handoff,
+	SemanticMemory,
+	Session,
+	WorkUnit,
+	_new_id,
+	_now_iso,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -300,7 +310,12 @@ class MemoryManager:
 		"""
 		if len(episodes) < self.config.min_episodes_for_distill:
 			return None
+		return await self._run_distillation(episodes)
 
+	async def _run_distillation(
+		self, episodes: list[EpisodicMemory],
+	) -> SemanticMemory | None:
+		"""Core LLM distillation logic shared by distill_to_semantic and distill_patterns."""
 		episode_texts = []
 		for ep in episodes:
 			episode_texts.append(
@@ -373,6 +388,153 @@ class MemoryManager:
 				self.db.update_episodic_memory(ep)
 
 		return evicted, extended
+
+	def auto_store_from_completion(
+		self,
+		unit: WorkUnit,
+		handoff: Handoff,
+		outcome: str,
+	) -> list[EpisodicMemory]:
+		"""Automatically create episodic memories from completed/failed units.
+
+		Extracts scope tokens from files_hint and title. For successes, stores
+		discoveries; for failures, stores concerns. Falls back to summary if
+		neither is available. Confidence is 1.0 for completed, 0.5 for failed.
+		"""
+		scope_tokens = extract_scope_tokens(unit)
+		if not scope_tokens:
+			return []
+
+		confidence = 1.0 if outcome == "completed" else 0.5
+		memories: list[EpisodicMemory] = []
+
+		if outcome == "completed" and handoff.discoveries:
+			for discovery in handoff.discoveries:
+				mem = EpisodicMemory(
+					id=_new_id(),
+					event_type="unit_success",
+					content=discovery,
+					outcome=outcome,
+					scope_tokens=",".join(scope_tokens),
+					confidence=confidence,
+					ttl_days=self.config.default_ttl_days,
+					created_at=_now_iso(),
+					last_accessed=_now_iso(),
+				)
+				self.db.insert_episodic_memory(mem)
+				memories.append(mem)
+		elif outcome == "failed" and handoff.concerns:
+			for concern in handoff.concerns:
+				mem = EpisodicMemory(
+					id=_new_id(),
+					event_type="unit_failure",
+					content=concern,
+					outcome=outcome,
+					scope_tokens=",".join(scope_tokens),
+					confidence=confidence,
+					ttl_days=self.config.default_ttl_days,
+					created_at=_now_iso(),
+					last_accessed=_now_iso(),
+				)
+				self.db.insert_episodic_memory(mem)
+				memories.append(mem)
+
+		# Fallback: store summary if no discoveries/concerns
+		if not memories and handoff.summary:
+			event_type = "unit_success" if outcome == "completed" else "unit_failure"
+			mem = EpisodicMemory(
+				id=_new_id(),
+				event_type=event_type,
+				content=handoff.summary,
+				outcome=outcome,
+				scope_tokens=",".join(scope_tokens),
+				confidence=confidence,
+				ttl_days=self.config.default_ttl_days,
+				created_at=_now_iso(),
+				last_accessed=_now_iso(),
+			)
+			self.db.insert_episodic_memory(mem)
+			memories.append(mem)
+
+		return memories
+
+	def get_cross_mission_context(
+		self, scope_tokens: list[str], limit: int = 5,
+	) -> str:
+		"""Retrieve and format episodic + semantic memories relevant to given scope tokens.
+
+		Returns formatted markdown section suitable for planner/worker injection.
+		Bumps access counts on retrieved episodic memories for TTL extension.
+		"""
+		if not scope_tokens:
+			return ""
+
+		sections: list[str] = []
+
+		# Episodic memories (retrieve_relevant bumps access counts)
+		episodes = self.retrieve_relevant(scope_tokens, limit=limit)
+		if episodes:
+			lines = []
+			for ep in episodes:
+				conf = f" (confidence: {ep.confidence:.1f})" if ep.confidence < 1.0 else ""
+				lines.append(f"- [{ep.event_type}] {ep.content} -> {ep.outcome}{conf}")
+			sections.append("### Episodic Memories\n" + "\n".join(lines))
+
+		# Semantic memories
+		semantics = self.db.get_top_semantic_memories(limit=limit)
+		if semantics:
+			lines = []
+			for sm in semantics:
+				conf = f" (confidence: {sm.confidence:.1f})" if sm.confidence < 1.0 else ""
+				lines.append(f"- {sm.content}{conf}")
+			sections.append("### Learned Rules\n" + "\n".join(lines))
+
+		if not sections:
+			return ""
+
+		return "## Cross-Mission Memory\n\n" + "\n\n".join(sections)
+
+	async def distill_patterns(
+		self, min_cluster_size: int = 3,
+	) -> list[SemanticMemory]:
+		"""Find clusters of episodic memories sharing common scope tokens, then distill each cluster.
+
+		Unlike distill_to_semantic (which takes explicit episodes), this auto-discovers
+		clusters by grouping episodes that share scope tokens.
+		"""
+		all_episodes = self.db.get_all_episodic_memories()
+		if not all_episodes:
+			return []
+
+		# Build token -> episodes mapping
+		token_to_episodes: dict[str, list[EpisodicMemory]] = defaultdict(list)
+		for ep in all_episodes:
+			if not ep.scope_tokens:
+				continue
+			for token in ep.scope_tokens.split(","):
+				token = token.strip()
+				if token:
+					token_to_episodes[token].append(ep)
+
+		# Find clusters meeting minimum size, deduplicate by episode ID set
+		results: list[SemanticMemory] = []
+		seen_episode_sets: set[frozenset[str]] = set()
+
+		for _token, episodes in sorted(
+			token_to_episodes.items(), key=lambda x: len(x[1]), reverse=True,
+		):
+			if len(episodes) < min_cluster_size:
+				continue
+			ep_ids = frozenset(ep.id for ep in episodes)
+			if ep_ids in seen_episode_sets:
+				continue
+			seen_episode_sets.add(ep_ids)
+
+			semantic = await self._run_distillation(episodes)
+			if semantic is not None:
+				results.append(semantic)
+
+		return results
 
 	def get_promote_candidates(self) -> list[EpisodicMemory]:
 		"""Get episodes with high confidence nearing expiration -- candidates for distillation."""
