@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
@@ -10,6 +11,14 @@ from mission_control.db import Database
 
 log = logging.getLogger(__name__)
 
+FAILURE_STAGES = frozenset({
+	"acceptance_criteria",
+	"verification",
+	"merge_conflict",
+	"timeout",
+	"infrastructure",
+})
+
 
 @dataclass
 class BatchSignals:
@@ -17,6 +26,7 @@ class BatchSignals:
 
 	file_hotspots: list[tuple[str, int]] = field(default_factory=list)
 	failure_clusters: dict[str, int] = field(default_factory=dict)
+	failure_stages: dict[str, int] = field(default_factory=dict)
 	stalled_areas: list[str] = field(default_factory=list)
 	effort_distribution: dict[str, float] = field(default_factory=dict)
 	retry_depth: dict[str, int] = field(default_factory=dict)
@@ -43,10 +53,15 @@ class BatchAnalyzer:
 			knowledge = self._db.get_knowledge_for_mission(mission_id)
 		except Exception:
 			knowledge = []
+		try:
+			events = self._db.get_unit_events_for_mission(mission_id)
+		except Exception:
+			events = []
 
 		return BatchSignals(
 			file_hotspots=self._compute_hotspots(handoffs),
 			failure_clusters=self._cluster_failures(units, handoffs),
+			failure_stages=self._compute_failure_stages(events),
 			stalled_areas=self._find_stalled(units),
 			effort_distribution=self._compute_effort(units),
 			retry_depth=self._compute_retries(units),
@@ -60,6 +75,40 @@ class BatchAnalyzer:
 			for f in (h.files_changed or []):
 				file_counts[f] += 1
 		return [(f, c) for f, c in file_counts.most_common() if c >= 3]
+
+	def _compute_failure_stages(self, events: list) -> dict[str, int]:
+		"""Count merge_failed events by failure_stage from details JSON."""
+		counts: Counter[str] = Counter()
+		for ev in events:
+			if ev.event_type != "merge_failed":
+				continue
+			stage = self._extract_failure_stage(ev.details)
+			if stage:
+				counts[stage] += 1
+		return dict(counts.most_common())
+
+	@staticmethod
+	def _extract_failure_stage(details: str) -> str:
+		"""Parse failure_stage from a details JSON string, normalizing to known stages."""
+		if not details:
+			return ""
+		try:
+			parsed = json.loads(details)
+		except (json.JSONDecodeError, TypeError):
+			return ""
+		raw = parsed.get("failure_stage", "")
+		if not raw:
+			return ""
+		# Normalize known aliases to canonical stage names
+		if raw in FAILURE_STAGES:
+			return raw
+		if raw in ("pre_merge_verification", "post_merge_verification"):
+			return "verification"
+		if raw in ("fetch", "exception"):
+			return "infrastructure"
+		if raw == "execution":
+			return "infrastructure"
+		return raw
 
 	def _cluster_failures(self, units: list, handoffs: list) -> dict[str, int]:
 		"""Group failures by area/pattern."""
@@ -111,3 +160,18 @@ class BatchAnalyzer:
 						implementation_areas.add(f)
 		gaps = implementation_areas - research_scopes
 		return sorted(gaps)[:10]
+
+
+def format_failure_stages(stages: dict[str, int]) -> str:
+	"""Format failure_stages dict into a planner-readable summary.
+
+	Returns a multi-line string describing each failure stage and its count,
+	or an empty string if there are no failure stages.
+	"""
+	if not stages:
+		return ""
+	total = sum(stages.values())
+	lines = [f"Failure breakdown ({total} total):"]
+	for stage, count in sorted(stages.items(), key=lambda x: -x[1]):
+		lines.append(f"  - {stage}: {count}")
+	return "\n".join(lines)
