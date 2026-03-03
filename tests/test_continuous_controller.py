@@ -758,66 +758,73 @@ class TestWorkerRecordPersistence:
 			return getattr(db, method)(*args)
 		db.locked_call = mock_locked_call  # type: ignore[attr-defined]
 
-		return db, config, ctrl, epoch
+		patcher = patch("mission_control.continuous_controller.build_claude_cmd", return_value=["echo", "test"])
+		patcher.start()
+
+		return db, config, ctrl, epoch, patcher
 
 	@pytest.mark.asyncio
 	async def test_worker_created_on_spawn(self, config: MissionConfig, db: Database) -> None:
 		"""Worker record is inserted after backend.spawn() succeeds."""
-		db, config, ctrl, epoch = self._setup(config, db)
+		db, config, ctrl, epoch, patcher = self._setup(config, db)
+		try:
+			mock_backend = AsyncMock()
+			mock_handle = MagicMock()
+			mock_handle.pid = 42
+			mock_handle.workspace_path = "/tmp/ws/wu1"
+			mock_backend.spawn.return_value = mock_handle
+			mock_backend.check_status.return_value = "completed"
+			mock_backend.get_output.return_value = ""
+			ctrl._backend = mock_backend
 
-		mock_backend = AsyncMock()
-		mock_handle = MagicMock()
-		mock_handle.pid = 42
-		mock_handle.workspace_path = "/tmp/ws/wu1"
-		mock_backend.spawn.return_value = mock_handle
-		mock_backend.check_status.return_value = "completed"
-		mock_backend.get_output.return_value = ""
-		ctrl._backend = mock_backend
+			unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+			db.insert_work_unit(unit)
+			ctrl._semaphore = DynamicSemaphore(1)
 
-		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
-		db.insert_work_unit(unit)
-		ctrl._semaphore = DynamicSemaphore(1)
+			await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
 
-		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
-
-		worker = db.get_worker("wu1")
-		assert worker is not None
-		assert worker.workspace_path == "/tmp/ws/wu1"
-		assert worker.backend_type == "local"
+			worker = db.get_worker("wu1")
+			assert worker is not None
+			assert worker.workspace_path == "/tmp/ws/wu1"
+			assert worker.backend_type == "local"
+		finally:
+			patcher.stop()
 
 	@pytest.mark.asyncio
 	async def test_worker_idle_on_completion(self, config: MissionConfig, db: Database) -> None:
 		"""Worker status set to idle after successful completion."""
-		db, config, ctrl, epoch = self._setup(config, db)
+		db, config, ctrl, epoch, patcher = self._setup(config, db)
+		try:
+			mc_result = json.dumps({
+				"status": "completed", "commits": ["abc123"],
+				"summary": "Done", "files_changed": [], "discoveries": [], "concerns": [],
+			})
+			output = f"MC_RESULT:{mc_result}"
 
-		mc_result = json.dumps({
-			"status": "completed", "commits": ["abc123"],
-			"summary": "Done", "files_changed": [], "discoveries": [], "concerns": [],
-		})
-		output = f"MC_RESULT:{mc_result}"
+			mock_backend = AsyncMock()
+			mock_handle = MagicMock()
+			mock_handle.pid = 42
+			mock_handle.workspace_path = "/tmp/ws"
+			mock_backend.spawn.return_value = mock_handle
+			mock_backend.check_status.return_value = "completed"
+			mock_backend.get_output.return_value = output
+			ctrl._backend = mock_backend
 
-		mock_backend = AsyncMock()
-		mock_handle = MagicMock()
-		mock_handle.pid = 42
-		mock_handle.workspace_path = "/tmp/ws"
-		mock_backend.spawn.return_value = mock_handle
-		mock_backend.check_status.return_value = "completed"
-		mock_backend.get_output.return_value = output
-		ctrl._backend = mock_backend
+			unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+			db.insert_work_unit(unit)
+			ctrl._semaphore = DynamicSemaphore(1)
 
-		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
-		db.insert_work_unit(unit)
-		ctrl._semaphore = DynamicSemaphore(1)
+			await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
 
-		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
-
-		worker = db.get_worker("wu1")
-		assert worker is not None
-		assert worker.status == "idle"
-		assert worker.current_unit_id is None
-		assert worker.pid is None
-		assert worker.units_completed == 1
-		assert worker.units_failed == 0
+			worker = db.get_worker("wu1")
+			assert worker is not None
+			assert worker.status == "idle"
+			assert worker.current_unit_id is None
+			assert worker.pid is None
+			assert worker.units_completed == 1
+			assert worker.units_failed == 0
+		finally:
+			patcher.stop()
 
 
 
