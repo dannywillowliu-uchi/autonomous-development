@@ -12,12 +12,15 @@ import pytest
 
 from mission_control.config import MissionConfig, TargetConfig
 from mission_control.context_gathering import (
+	VerificationFailureSummary,
+	format_verification_failures,
 	get_episodic_context,
 	get_git_log,
 	get_human_preferences,
 	get_intel_context,
 	get_past_missions,
 	get_strategic_context,
+	get_verification_failures,
 	read_backlog,
 )
 from mission_control.models import (
@@ -386,3 +389,88 @@ class TestGetIntelContext:
 			result = await get_intel_context(cfg)
 
 		assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# get_verification_failures / format_verification_failures
+# ---------------------------------------------------------------------------
+
+_FAILING_VERIFICATION_OUTPUT = (
+	"============================= test session starts ==============================\n"
+	"collected 42 items\n"
+	"\n"
+	"FAILED tests/test_auth.py::test_login - AssertionError: expected 200 got 401\n"
+	"FAILED tests/test_db.py::test_connection_pool - TimeoutError: pool exhausted\n"
+	"================ 2 failed, 40 passed in 3.21s ================================\n"
+)
+
+
+class TestGetVerificationFailures:
+	def test_failing_verification(self, tmp_path: Path) -> None:
+		"""Parses FAILED lines from verification_output."""
+		report = {
+			"verification_passed": False,
+			"verification_output": _FAILING_VERIFICATION_OUTPUT,
+		}
+		(tmp_path / "mission_report.json").write_text(json.dumps(report))
+
+		db = MagicMock()
+		summary = get_verification_failures(db, tmp_path)
+
+		assert not summary.passed
+		assert len(summary.failures) == 2
+		assert summary.failures[0] == (
+			"tests/test_auth.py::test_login",
+			"AssertionError: expected 200 got 401",
+		)
+		assert summary.failures[1] == (
+			"tests/test_db.py::test_connection_pool",
+			"TimeoutError: pool exhausted",
+		)
+
+	def test_passing_verification(self, tmp_path: Path) -> None:
+		"""When verification passed, returns empty summary."""
+		report = {
+			"verification_passed": True,
+			"verification_output": "42 passed in 1.00s",
+		}
+		(tmp_path / "mission_report.json").write_text(json.dumps(report))
+
+		db = MagicMock()
+		summary = get_verification_failures(db, tmp_path)
+
+		assert summary.passed
+		assert summary.failures == []
+
+	def test_missing_report_file(self, tmp_path: Path) -> None:
+		"""When mission_report.json doesn't exist, returns empty summary."""
+		db = MagicMock()
+		summary = get_verification_failures(db, tmp_path)
+
+		assert summary.passed
+		assert summary.failures == []
+
+
+class TestFormatVerificationFailures:
+	def test_format_with_failures(self) -> None:
+		summary = VerificationFailureSummary(
+			passed=False,
+			failures=[
+				("tests/test_auth.py::test_login", "AssertionError: expected 200 got 401"),
+				("tests/test_db.py::test_pool", "TimeoutError: pool exhausted"),
+			],
+		)
+		result = format_verification_failures(summary)
+
+		assert "### Previous Verification Failures" in result
+		assert "- `tests/test_auth.py::test_login`: AssertionError: expected 200 got 401" in result
+		assert "- `tests/test_db.py::test_pool`: TimeoutError: pool exhausted" in result
+
+	def test_format_passing_returns_empty(self) -> None:
+		summary = VerificationFailureSummary(passed=True, failures=[])
+		assert format_verification_failures(summary) == ""
+
+	def test_format_failed_but_no_parsed_failures(self) -> None:
+		"""Failed verification but no FAILED lines matched (e.g. syntax error)."""
+		summary = VerificationFailureSummary(passed=False, failures=[])
+		assert format_verification_failures(summary) == ""
