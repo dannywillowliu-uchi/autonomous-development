@@ -12,7 +12,7 @@ import pytest
 
 from mission_control.backends.base import WorkerHandle
 from mission_control.backends.container import ContainerBackend
-from mission_control.backends.local import _MB, LocalBackend
+from mission_control.backends.local import _MB, HealthCheckResult, LocalBackend
 from mission_control.backends.ssh import SSHBackend
 from mission_control.config import ContainerConfig, MissionConfig, SSHHostConfig
 
@@ -50,7 +50,7 @@ class TestWorkerHandle:
 class TestLocalBackend:
 	@pytest.fixture()
 	def backend(self) -> LocalBackend:
-		"""LocalBackend with a mocked WorkspacePool."""
+		"""LocalBackend with a mocked WorkspacePool and healthy workspace."""
 		with patch("mission_control.backends.local.WorkspacePool") as mock_pool_cls:
 			mock_pool_instance = MagicMock()
 			mock_pool_cls.return_value = mock_pool_instance
@@ -65,6 +65,9 @@ class TestLocalBackend:
 				max_clones=5,
 				base_branch="main",
 			)
+		# Default health check passes so provision tests aren't affected
+		b._verify_workspace_health = AsyncMock(return_value=HealthCheckResult(passed=True))
+		b._write_worker_claude_md = AsyncMock()
 		return b
 
 	def test_init_creates_pool(self) -> None:
@@ -466,6 +469,228 @@ class TestLocalBackend:
 		assert backend._processes == {}
 		assert backend._stdout_bufs == {}
 		backend._pool.cleanup.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Workspace health checks
+# ---------------------------------------------------------------------------
+
+class TestHealthCheckResult:
+	def test_passed(self) -> None:
+		"""HealthCheckResult defaults to passed with no issues."""
+		result = HealthCheckResult(passed=True)
+		assert result.passed is True
+		assert result.issues == []
+
+	def test_failed_with_issues(self) -> None:
+		"""HealthCheckResult stores failure issues."""
+		result = HealthCheckResult(passed=False, issues=["bad git", "missing venv"])
+		assert result.passed is False
+		assert len(result.issues) == 2
+
+
+class TestWorkspaceHealthCheck:
+	"""Tests for _verify_workspace_health and its integration in provision_workspace."""
+
+	@pytest.fixture()
+	def backend(self) -> LocalBackend:
+		"""LocalBackend with a mocked WorkspacePool."""
+		with patch("mission_control.backends.local.WorkspacePool") as mock_pool_cls:
+			mock_pool_instance = MagicMock()
+			mock_pool_cls.return_value = mock_pool_instance
+			mock_pool_instance.acquire = AsyncMock()
+			mock_pool_instance.release = AsyncMock()
+			mock_pool_instance.cleanup = AsyncMock()
+			mock_pool_instance.initialize = AsyncMock()
+			b = LocalBackend(
+				source_repo="/repo",
+				pool_dir="/pool",
+				max_clones=5,
+				base_branch="main",
+			)
+		b._write_worker_claude_md = AsyncMock()
+		return b
+
+	async def test_healthy_workspace_passes(self, tmp_path: Path) -> None:
+		"""A workspace with valid .git/HEAD and working git status passes health check."""
+		with patch("mission_control.backends.local.WorkspacePool") as mock_pool_cls:
+			mock_pool_cls.return_value = MagicMock()
+			backend = LocalBackend(source_repo="/repo", pool_dir="/pool")
+
+		# Set up a minimal valid git repo
+		git_dir = tmp_path / ".git"
+		git_dir.mkdir()
+		(git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+
+		with patch("mission_control.backends.local.asyncio.create_subprocess_exec") as mock_exec:
+			mock_proc = AsyncMock()
+			mock_proc.returncode = 0
+			mock_proc.communicate = AsyncMock(return_value=(b"", None))
+			mock_exec.return_value = mock_proc
+
+			result = await backend._verify_workspace_health(tmp_path)
+
+		assert result.passed is True
+		assert result.issues == []
+
+	async def test_missing_git_head_fails(self, tmp_path: Path) -> None:
+		"""A workspace with missing .git/HEAD reports an issue."""
+		with patch("mission_control.backends.local.WorkspacePool") as mock_pool_cls:
+			mock_pool_cls.return_value = MagicMock()
+			backend = LocalBackend(source_repo="/repo", pool_dir="/pool")
+
+		# No .git directory at all
+		with patch("mission_control.backends.local.asyncio.create_subprocess_exec") as mock_exec:
+			mock_proc = AsyncMock()
+			mock_proc.returncode = 0
+			mock_proc.communicate = AsyncMock(return_value=(b"", None))
+			mock_exec.return_value = mock_proc
+
+			result = await backend._verify_workspace_health(tmp_path)
+
+		assert result.passed is False
+		assert any(".git/HEAD" in issue for issue in result.issues)
+
+	async def test_corrupted_git_status_fails(self, tmp_path: Path) -> None:
+		"""Non-zero git status exit code reports corruption."""
+		with patch("mission_control.backends.local.WorkspacePool") as mock_pool_cls:
+			mock_pool_cls.return_value = MagicMock()
+			backend = LocalBackend(source_repo="/repo", pool_dir="/pool")
+
+		git_dir = tmp_path / ".git"
+		git_dir.mkdir()
+		(git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+
+		with patch("mission_control.backends.local.asyncio.create_subprocess_exec") as mock_exec:
+			mock_proc = AsyncMock()
+			mock_proc.returncode = 128  # git error
+			mock_proc.communicate = AsyncMock(return_value=(b"fatal: bad object", None))
+			mock_exec.return_value = mock_proc
+
+			result = await backend._verify_workspace_health(tmp_path)
+
+		assert result.passed is False
+		assert any("git status failed" in issue for issue in result.issues)
+
+	async def test_git_status_timeout_fails(self, tmp_path: Path) -> None:
+		"""git status timing out reports an issue."""
+		with patch("mission_control.backends.local.WorkspacePool") as mock_pool_cls:
+			mock_pool_cls.return_value = MagicMock()
+			backend = LocalBackend(source_repo="/repo", pool_dir="/pool")
+
+		git_dir = tmp_path / ".git"
+		git_dir.mkdir()
+		(git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+
+		with patch("mission_control.backends.local.asyncio.create_subprocess_exec") as mock_exec:
+			mock_proc = AsyncMock()
+			mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+			mock_exec.return_value = mock_proc
+
+			with patch("mission_control.backends.local.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+				result = await backend._verify_workspace_health(tmp_path)
+
+		assert result.passed is False
+		assert any("timed out" in issue for issue in result.issues)
+
+	async def test_broken_venv_symlink_warns(self, tmp_path: Path) -> None:
+		"""A .venv symlink pointing to a nonexistent target reports an issue."""
+		with patch("mission_control.backends.local.WorkspacePool") as mock_pool_cls:
+			mock_pool_cls.return_value = MagicMock()
+			backend = LocalBackend(source_repo="/repo", pool_dir="/pool")
+
+		git_dir = tmp_path / ".git"
+		git_dir.mkdir()
+		(git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+
+		# Create a broken symlink
+		venv_link = tmp_path / ".venv"
+		venv_link.symlink_to("/nonexistent/venv/path")
+
+		with patch("mission_control.backends.local.asyncio.create_subprocess_exec") as mock_exec:
+			mock_proc = AsyncMock()
+			mock_proc.returncode = 0
+			mock_proc.communicate = AsyncMock(return_value=(b"", None))
+			mock_exec.return_value = mock_proc
+
+			result = await backend._verify_workspace_health(tmp_path)
+
+		assert result.passed is False
+		assert any(".venv symlink target missing" in issue for issue in result.issues)
+
+	async def test_valid_venv_symlink_passes(self, tmp_path: Path) -> None:
+		"""A .venv symlink pointing to an existing target passes."""
+		with patch("mission_control.backends.local.WorkspacePool") as mock_pool_cls:
+			mock_pool_cls.return_value = MagicMock()
+			backend = LocalBackend(source_repo="/repo", pool_dir="/pool")
+
+		git_dir = tmp_path / ".git"
+		git_dir.mkdir()
+		(git_dir / "HEAD").write_text("ref: refs/heads/main\n")
+
+		# Create a valid symlink
+		real_venv = tmp_path / "real_venv"
+		real_venv.mkdir()
+		venv_link = tmp_path / ".venv"
+		venv_link.symlink_to(real_venv)
+
+		with patch("mission_control.backends.local.asyncio.create_subprocess_exec") as mock_exec:
+			mock_proc = AsyncMock()
+			mock_proc.returncode = 0
+			mock_proc.communicate = AsyncMock(return_value=(b"", None))
+			mock_exec.return_value = mock_proc
+
+			result = await backend._verify_workspace_health(tmp_path)
+
+		assert result.passed is True
+		assert result.issues == []
+
+	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")
+	async def test_provision_reprovisions_on_health_failure(
+		self, mock_exec: AsyncMock, backend: LocalBackend,
+	) -> None:
+		"""provision_workspace releases and re-acquires when health check fails, then succeeds."""
+		bad_workspace = Path("/pool/bad-clone")
+		good_workspace = Path("/pool/good-clone")
+		backend._pool.acquire = AsyncMock(side_effect=[bad_workspace, good_workspace])
+
+		# Mock subprocess calls (all succeed for the good workspace)
+		mock_proc = AsyncMock()
+		mock_proc.returncode = 0
+		mock_proc.communicate = AsyncMock(return_value=(b"", None))
+		mock_exec.return_value = mock_proc
+
+		# First health check fails (bad workspace), second passes (good workspace)
+		bad_result = HealthCheckResult(passed=False, issues=["corrupted .git"])
+		good_result = HealthCheckResult(passed=True, issues=[])
+		backend._verify_workspace_health = AsyncMock(side_effect=[bad_result, good_result])
+
+		result = await backend.provision_workspace("w1", "/repo", "main")
+
+		assert result == "/pool/good-clone"
+		# Bad workspace should have been released
+		backend._pool.release.assert_any_await(bad_workspace)
+		# Two acquires: initial + re-provision
+		assert backend._pool.acquire.await_count == 2
+
+	@patch("mission_control.backends.local.asyncio.create_subprocess_exec")
+	async def test_provision_raises_after_retry_health_failure(
+		self, mock_exec: AsyncMock, backend: LocalBackend,
+	) -> None:
+		"""provision_workspace raises RuntimeError when both health checks fail."""
+		workspace1 = Path("/pool/bad-1")
+		workspace2 = Path("/pool/bad-2")
+		backend._pool.acquire = AsyncMock(side_effect=[workspace1, workspace2])
+
+		bad1 = HealthCheckResult(passed=False, issues=["corrupted"])
+		bad2 = HealthCheckResult(passed=False, issues=["still corrupted"])
+		backend._verify_workspace_health = AsyncMock(side_effect=[bad1, bad2])
+
+		with pytest.raises(RuntimeError, match="health check failed after re-provision"):
+			await backend.provision_workspace("w1", "/repo", "main")
+
+		# Both workspaces should have been released
+		assert backend._pool.release.await_count == 2
 
 
 # ---------------------------------------------------------------------------

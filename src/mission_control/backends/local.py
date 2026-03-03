@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from mission_control.backends.base import WorkerBackend, WorkerHandle
@@ -15,6 +16,15 @@ logger = logging.getLogger(__name__)
 
 _MB = 1024 * 1024
 _OUTPUT_WARNING_THRESHOLDS_MB = (10, 25, 50)
+_HEALTH_CHECK_TIMEOUT = 5
+
+
+@dataclass
+class HealthCheckResult:
+	"""Result of a workspace health pre-flight check."""
+
+	passed: bool
+	issues: list[str] = field(default_factory=list)
 
 
 class LocalBackend(WorkerBackend):
@@ -48,12 +58,74 @@ class LocalBackend(WorkerBackend):
 	async def initialize(self, warm_count: int = 0) -> None:
 		await self._pool.initialize(warm_count=warm_count)
 
+	async def _verify_workspace_health(self, workspace: Path) -> HealthCheckResult:
+		"""Run pre-flight health checks on a workspace before use.
+
+		Checks:
+		1. .git/HEAD exists and is readable
+		2. git status --porcelain exits cleanly (non-zero = corrupted)
+		3. .venv symlink target exists (if symlink present)
+		"""
+		issues: list[str] = []
+
+		# 1. Check .git/HEAD exists and is readable
+		git_head = workspace / ".git" / "HEAD"
+		try:
+			git_head.read_text()
+		except (OSError, FileNotFoundError):
+			issues.append(f".git/HEAD missing or unreadable at {workspace}")
+
+		# 2. Run git status --porcelain with timeout
+		try:
+			status_proc = await asyncio.create_subprocess_exec(
+				"git", "status", "--porcelain",
+				cwd=str(workspace),
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.STDOUT,
+			)
+			await asyncio.wait_for(status_proc.communicate(), timeout=_HEALTH_CHECK_TIMEOUT)
+			if status_proc.returncode != 0:
+				issues.append(f"git status failed (rc={status_proc.returncode}) at {workspace}")
+		except asyncio.TimeoutError:
+			issues.append(f"git status timed out after {_HEALTH_CHECK_TIMEOUT}s at {workspace}")
+		except OSError as exc:
+			issues.append(f"git status failed with OS error: {exc}")
+
+		# 3. Verify .venv symlink target exists
+		workspace_venv = workspace / ".venv"
+		if workspace_venv.is_symlink():
+			if not workspace_venv.resolve().exists():
+				issues.append(f".venv symlink target missing: {workspace_venv} -> {workspace_venv.resolve()}")
+
+		return HealthCheckResult(passed=len(issues) == 0, issues=issues)
+
 	async def provision_workspace(
 		self, worker_id: str, source_repo: str, base_branch: str
 	) -> str:
 		workspace = await self._pool.acquire()
 		if workspace is None:
 			raise RuntimeError(f"No workspace available for worker {worker_id}")
+
+		# Pre-flight health check: verify workspace integrity before use.
+		health = await self._verify_workspace_health(workspace)
+		if not health.passed:
+			for issue in health.issues:
+				logger.warning("Workspace health check failed: %s", issue)
+			# Release the bad workspace and try to acquire a fresh one.
+			await self._pool.release(workspace)
+			workspace = await self._pool.acquire()
+			if workspace is None:
+				raise RuntimeError(f"No workspace available for worker {worker_id} after re-provision")
+			# Retry health check once on the fresh workspace.
+			health = await self._verify_workspace_health(workspace)
+			if not health.passed:
+				for issue in health.issues:
+					logger.warning("Workspace health check failed after re-provision: %s", issue)
+				await self._pool.release(workspace)
+				raise RuntimeError(
+					f"Workspace health check failed after re-provision for {worker_id}: "
+					+ "; ".join(health.issues)
+				)
 
 		# Repair editable install if workers from a previous mission corrupted
 		# the .pth file to point at a (now-deleted) worker clone.
@@ -127,6 +199,8 @@ class LocalBackend(WorkerBackend):
 				f"{stdout.decode(errors='replace')}"
 			)
 
+		await self._write_worker_claude_md(Path(workspace) if not isinstance(workspace, Path) else workspace)
+
 		# Block workers from pushing directly to origin.
 		# The orchestrator handles all pushes via the green branch manager.
 		await asyncio.create_subprocess_exec(
@@ -161,6 +235,28 @@ class LocalBackend(WorkerBackend):
 		# bypassing the .pth file entirely for verification/acceptance.
 
 		return str(workspace)
+
+	async def _write_worker_claude_md(self, workspace: Path) -> None:
+		"""Write worker-specific CLAUDE.md into the workspace.
+
+		Overwrites the cloned project CLAUDE.md with a stripped-down version
+		that omits human-dev config (Telegram, Obsidian, etc.).
+		"""
+		template_path = Path(__file__).parent.parent / "worker_claude_md.md"
+		try:
+			template = template_path.read_text()
+		except FileNotFoundError:
+			logger.warning("Worker CLAUDE.md template not found at %s", template_path)
+			return
+		verification_cmd = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
+		if self._config:
+			v = getattr(self._config, "target", None)
+			v = getattr(v, "verification", None) if v else None
+			v = getattr(v, "command", None) if v else None
+			if v:
+				verification_cmd = v
+		content = template.replace("{verification_command}", verification_cmd)
+		(workspace / "CLAUDE.md").write_text(content)
 
 	async def _repair_editable_install(self, source_repo: str) -> None:
 		"""Repair the editable .pth if it points to a stale worker clone."""
