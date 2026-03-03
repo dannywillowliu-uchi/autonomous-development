@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -2753,4 +2754,202 @@ class TestProcessBatch:
 		assert processed == ["wu0", "wu1", "wu2"]
 
 
+class TestPreDispatchBudgetGate:
+	"""Pre-dispatch budget gate should filter units before execution."""
+
+	@pytest.mark.asyncio
+	async def test_drops_all_units_when_budget_exceeded(self, config: MissionConfig, db: Database) -> None:
+		"""When EMA projects all units would exceed budget, stop immediately."""
+		config.scheduler.budget.max_per_run_usd = 10.0
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._green_branch = MagicMock()
+
+		# Seed EMA with cost data so projected_cost() returns a value
+		ctrl._ema.update(5.0)
+		ctrl._ema.update(5.0)
+
+		mission = Mission(id="m1", objective="test", total_cost_usd=8.0)
+		result = ContinuousMissionResult()
+
+		plan = Plan(id="p1", objective="test")
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		units = [
+			WorkUnit(id="wu1", plan_id="p1", title="Task 1", status="pending"),
+			WorkUnit(id="wu2", plan_id="p1", title="Task 2", status="pending"),
+		]
+
+		# Mock planner to return units once, then no units (to end loop)
+		call_count = 0
+
+		async def mock_get_next_units(*args: Any, **kwargs: Any) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				return plan, units, epoch
+			return plan, [], epoch
+
+		mock_planner = AsyncMock()
+		mock_planner.get_next_units = mock_get_next_units
+		ctrl._planner = mock_planner
+		ctrl._backend = MagicMock()
+
+		await ctrl._orchestration_loop(mission, result)
+
+		assert result.stopped_reason == "ema_budget_exceeded"
+		assert not ctrl.running
+
+	@pytest.mark.asyncio
+	async def test_filters_some_units_when_partially_affordable(self, config: MissionConfig, db: Database) -> None:
+		"""When budget allows some but not all units, only affordable ones dispatch."""
+		config.scheduler.budget.max_per_run_usd = 10.0
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._green_branch = MagicMock()
+
+		# Seed EMA: projected cost ~3.0 (with conservatism)
+		ctrl._ema.update(2.0)
+		ctrl._ema.update(2.0)
+		ctrl._ema.update(2.0)
+		ctrl._ema.update(2.0)
+
+		# ~7.0 spent, projected ~2.5 per unit -> room for ~1 unit
+		mission = Mission(id="m1", objective="test", total_cost_usd=7.0)
+		result = ContinuousMissionResult()
+
+		plan = Plan(id="p1", objective="test")
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		units = [
+			WorkUnit(id="wu1", plan_id="p1", title="Task 1", status="pending"),
+			WorkUnit(id="wu2", plan_id="p1", title="Task 2", status="pending"),
+			WorkUnit(id="wu3", plan_id="p1", title="Task 3", status="pending"),
+		]
+
+		dispatched_units: list[list[WorkUnit]] = []
+		call_count = 0
+
+		async def mock_get_next_units(*args: Any, **kwargs: Any) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				return plan, units, epoch
+			return plan, [], epoch
+
+		async def mock_execute_batch(batch_units: list[WorkUnit], *args: Any, **kwargs: Any) -> list[Any]:
+			dispatched_units.append(list(batch_units))
+			return []
+
+		mock_planner = AsyncMock()
+		mock_planner.get_next_units = mock_get_next_units
+		ctrl._planner = mock_planner
+		ctrl._backend = MagicMock()
+
+		with (
+			patch.object(ctrl, "_execute_batch", side_effect=mock_execute_batch),
+			patch.object(ctrl, "_process_batch", new_callable=AsyncMock),
+		):
+			await ctrl._orchestration_loop(mission, result)
+
+		# Should have dispatched only 1 unit (the first affordable one)
+		assert len(dispatched_units) == 1
+		assert len(dispatched_units[0]) == 1
+		assert dispatched_units[0][0].id == "wu1"
+
+	@pytest.mark.asyncio
+	async def test_no_filter_without_ema_data(self, config: MissionConfig, db: Database) -> None:
+		"""When EMA has no data, all units pass through (no filtering)."""
+		config.scheduler.budget.max_per_run_usd = 10.0
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._green_branch = MagicMock()
+
+		# No EMA data seeded -- projected_cost() returns None
+
+		mission = Mission(id="m1", objective="test", total_cost_usd=9.0)
+		result = ContinuousMissionResult()
+
+		plan = Plan(id="p1", objective="test")
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		units = [
+			WorkUnit(id="wu1", plan_id="p1", title="Task 1", status="pending"),
+			WorkUnit(id="wu2", plan_id="p1", title="Task 2", status="pending"),
+		]
+
+		dispatched_units: list[list[WorkUnit]] = []
+		call_count = 0
+
+		async def mock_get_next_units(*args: Any, **kwargs: Any) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				return plan, units, epoch
+			return plan, [], epoch
+
+		async def mock_execute_batch(batch_units: list[WorkUnit], *args: Any, **kwargs: Any) -> list[Any]:
+			dispatched_units.append(list(batch_units))
+			return []
+
+		mock_planner = AsyncMock()
+		mock_planner.get_next_units = mock_get_next_units
+		ctrl._planner = mock_planner
+		ctrl._backend = MagicMock()
+
+		with (
+			patch.object(ctrl, "_execute_batch", side_effect=mock_execute_batch),
+			patch.object(ctrl, "_process_batch", new_callable=AsyncMock),
+		):
+			await ctrl._orchestration_loop(mission, result)
+
+		# All units should pass through when no EMA data
+		assert len(dispatched_units) == 1
+		assert len(dispatched_units[0]) == 2
+
+	@pytest.mark.asyncio
+	async def test_no_filter_when_budget_zero(self, config: MissionConfig, db: Database) -> None:
+		"""When budget limit is 0 (disabled), no filtering occurs."""
+		config.scheduler.budget.max_per_run_usd = 0.0
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._green_branch = MagicMock()
+
+		ctrl._ema.update(5.0)
+		ctrl._ema.update(5.0)
+
+		mission = Mission(id="m1", objective="test", total_cost_usd=99.0)
+		result = ContinuousMissionResult()
+
+		plan = Plan(id="p1", objective="test")
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		units = [
+			WorkUnit(id="wu1", plan_id="p1", title="Task 1", status="pending"),
+		]
+
+		dispatched_units: list[list[WorkUnit]] = []
+		call_count = 0
+
+		async def mock_get_next_units(*args: Any, **kwargs: Any) -> tuple[Plan, list[WorkUnit], Epoch]:
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				return plan, units, epoch
+			return plan, [], epoch
+
+		async def mock_execute_batch(batch_units: list[WorkUnit], *args: Any, **kwargs: Any) -> list[Any]:
+			dispatched_units.append(list(batch_units))
+			return []
+
+		mock_planner = AsyncMock()
+		mock_planner.get_next_units = mock_get_next_units
+		ctrl._planner = mock_planner
+		ctrl._backend = MagicMock()
+
+		with (
+			patch.object(ctrl, "_execute_batch", side_effect=mock_execute_batch),
+			patch.object(ctrl, "_process_batch", new_callable=AsyncMock),
+		):
+			await ctrl._orchestration_loop(mission, result)
+
+		# Budget disabled -- all units pass through
+		assert len(dispatched_units) == 1
+		assert len(dispatched_units[0]) == 1
 
