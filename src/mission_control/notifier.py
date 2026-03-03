@@ -102,6 +102,12 @@ class TelegramNotifier:
 
 		return result
 
+	@staticmethod
+	def _escape_md2(text: str) -> str:
+		"""Escape special characters for Telegram MarkdownV2 format."""
+		special = set("_*[]()~`>#+-=|{}.!")
+		return "".join(f"\\{ch}" if ch in special else ch for ch in str(text))
+
 	async def _send_with_retry(self, client: httpx.AsyncClient, url: str, payload: dict) -> None:
 		"""Send a single Telegram API request with exponential backoff on transient failures."""
 		for attempt in range(MAX_RETRIES):
@@ -160,6 +166,22 @@ class TelegramNotifier:
 					"chat_id": self._chat_id,
 					"text": part,
 					"parse_mode": "Markdown",
+					"disable_web_page_preview": True,
+				})
+		except Exception as exc:
+			logger.error("Telegram send failed: %s", exc)
+
+	async def _send_message(self, text: str, parse_mode: str = "MarkdownV2") -> None:
+		"""Send a single message immediately with specified parse mode."""
+		try:
+			client = await self._ensure_client()
+			url = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
+			parts = self._split_message(text)
+			for part in parts:
+				await self._send_with_retry(client, url, {
+					"chat_id": self._chat_id,
+					"text": part,
+					"parse_mode": parse_mode,
 					"disable_web_page_preview": True,
 				})
 		except Exception as exc:
@@ -248,3 +270,50 @@ class TelegramNotifier:
 			f"```\n{failure[:300]}\n```",
 			priority=NotificationPriority.HIGH,
 		)
+
+	async def send_epoch_summary(
+		self,
+		epoch_num: int,
+		dispatched: int,
+		merged: int,
+		failed: int,
+		cost_this_epoch: float,
+		cumulative_cost: float,
+		conflict_rate: float,
+	) -> None:
+		"""Send a structured epoch summary with formatted metrics table."""
+		header = f"*Epoch {epoch_num} Summary*"
+		table = (
+			"```\n"
+			f"{'Metric':<20} {'Value':>10}\n"
+			f"{'─' * 20} {'─' * 10}\n"
+			f"{'Dispatched':<20} {dispatched:>10}\n"
+			f"{'Merged':<20} {merged:>10}\n"
+			f"{'Failed':<20} {failed:>10}\n"
+			f"{'Conflict Rate':<20} {f'{conflict_rate:.1%}':>10}\n"
+			f"{'Cost (epoch)':<20} {f'${cost_this_epoch:.2f}':>10}\n"
+			f"{'Cost (cumulative)':<20} {f'${cumulative_cost:.2f}':>10}\n"
+			"```"
+		)
+		await self._send_message(f"{header}\n\n{table}")
+
+	async def send_cost_alert(
+		self,
+		current_cost: float,
+		budget_limit: float,
+		projected_cost: float,
+	) -> None:
+		"""Send a cost alert when projected cost approaches or exceeds budget."""
+		e = self._escape_md2
+		pct = (projected_cost / budget_limit * 100) if budget_limit > 0 else 0.0
+		overage = projected_cost - budget_limit
+		lines = [
+			"*Cost Alert*",
+			"",
+			f"Current: {e(f'${current_cost:.2f}')}",
+			f"Budget: {e(f'${budget_limit:.2f}')}",
+			f"Projected: {e(f'${projected_cost:.2f}')} \\({e(f'{pct:.0f}%')} of budget\\)",
+		]
+		if overage > 0:
+			lines.append(f"Projected overage: {e(f'${overage:.2f}')}")
+		await self._send_message("\n".join(lines))

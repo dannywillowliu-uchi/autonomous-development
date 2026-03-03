@@ -210,6 +210,117 @@ class TestSplitMessage:
 		await notifier.close()
 
 
+class TestEpochSummary:
+	@pytest.mark.asyncio
+	async def test_send_epoch_summary_formats_table(self, notifier: TelegramNotifier) -> None:
+		"""send_epoch_summary formats a MarkdownV2 table with all metrics."""
+		with patch.object(notifier, "_send_message", new_callable=AsyncMock) as mock_send:
+			await notifier.send_epoch_summary(
+				epoch_num=5,
+				dispatched=10,
+				merged=8,
+				failed=2,
+				cost_this_epoch=1.23,
+				cumulative_cost=5.67,
+				conflict_rate=0.15,
+			)
+			mock_send.assert_called_once()
+			msg = mock_send.call_args[0][0]
+			assert "Epoch 5 Summary" in msg
+			assert "```" in msg
+			assert "Dispatched" in msg
+			assert "10" in msg
+			assert "Merged" in msg
+			assert "Failed" in msg
+			assert "Conflict Rate" in msg
+			assert "15.0%" in msg
+			assert "$1.23" in msg
+			assert "$5.67" in msg
+
+	@pytest.mark.asyncio
+	async def test_send_epoch_summary_calls_send_message(self, notifier: TelegramNotifier) -> None:
+		"""send_epoch_summary delegates to _send_message."""
+		with patch.object(notifier, "_send_message", new_callable=AsyncMock) as mock_send:
+			await notifier.send_epoch_summary(
+				epoch_num=1, dispatched=5, merged=3, failed=1,
+				cost_this_epoch=0.50, cumulative_cost=2.00, conflict_rate=0.0,
+			)
+			mock_send.assert_called_once()
+			assert mock_send.call_args[0][0].startswith("*Epoch 1 Summary*")
+
+
+class TestCostAlert:
+	@pytest.mark.asyncio
+	async def test_send_cost_alert_includes_percentage(self, notifier: TelegramNotifier) -> None:
+		"""send_cost_alert shows projected cost as percentage of budget."""
+		with patch.object(notifier, "_send_message", new_callable=AsyncMock) as mock_send:
+			await notifier.send_cost_alert(
+				current_cost=5.00,
+				budget_limit=10.00,
+				projected_cost=8.00,
+			)
+			mock_send.assert_called_once()
+			msg = mock_send.call_args[0][0]
+			assert "Cost Alert" in msg
+			assert "80%" in msg
+
+	@pytest.mark.asyncio
+	async def test_send_cost_alert_includes_overage(self, notifier: TelegramNotifier) -> None:
+		"""send_cost_alert shows projected overage when over budget."""
+		with patch.object(notifier, "_send_message", new_callable=AsyncMock) as mock_send:
+			await notifier.send_cost_alert(
+				current_cost=6.00,
+				budget_limit=10.00,
+				projected_cost=12.00,
+			)
+			mock_send.assert_called_once()
+			msg = mock_send.call_args[0][0]
+			assert "120%" in msg
+			assert "overage" in msg.lower()
+
+	@pytest.mark.asyncio
+	async def test_send_cost_alert_no_overage_when_under_budget(self, notifier: TelegramNotifier) -> None:
+		"""send_cost_alert omits overage line when projected is under budget."""
+		with patch.object(notifier, "_send_message", new_callable=AsyncMock) as mock_send:
+			await notifier.send_cost_alert(
+				current_cost=3.00,
+				budget_limit=10.00,
+				projected_cost=6.00,
+			)
+			msg = mock_send.call_args[0][0]
+			assert "overage" not in msg.lower()
+
+
+class TestBackwardCompatibility:
+	"""Verify existing method signatures and behavior are unchanged."""
+
+	@pytest.mark.asyncio
+	async def test_send_still_accepts_priority(self, notifier: TelegramNotifier) -> None:
+		with patch.object(notifier, "_ensure_batch_task"):
+			await notifier.send("hello", priority=NotificationPriority.HIGH)
+			assert notifier._priority_queue[0] == (NotificationPriority.HIGH, "hello")
+
+	@pytest.mark.asyncio
+	async def test_send_mission_start_unchanged(self, notifier: TelegramNotifier) -> None:
+		with patch.object(notifier, "send", new_callable=AsyncMock) as mock_send:
+			await notifier.send_mission_start("test objective", 3)
+			mock_send.assert_called_once()
+			msg = mock_send.call_args[0][0]
+			assert "Mission started" in msg
+			assert "test objective" in msg
+
+	@pytest.mark.asyncio
+	async def test_send_mission_end_unchanged(self, notifier: TelegramNotifier) -> None:
+		with patch.object(notifier, "send", new_callable=AsyncMock) as mock_send:
+			await notifier.send_mission_end(
+				objective_met=False, merged=5, failed=3,
+				wall_time=1800.0, stopped_reason="budget",
+			)
+			mock_send.assert_called_once()
+			msg = mock_send.call_args[0][0]
+			assert "STOPPED" in msg
+
+
 class TestRetryLogic:
 	"""Tests for transient network failure retry logic in _send_with_retry."""
 
