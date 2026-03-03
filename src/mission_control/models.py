@@ -414,9 +414,9 @@ class Epoch:
 	units_planned: int = 0
 	units_completed: int = 0
 	units_failed: int = 0
+	planner_cost_usd: float = 0.0
 	score_at_start: float = 0.0
 	score_at_end: float = 0.0
-	planner_cost_usd: float = 0.0
 
 
 @dataclass

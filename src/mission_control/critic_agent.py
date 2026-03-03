@@ -108,7 +108,7 @@ class CriticAgent:
 		units: list[WorkUnit],
 		prev_finding: CriticFinding,
 		batch_signals: BatchSignals | None = None,
-	) -> tuple[CriticFinding, float]:
+	) -> CriticFinding:
 		"""Feasibility review: check whether proposed units are achievable."""
 		units_text = "\n".join(
 			f"  {i+1}. [{u.priority}] {u.title}: {u.description[:200]} "
@@ -154,15 +154,14 @@ CRITIC_RESULT:{{"findings": ["..."],\
  "strategy_text": ""}}"""
 
 		output, cost = await self._invoke_llm(prompt, "critic-review", use_mcp=False)
-		finding = _parse_critic_output(output)
-		return finding, cost
+		return _parse_critic_output(output), cost
 
 	async def propose_next(
 		self,
 		mission: Mission,
 		result: Any,
 		context: str,
-	) -> tuple[CriticFinding, float]:
+	) -> CriticFinding:
 		"""Analyze completed mission and propose next objective for chaining."""
 		objective_met = getattr(result, "objective_met", False)
 		total_merged = getattr(result, "total_units_merged", 0)
@@ -197,8 +196,7 @@ CRITIC_RESULT:{{"findings": ["what was accomplished..."],\
  "proposed_objective": "The next objective to pursue"}}"""
 
 		output, cost = await self._invoke_llm(prompt, "critic-chaining", use_mcp=True)
-		finding = _parse_critic_output(output)
-		return finding, cost
+		return _parse_critic_output(output), cost
 
 	def gather_context(self, mission: Mission | None = None) -> str:
 		"""Gather all available project context for critic prompts."""
@@ -237,11 +235,7 @@ CRITIC_RESULT:{{"findings": ["what was accomplished..."],\
 	async def _invoke_llm(
 		self, prompt: str, label: str, *, use_mcp: bool = False,
 	) -> tuple[str, float]:
-		"""Run a prompt through a Claude subprocess.
-
-		Returns:
-			Tuple of (output_text, cost_usd).
-		"""
+		"""Run a prompt through a Claude subprocess. Returns (output, cost_usd)."""
 		delib = self._config.deliberation
 		budget = delib.critic_budget_usd
 		model = delib.critic_model or self._config.scheduler.model
@@ -279,9 +273,10 @@ CRITIC_RESULT:{{"findings": ["what was accomplished..."],\
 			return "", 0.0
 
 		if proc.returncode != 0:
-			err_msg = stderr.decode()[:200] if stderr else "unknown error"
+			err_msg = stderr_text[:200] if stderr_text else "unknown error"
 			log.warning("%s LLM failed (rc=%d): %s", label, proc.returncode, err_msg)
-			return "", budget
+			cost = _parse_subprocess_cost(stderr_text, budget)
+			return "", cost
 
 		cost = _parse_subprocess_cost(stderr_text, budget)
 		return output, cost

@@ -26,35 +26,6 @@ class PlannerResult:
 	cost_usd: float = 0.0
 
 
-_COST_RE = re.compile(r"(?:cost|spent|usage)[:\s]*\$\s*([\d.]+)", re.IGNORECASE)
-_DOLLAR_RE = re.compile(r"\$\s*([\d]+\.[\d]{2,})")
-
-
-def _parse_subprocess_cost(stderr: str, budget_fallback: float) -> float:
-	"""Parse cost from Claude CLI subprocess stderr, falling back to budget estimate.
-
-	Looks for patterns like 'cost: $1.23' or standalone '$1.23' in stderr.
-	Returns budget_fallback when parsing fails.
-	"""
-	if not stderr:
-		return budget_fallback
-	# Try explicit cost patterns first
-	match = _COST_RE.search(stderr)
-	if match:
-		try:
-			return float(match.group(1))
-		except ValueError:
-			pass
-	# Try bare dollar amounts
-	match = _DOLLAR_RE.search(stderr)
-	if match:
-		try:
-			return float(match.group(1))
-		except ValueError:
-			pass
-	return budget_fallback
-
-
 def _is_parse_fallback(result: PlannerResult) -> bool:
 	"""Detect when _parse_planner_output returned the fallback single leaf."""
 	return (
@@ -127,6 +98,34 @@ def _parse_planner_output(output: str) -> PlannerResult:
 
 
 
+_COST_KEYWORD_RE = re.compile(r"(?:cost|spent|usage)\s*[:=]?\s*\$(\d+(?:\.\d+)?)", re.IGNORECASE)
+_BARE_DOLLAR_RE = re.compile(r"\$(\d+(?:\.\d+)?)")
+
+
+def _parse_subprocess_cost(stderr: str, fallback: float) -> float:
+	"""Extract cost from Claude CLI stderr output. Falls back to budget_per_call_usd."""
+	if not stderr:
+		return fallback
+
+	# Try keyword-based patterns first (cost:, spent:, usage:)
+	m = _COST_KEYWORD_RE.search(stderr)
+	if m:
+		try:
+			return float(m.group(1))
+		except ValueError:
+			pass
+
+	# Fall back to bare $X.XX
+	m = _BARE_DOLLAR_RE.search(stderr)
+	if m:
+		try:
+			return float(m.group(1))
+		except ValueError:
+			pass
+
+	return fallback
+
+
 class RecursivePlanner:
 	"""Flat planner: decomposes objectives into work units via a single LLM call."""
 
@@ -157,7 +156,7 @@ class RecursivePlanner:
 		self._feedback_context = feedback_context
 		self._locked_files = locked_files or {}
 
-		result = await self._invoke_planner_llm(objective)
+		result, total_cost = await self._invoke_planner_llm(objective)
 
 		# Build WorkUnit objects from parsed units
 		units: list[WorkUnit] = []
@@ -194,7 +193,7 @@ class RecursivePlanner:
 
 		plan.total_units = len(units)
 
-		return plan, units, result.cost_usd
+		return plan, units, total_cost
 
 	def _build_retry_prompt(self, objective: str, scope: str) -> str:
 		"""Build a simplified prompt that strongly emphasizes the <!-- PLAN --> block format."""
@@ -220,7 +219,7 @@ Output ONLY the <!-- PLAN --> block. No explanation. No reasoning. Just the bloc
 	async def _invoke_planner_llm(
 		self,
 		objective: str,
-	) -> PlannerResult:
+	) -> tuple[PlannerResult, float]:
 		feedback_text = self._feedback_context
 		feedback_section = ""
 		if feedback_text:
@@ -297,7 +296,7 @@ speculation_score: 0.0-1.0, how uncertain the right approach is.
 IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must contain valid JSON only."""
 
 		result = await self._run_planner_subprocess(prompt)
-		accumulated_cost = result.cost_usd
+		total_cost = result.cost_usd
 
 		is_retryable = _is_parse_fallback(result) and not getattr(result, "_infra_fallback", False)
 		if is_retryable and not getattr(self, "_planner_retried", False):
@@ -305,14 +304,13 @@ IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must cont
 			log.warning("Planner parse fallback, retrying with simplified prompt")
 			retry_prompt = self._build_retry_prompt(objective, objective)
 			result = await self._run_planner_subprocess(retry_prompt)
-			accumulated_cost += result.cost_usd
+			total_cost += result.cost_usd
 			if _is_parse_fallback(result):
 				log.warning("Planner retry also returned fallback")
 		# Reset retry flag for next invocation
 		self._planner_retried = False
 
-		result.cost_usd = accumulated_cost
-		return result
+		return result, total_cost
 
 	async def _run_planner_subprocess(self, prompt: str) -> PlannerResult:
 		"""Run the planner LLM subprocess and parse its output."""
@@ -348,7 +346,7 @@ IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must cont
 			fallback = {"title": "Execute scope", "description": prompt[:500], "files_hint": "", "priority": 1}
 			result = PlannerResult(type="leaves", units=[fallback])
 			result._infra_fallback = True  # type: ignore[attr-defined]
-			result.cost_usd = budget
+			result.cost_usd = budget  # conservative estimate on timeout
 			return result
 		output = stdout.decode() if stdout else ""
 		stderr_text = stderr.decode() if stderr else ""
@@ -361,7 +359,7 @@ IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must cont
 			fallback = {"title": "Execute scope", "description": prompt[:500], "files_hint": "", "priority": 1}
 			result = PlannerResult(type="leaves", units=[fallback])
 			result._infra_fallback = True  # type: ignore[attr-defined]
-			result.cost_usd = budget
+			result.cost_usd = _parse_subprocess_cost(stderr_text, budget)
 			return result
 
 		result = _parse_planner_output(output)
