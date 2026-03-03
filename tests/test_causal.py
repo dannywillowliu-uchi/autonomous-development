@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from mission_control.causal import CausalAttributor, CausalSignal
+from mission_control.causal import (
+	CausalAttributor,
+	CausalSignal,
+	format_dispatch_context,
+	get_mission_success_summary,
+)
 from mission_control.db import Database
 from mission_control.models import WorkUnit
 
@@ -376,3 +381,195 @@ class TestCausalAttributorRecord:
 		)
 		# Should not raise even if insert fails
 		attr.record(signal)
+
+
+class TestFormatDispatchContext:
+	"""Tests for format_dispatch_context()."""
+
+	def _seed_signals(
+		self, db: Database, specialist: str, merged: int, failed: int,
+		unit_type: str = "implementation", file_counts: list[int] | None = None,
+	) -> None:
+		from mission_control.models import Mission, Plan
+		try:
+			db.insert_mission(Mission(id="m-dc", objective="test"))
+		except Exception:
+			pass
+		try:
+			db.insert_plan(Plan(id="p-dc", objective="test"))
+		except Exception:
+			pass
+		idx = 0
+		for outcome, count in [("merged", merged), ("failed", failed)]:
+			for _ in range(count):
+				uid = f"wu-dc-{specialist}-{idx}"
+				db.insert_work_unit(WorkUnit(id=uid, plan_id="p-dc", title="t"))
+				fc = file_counts[idx] if file_counts and idx < len(file_counts) else 1
+				db.insert_causal_signal(CausalSignal(
+					id=f"cs-dc-{specialist}-{idx}", work_unit_id=uid, mission_id="m-dc",
+					specialist=specialist, outcome=outcome, unit_type=unit_type,
+					file_count=fc,
+				))
+				idx += 1
+
+	def test_no_risks_returns_empty(self, db: Database) -> None:
+		attr = CausalAttributor(db)
+		unit = WorkUnit(specialist="unknown", unit_type="implementation")
+		result = format_dispatch_context(attr, unit)
+		assert result == ""
+
+	def test_low_risk_returns_empty(self, db: Database) -> None:
+		# 10% failure rate -- below 0.3 threshold
+		self._seed_signals(db, "safe-spec", merged=9, failed=1)
+		attr = CausalAttributor(db)
+		unit = WorkUnit(specialist="safe-spec", unit_type="implementation")
+		result = format_dispatch_context(attr, unit)
+		assert result == ""
+
+	def test_high_risk_returns_warning(self, db: Database) -> None:
+		# specialist at 60% failure, unit_type at 60% failure
+		self._seed_signals(db, "risky-spec", merged=4, failed=6)
+		attr = CausalAttributor(db)
+		unit = WorkUnit(specialist="risky-spec", unit_type="implementation")
+		result = format_dispatch_context(attr, unit)
+		assert "## Dispatch Risk Warning" in result
+		assert "60%" in result
+
+	def test_high_risk_file_count_mitigation(self, db: Database) -> None:
+		from mission_control.models import Mission, Plan
+		try:
+			db.insert_mission(Mission(id="m-fc", objective="test"))
+		except Exception:
+			pass
+		try:
+			db.insert_plan(Plan(id="p-fc", objective="test"))
+		except Exception:
+			pass
+		# Seed file_count=6+ bucket with high failure
+		for i in range(10):
+			uid = f"wu-fc-{i}"
+			db.insert_work_unit(WorkUnit(id=uid, plan_id="p-fc", title="t"))
+			db.insert_causal_signal(CausalSignal(
+				id=f"cs-fc-{i}", work_unit_id=uid, mission_id="m-fc",
+				file_count=7, outcome="failed" if i < 5 else "merged",
+			))
+		attr = CausalAttributor(db)
+		unit = WorkUnit(files_hint="a.py,b.py,c.py,d.py,e.py,f.py,g.py")
+		result = format_dispatch_context(attr, unit)
+		assert "keep changes focused" in result
+
+	def test_passes_model_and_epoch_size(self, db: Database) -> None:
+		# Ensure model parameter is forwarded to top_risk_factors
+		from mission_control.models import Mission, Plan
+		try:
+			db.insert_mission(Mission(id="m-me", objective="test"))
+		except Exception:
+			pass
+		try:
+			db.insert_plan(Plan(id="p-me", objective="test"))
+		except Exception:
+			pass
+		for i in range(10):
+			uid = f"wu-me-{i}"
+			db.insert_work_unit(WorkUnit(id=uid, plan_id="p-me", title="t"))
+			db.insert_causal_signal(CausalSignal(
+				id=f"cs-me-{i}", work_unit_id=uid, mission_id="m-me",
+				model="bad-model", outcome="failed" if i < 8 else "merged",
+			))
+		attr = CausalAttributor(db)
+		unit = WorkUnit()
+		result = format_dispatch_context(attr, unit, model="bad-model", epoch_size=5)
+		assert "## Dispatch Risk Warning" in result
+		assert "80%" in result
+
+
+class TestGetMissionSuccessSummary:
+	"""Tests for get_mission_success_summary()."""
+
+	def _setup_mission(self, db: Database, mission_id: str) -> None:
+		from mission_control.models import Mission, Plan
+		try:
+			db.insert_mission(Mission(id=mission_id, objective="test"))
+		except Exception:
+			pass
+		try:
+			db.insert_plan(Plan(id=f"p-{mission_id}", objective="test"))
+		except Exception:
+			pass
+
+	def test_empty_mission(self, db: Database) -> None:
+		result = get_mission_success_summary(db, "nonexistent")
+		assert result["merged"] == 0
+		assert result["failed"] == 0
+		assert result["total"] == 0
+		assert result["success_rate"] == 0.0
+		assert result["top_failure_reasons"] == []
+
+	def test_all_merged(self, db: Database) -> None:
+		self._setup_mission(db, "m-sum1")
+		for i in range(5):
+			uid = f"wu-sum1-{i}"
+			db.insert_work_unit(WorkUnit(id=uid, plan_id="p-m-sum1", title="t"))
+			db.insert_causal_signal(CausalSignal(
+				id=f"cs-sum1-{i}", work_unit_id=uid, mission_id="m-sum1",
+				outcome="merged",
+			))
+		result = get_mission_success_summary(db, "m-sum1")
+		assert result["merged"] == 5
+		assert result["failed"] == 0
+		assert result["total"] == 5
+		assert result["success_rate"] == 1.0
+		assert result["top_failure_reasons"] == []
+
+	def test_mixed_outcomes_with_failure_reasons(self, db: Database) -> None:
+		self._setup_mission(db, "m-sum2")
+		signals = [
+			("merged", ""),
+			("merged", ""),
+			("merged", ""),
+			("failed", "execution"),
+			("failed", "execution"),
+			("failed", "merge"),
+			("merged", ""),
+			("failed", "execution"),
+		]
+		for i, (outcome, stage) in enumerate(signals):
+			uid = f"wu-sum2-{i}"
+			db.insert_work_unit(WorkUnit(id=uid, plan_id="p-m-sum2", title="t"))
+			db.insert_causal_signal(CausalSignal(
+				id=f"cs-sum2-{i}", work_unit_id=uid, mission_id="m-sum2",
+				outcome=outcome, failure_stage=stage,
+			))
+		result = get_mission_success_summary(db, "m-sum2")
+		assert result["merged"] == 4
+		assert result["failed"] == 4
+		assert result["total"] == 8
+		assert result["success_rate"] == 0.5
+		# Top failure reason should be "execution" with count 3
+		assert result["top_failure_reasons"][0] == ("execution", 3)
+		assert ("merge", 1) in result["top_failure_reasons"]
+
+	def test_failure_stage_defaults_to_unknown(self, db: Database) -> None:
+		self._setup_mission(db, "m-sum3")
+		uid = "wu-sum3-0"
+		db.insert_work_unit(WorkUnit(id=uid, plan_id="p-m-sum3", title="t"))
+		db.insert_causal_signal(CausalSignal(
+			id="cs-sum3-0", work_unit_id=uid, mission_id="m-sum3",
+			outcome="failed", failure_stage="",
+		))
+		result = get_mission_success_summary(db, "m-sum3")
+		assert result["failed"] == 1
+		assert result["top_failure_reasons"] == [("unknown", 1)]
+
+	def test_top_failure_reasons_limited_to_three(self, db: Database) -> None:
+		self._setup_mission(db, "m-sum4")
+		stages = ["execution", "merge", "timeout", "oom", "execution"]
+		for i, stage in enumerate(stages):
+			uid = f"wu-sum4-{i}"
+			db.insert_work_unit(WorkUnit(id=uid, plan_id="p-m-sum4", title="t"))
+			db.insert_causal_signal(CausalSignal(
+				id=f"cs-sum4-{i}", work_unit_id=uid, mission_id="m-sum4",
+				outcome="failed", failure_stage=stage,
+			))
+		result = get_mission_success_summary(db, "m-sum4")
+		assert len(result["top_failure_reasons"]) <= 3

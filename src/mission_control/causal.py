@@ -125,3 +125,74 @@ class CausalAttributor:
 		for label, p in risks:
 			lines.append(f"- {label}: {p:.0%} historical failure rate")
 		return "\n".join(lines)
+
+
+_MITIGATION_ADVICE: dict[str, str] = {
+	"file_count=6+": "Units with 6+ files have high failure rates - keep changes focused",
+	"file_count=4-5": "Units touching 4-5 files are moderately risky - consider splitting",
+	"has_dependencies=true": "Dependent units fail more often - verify prerequisites completed",
+	"unit_type=research": "Research units are exploratory - set clear scope boundaries",
+}
+
+
+def _mitigation_for(label: str, p_failure: float) -> str:
+	"""Return mitigation advice for a risk factor, with fallback to generic advice."""
+	if label in _MITIGATION_ADVICE:
+		return _MITIGATION_ADVICE[label]
+	dim, _, value = label.partition("=")
+	return f"{dim}={value} has {p_failure:.0%} failure rate - review historical failures before dispatch"
+
+
+def format_dispatch_context(
+	attributor: CausalAttributor,
+	unit: WorkUnit,
+	model: str = "",
+	epoch_size: int = 0,
+) -> str:
+	"""Build a concise risk warning for worker dispatch.
+
+	Calls attributor.top_risk_factors() and returns a warning section
+	for any risk factor with p_failure > 0.3. Returns empty string if
+	no significant risks are found.
+	"""
+	risks = attributor.top_risk_factors(unit, model=model, epoch_size=epoch_size)
+	significant = [(label, p) for label, p in risks if p > 0.3]
+	if not significant:
+		return ""
+	lines = ["## Dispatch Risk Warning"]
+	for label, p in significant:
+		lines.append(f"- {_mitigation_for(label, p)} ({p:.0%} failure rate)")
+	return "\n".join(lines)
+
+
+def get_mission_success_summary(db: object, mission_id: str) -> dict:
+	"""Query causal signals for a mission and return outcome summary.
+
+	Returns a dict with keys: merged, failed, total, success_rate, top_failure_reasons.
+	"""
+	from mission_control.db import Database
+	_db: Database = db  # type: ignore[assignment]
+
+	signals = _db.get_causal_signals_for_mission(mission_id, limit=10000)
+	merged = 0
+	failed = 0
+	failure_reasons: dict[str, int] = {}
+	for s in signals:
+		if s.outcome == "merged":
+			merged += 1
+		elif s.outcome == "failed":
+			failed += 1
+			stage = s.failure_stage or "unknown"
+			failure_reasons[stage] = failure_reasons.get(stage, 0) + 1
+
+	total = merged + failed
+	success_rate = (merged / total) if total > 0 else 0.0
+	top_reasons = sorted(failure_reasons.items(), key=lambda x: x[1], reverse=True)[:3]
+
+	return {
+		"merged": merged,
+		"failed": failed,
+		"total": total,
+		"success_rate": success_rate,
+		"top_failure_reasons": top_reasons,
+	}
