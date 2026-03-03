@@ -2246,7 +2246,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 		if self._merge_queue_timer is not None:
 			return  # timer already running
 		wait = self.config.green_branch.batch_merge_wait_seconds
-		loop = asyncio.get_event_loop()
+		loop = asyncio.get_running_loop()
 		self._merge_queue_timer = loop.call_later(
 			wait, lambda: asyncio.ensure_future(self._flush_merge_batch()),
 		)
@@ -2881,6 +2881,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				self.config, model=model, output_format="stream-json",
 				permission_mode="bypassPermissions", budget=budget,
 				session_id=session_id, prompt=prompt,
+				setting_sources="project",
 			)
 
 			effective_timeout = unit.timeout or self.config.scheduler.session_timeout
