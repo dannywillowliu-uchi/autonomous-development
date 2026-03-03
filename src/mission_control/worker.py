@@ -126,6 +126,115 @@ MC_RESULT:{{"status":"completed|failed|blocked","commits":["hash"],\
 """
 
 
+RETRY_WORKER_PROMPT_TEMPLATE = """\
+You are a parallel worker agent for {target_name} at {workspace_path}.
+
+## Diagnostic Hints
+You are debugging a previously failed implementation (attempt {attempt_number}). \
+Focus on root cause analysis before making changes. Read the failure output below \
+carefully, identify what went wrong, and only then proceed with a targeted fix.
+
+## Previous Attempt Summary
+{failure_summary}
+
+## Error Output
+```
+{error_output}
+```
+
+## Task
+{title}
+
+{description}
+
+## Scope
+Files likely involved: {files_hint}
+
+## Current Project State
+- Tests: {test_passed}/{test_total} passing
+- Lint errors: {lint_errors}
+- Type errors: {type_errors}
+- Branch: {branch_name}
+
+## Verification Focus
+{verification_hint}
+
+## Verification
+Run: {verification_command}
+
+## Context
+{context_block}
+
+## Instructions
+1. Read the error output and previous attempt summary above FIRST.
+2. Diagnose the root cause of the failure -- do not repeat the same approach.
+3. Implement a targeted fix addressing the root cause.
+4. Run verification (see above) and ensure it passes before committing.
+5. If verification passes, commit with a descriptive message.
+6. If verification fails, diagnose the issue and fix it. Stop and report if truly stuck.
+- Do NOT run `pip install`, `uv pip install`, or modify the Python environment -- it is pre-configured via symlink
+
+## Git Rules
+- You are on branch `{branch_name}`. Commit ONLY to this branch.
+- Do NOT run `git push` under any circumstances. The orchestrator handles pushing.
+- Do NOT switch branches. Stay on `{branch_name}`.
+
+## Research & MCP Tools
+- Use WebSearch to find latest best practices, libraries, and API docs before implementing unfamiliar patterns
+- Use WebFetch to read specific documentation pages found via search
+- Use GitHub MCP tools to search repos, read files, create issues/PRs, and manage code
+- Use Vercel MCP tools to manage deployments, environment variables, and project settings
+- Use Supabase MCP tools for database operations and project management
+- Use Browser-use MCP tools for web browser automation and interaction
+- Use claude-flow MCP tools for memory storage/retrieval, agent coordination, and swarm orchestration
+- Prefer discovering existing solutions over building from scratch
+- Include research findings and MCP tool usage in the 'discoveries' field of MC_RESULT
+
+## Output
+When done, write a summary as the LAST line of output:
+MC_RESULT:{{"status":"completed|failed|blocked","commits":["hash"],\
+"summary":"what you did","files_changed":["list"],\
+"discoveries":["things discovered during work"],\
+"concerns":["potential issues or risks"]}}
+"""
+
+
+def render_retry_worker_prompt(
+	unit: WorkUnit,
+	config: MissionConfig,
+	workspace_path: str,
+	branch_name: str,
+	failure_summary: str,
+	error_output: str,
+	attempt_number: int,
+	test_passed: int = 0,
+	test_total: int = 0,
+	lint_errors: int = 0,
+	type_errors: int = 0,
+	context: str = "",
+) -> str:
+	"""Render the retry prompt template for a worker session with failure context."""
+	verify_cmd = unit.verification_command or config.target.verification.command
+	return RETRY_WORKER_PROMPT_TEMPLATE.format(
+		target_name=config.target.name,
+		workspace_path=workspace_path,
+		title=_sanitize_braces(unit.title),
+		description=_sanitize_braces(unit.description),
+		files_hint=_sanitize_braces(unit.files_hint or "Not specified"),
+		test_passed=test_passed,
+		test_total=test_total,
+		lint_errors=lint_errors,
+		type_errors=type_errors,
+		branch_name=branch_name,
+		verification_hint=_sanitize_braces(unit.verification_hint or "Run full verification suite"),
+		context_block=_sanitize_braces(context or "No additional context."),
+		verification_command=_sanitize_braces(verify_cmd),
+		failure_summary=_sanitize_braces(failure_summary or "No failure summary provided."),
+		error_output=_sanitize_braces(error_output or "No error output captured."),
+		attempt_number=attempt_number,
+	)
+
+
 def render_worker_prompt(
 	unit: WorkUnit,
 	config: MissionConfig,
@@ -697,6 +806,7 @@ class WorkerAgent:
 		cmd = build_claude_cmd(
 			self.config, model=model, budget=budget,
 			permission_mode="bypassPermissions", prompt=prompt,
+			setting_sources="project",
 		)
 
 		handle = await self.backend.spawn(

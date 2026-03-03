@@ -18,6 +18,7 @@ from mission_control.worker import (
 	render_architect_prompt,
 	render_editor_prompt,
 	render_mission_worker_prompt,
+	render_retry_worker_prompt,
 	render_worker_prompt,
 )
 
@@ -136,6 +137,90 @@ class TestResearchPromptSelection:
 		assert "research agent" in prompt.lower()
 		assert "EXPLORATION and DISCOVERY" in prompt
 		assert "Do NOT commit code changes" in prompt
+
+
+class TestRenderRetryWorkerPrompt:
+	def test_all_fields_populated(self, config: MissionConfig) -> None:
+		"""Retry prompt contains all failure context fields."""
+		unit = WorkUnit(
+			title="Fix auth", description="Fix the auth bug",
+			files_hint="src/auth.py", verification_hint="Run auth tests",
+		)
+		prompt = render_retry_worker_prompt(
+			unit, config, "/tmp/ws", "mc/unit-retry",
+			failure_summary="Auth token was expired in header parsing",
+			error_output="TypeError: expected str, got NoneType",
+			attempt_number=2,
+			test_passed=5, test_total=10,
+			lint_errors=1, type_errors=2,
+			context="Some extra context",
+		)
+		assert "Fix auth" in prompt
+		assert "Fix the auth bug" in prompt
+		assert "src/auth.py" in prompt
+		assert "Run auth tests" in prompt
+		assert "Auth token was expired in header parsing" in prompt
+		assert "TypeError: expected str, got NoneType" in prompt
+		assert "mc/unit-retry" in prompt
+		assert "5/10 passing" in prompt
+		assert "Some extra context" in prompt
+
+	def test_empty_failure_context(self, config: MissionConfig) -> None:
+		"""Empty failure_summary and error_output produce sensible defaults."""
+		unit = WorkUnit(title="Fix bug", description="Fix it")
+		prompt = render_retry_worker_prompt(
+			unit, config, "/tmp/ws", "mc/unit-retry",
+			failure_summary="",
+			error_output="",
+			attempt_number=1,
+		)
+		assert "No failure summary provided." in prompt
+		assert "No error output captured." in prompt
+
+	def test_attempt_number_display(self, config: MissionConfig) -> None:
+		"""Attempt number is shown in the diagnostic hints section."""
+		unit = WorkUnit(title="Fix bug", description="Fix it")
+		for attempt in (1, 2, 5):
+			prompt = render_retry_worker_prompt(
+				unit, config, "/tmp/ws", "mc/unit-retry",
+				failure_summary="it broke",
+				error_output="err",
+				attempt_number=attempt,
+			)
+			assert f"attempt {attempt}" in prompt
+
+	def test_specialist_diagnostic_hint(self, config: MissionConfig) -> None:
+		"""Retry prompt includes the specialist debugging framing."""
+		unit = WorkUnit(title="Fix bug", description="Fix it")
+		prompt = render_retry_worker_prompt(
+			unit, config, "/tmp/ws", "mc/unit-retry",
+			failure_summary="test", error_output="err", attempt_number=2,
+		)
+		assert "Diagnostic Hints" in prompt
+		assert "root cause analysis" in prompt
+		assert "previously failed implementation" in prompt
+
+	def test_per_unit_verification_command_override(self, config: MissionConfig) -> None:
+		"""Per-unit verification_command overrides config default in retry prompt."""
+		unit = WorkUnit(title="X", verification_command="make test-specific")
+		prompt = render_retry_worker_prompt(
+			unit, config, "/tmp/ws", "mc/unit-retry",
+			failure_summary="failed", error_output="err", attempt_number=1,
+		)
+		assert "make test-specific" in prompt
+		assert "pytest -q" not in prompt
+
+	def test_instructions_order_read_first(self, config: MissionConfig) -> None:
+		"""Instructions tell the worker to read error output first."""
+		unit = WorkUnit(title="Fix bug", description="Fix it")
+		prompt = render_retry_worker_prompt(
+			unit, config, "/tmp/ws", "mc/unit-retry",
+			failure_summary="test", error_output="err", attempt_number=1,
+		)
+		# "Read the error output" should come before "Implement a targeted fix"
+		read_pos = prompt.index("Read the error output")
+		fix_pos = prompt.index("Implement a targeted fix")
+		assert read_pos < fix_pos
 
 
 class TestLoadSpecialistTemplate:
