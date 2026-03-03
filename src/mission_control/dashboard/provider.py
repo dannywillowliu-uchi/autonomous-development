@@ -6,6 +6,7 @@ Both dashboards consume DashboardSnapshot via DashboardProvider.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -454,3 +455,98 @@ def _build_events(
 	# Sort by timestamp descending, take most recent 20
 	events.sort(key=lambda e: e.timestamp, reverse=True)
 	return events[:20]
+
+
+class MissionMetricsProvider:
+	"""Live mission metrics from the JSONL event stream.
+
+	Incrementally tails an events.jsonl file written by EventStream
+	and aggregates counts for dispatched/merged/failed units, cost,
+	and current epoch.
+	"""
+
+	def __init__(self, events_path: Path) -> None:
+		self._path = events_path
+		self._offset: int = 0
+		self._epoch: int = 0
+		self._active_workers: set[str] = set()
+		self._finished_workers: set[str] = set()
+		self._units_dispatched: int = 0
+		self._units_merged: int = 0
+		self._units_failed: int = 0
+		self._total_cost_usd: float = 0.0
+		self._recent_events: list[dict] = []
+		self._max_recent: int = 50
+
+	def _tail(self) -> list[dict]:
+		"""Read new lines from the JSONL file since last offset."""
+		if not self._path.exists():
+			return []
+		records: list[dict] = []
+		with self._path.open("r", encoding="utf-8") as f:
+			f.seek(self._offset)
+			for line in f:
+				line = line.strip()
+				if not line:
+					continue
+				try:
+					records.append(json.loads(line))
+				except json.JSONDecodeError:
+					log.warning("Skipping malformed JSONL line")
+			self._offset = f.tell()
+		return records
+
+	def _ingest(self, records: list[dict]) -> None:
+		"""Update aggregated metrics from new event records."""
+		for rec in records:
+			etype = rec.get("event_type", "")
+			worker_id = rec.get("worker_id", "")
+
+			if etype == "dispatched":
+				self._units_dispatched += 1
+				if worker_id:
+					self._active_workers.add(worker_id)
+			elif etype == "merged":
+				self._units_merged += 1
+				if worker_id:
+					self._active_workers.discard(worker_id)
+					self._finished_workers.add(worker_id)
+			elif etype == "merge_failed":
+				self._units_failed += 1
+				if worker_id:
+					self._active_workers.discard(worker_id)
+					self._finished_workers.add(worker_id)
+			elif etype == "mission_started":
+				self._epoch += 1
+			# mission_ended doesn't change epoch count
+
+			cost = rec.get("cost_usd", 0.0)
+			if cost:
+				self._total_cost_usd += cost
+
+			self._recent_events.append(rec)
+
+		# Trim recent events to max
+		if len(self._recent_events) > self._max_recent:
+			self._recent_events = self._recent_events[-self._max_recent:]
+
+	def get_current_metrics(self) -> dict:
+		"""Read new events and return aggregated metrics."""
+		new_records = self._tail()
+		self._ingest(new_records)
+
+		total_terminal = self._units_merged + self._units_failed
+		success_rate = (
+			self._units_merged / total_terminal if total_terminal > 0 else 0.0
+		)
+
+		return {
+			"epoch": self._epoch,
+			"active_workers": len(self._active_workers),
+			"units_dispatched": self._units_dispatched,
+			"units_merged": self._units_merged,
+			"units_failed": self._units_failed,
+			"success_rate": success_rate,
+			"total_cost_usd": self._total_cost_usd,
+			"recent_events": list(self._recent_events),
+		}
