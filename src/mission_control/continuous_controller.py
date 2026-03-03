@@ -552,9 +552,9 @@ class ContinuousController:
 				logger.error("Failed to generate mission report: %s", exc, exc_info=True)
 
 			# Append strategic context for future strategist calls
-			merged_summaries: list[str] = []
-			failed_summaries: list[str] = []
 			try:
+				merged_summaries: list[str] = []
+				failed_summaries: list[str] = []
 				handoffs = self.db.get_recent_handoffs(mission.id, limit=50)
 				for h in handoffs:
 					summary_text = h.summary[:200] if h.summary else ""
@@ -579,7 +579,9 @@ class ContinuousController:
 					if total_units > 0:
 						fail_rate = result.total_units_failed / total_units
 						if fail_rate > 0.2:
-							failure_summaries = failed_summaries[:5]
+							failure_summaries = [
+								s for s in (failed_summaries if "failed_summaries" in dir() else [])
+							][:5]
 							if failure_summaries:
 								await self._prompt_evolution.propose_mutation(
 									"worker", failure_summaries,
@@ -2879,7 +2881,6 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				self.config, model=model, output_format="stream-json",
 				permission_mode="bypassPermissions", budget=budget,
 				session_id=session_id, prompt=prompt,
-				setting_sources="project",
 			)
 
 			effective_timeout = unit.timeout or self.config.scheduler.session_timeout
