@@ -1548,32 +1548,6 @@ class ContinuousController:
 				self.running = False
 				break
 
-			# Pre-dispatch budget gate: filter units that would exceed per-run budget
-			budget_limit = self.config.scheduler.budget.max_per_run_usd
-			if budget_limit > 0:
-				projected = self._ema.projected_cost()
-				if projected is not None:
-					affordable: list[WorkUnit] = []
-					running_total = mission.total_cost_usd
-					for u in units:
-						if running_total + projected > budget_limit:
-							logger.warning(
-								"Budget gate: dropping %s (%s) -- est $%.4f pushes to $%.4f (limit $%.2f)",
-								u.id[:12], u.title, projected, running_total + projected, budget_limit,
-							)
-						else:
-							affordable.append(u)
-							running_total += projected
-					if not affordable:
-						logger.warning(
-							"Budget gate: all %d units dropped -- stopping with ema_budget_exceeded",
-							len(units),
-						)
-						result.stopped_reason = "ema_budget_exceeded"
-						self.running = False
-						break
-					units = affordable
-
 			try:
 				self.db.insert_plan(plan)
 			except Exception as exc:
@@ -2907,7 +2881,6 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				self.config, model=model, output_format="stream-json",
 				permission_mode="bypassPermissions", budget=budget,
 				session_id=session_id, prompt=prompt,
-				setting_sources="project",
 			)
 
 			effective_timeout = unit.timeout or self.config.scheduler.session_timeout
