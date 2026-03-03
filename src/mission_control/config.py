@@ -417,6 +417,7 @@ class DegradationConfig:
 	verification_failure_threshold: int = 3
 	safe_stop_timeout_seconds: float = 300.0
 	recovery_success_threshold: int = 3
+	cost_per_merge_threshold: float = 5.0
 
 
 @dataclass

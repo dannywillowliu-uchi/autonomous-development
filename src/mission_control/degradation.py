@@ -59,6 +59,9 @@ class DegradationManager:
 		self._safe_stop_timeout_seconds: float = 300.0
 		self._recovery_success_threshold: int = 3
 
+		self._cost_per_merge_threshold: float = 5.0
+		self._budget_pace_threshold: float = 1.5
+
 		if config is not None:
 			cfg = config
 			self._budget_fraction_threshold = getattr(cfg, "budget_fraction_threshold", self._budget_fraction_threshold)
@@ -76,6 +79,9 @@ class DegradationManager:
 			self._recovery_success_threshold = getattr(
 				cfg, "recovery_success_threshold", self._recovery_success_threshold,
 			)
+			self._cost_per_merge_threshold = getattr(
+				cfg, "cost_per_merge_threshold", self._cost_per_merge_threshold,
+			)
 
 		# Counters
 		self._db_error_count: int = 0
@@ -84,6 +90,12 @@ class DegradationManager:
 		self._rate_limit_timestamps: list[float] = []
 		self._verification_failure_count: int = 0
 		self._consecutive_successes: int = 0
+
+		# Cost tracking
+		self._unit_costs: list[tuple[str, float, bool]] = []  # (unit_id, cost_usd, merged)
+		self._total_spent: float = 0.0
+		self._total_budget: float = 0.0
+		self._last_budget_pace: float = 0.0
 
 	def _transition(self, new_level: DegradationLevel, trigger: str) -> None:
 		if new_level == self._level:
@@ -139,6 +151,8 @@ class DegradationManager:
 	# -- Budget --
 
 	def check_budget_fraction(self, spent: float, budget: float) -> None:
+		self._total_spent = spent
+		self._total_budget = budget
 		if budget <= 0:
 			return
 		fraction = spent / budget
@@ -188,6 +202,44 @@ class DegradationManager:
 		if self._level == DegradationLevel.REDUCED_WORKERS and recovery:
 			self._transition(DegradationLevel.FULL_CAPACITY, "general_recovery")
 
+	# -- Cost tracking --
+
+	def record_unit_cost(self, unit_id: str, cost_usd: float, merged: bool) -> None:
+		"""Track per-unit cost and whether it merged successfully."""
+		self._unit_costs.append((unit_id, cost_usd, merged))
+		if self.should_reduce_workers_for_cost():
+			self._escalate_to(DegradationLevel.REDUCED_WORKERS, "cost_efficiency")
+
+	def cost_per_merge(self) -> float | None:
+		"""Average cost of successfully merged units. None if no merges yet."""
+		merged = [cost for _, cost, m in self._unit_costs if m]
+		if not merged:
+			return None
+		return sum(merged) / len(merged)
+
+	def budget_pace(self, elapsed_seconds: float, wall_time_limit: float) -> float:
+		"""Ratio of budget consumption rate to time consumption rate.
+
+		Values >1.0 mean overspending relative to elapsed time.
+		Returns 0.0 if wall_time_limit or total_budget is zero.
+		"""
+		if wall_time_limit <= 0 or self._total_budget <= 0 or elapsed_seconds <= 0:
+			return 0.0
+		budget_fraction = self._total_spent / self._total_budget
+		time_fraction = elapsed_seconds / wall_time_limit
+		pace = budget_fraction / time_fraction
+		self._last_budget_pace = pace
+		return pace
+
+	def should_reduce_workers_for_cost(self) -> bool:
+		"""True when cost_per_merge exceeds threshold OR budget pace > 1.5."""
+		cpm = self.cost_per_merge()
+		if cpm is not None and cpm > self._cost_per_merge_threshold:
+			return True
+		if self._last_budget_pace > self._budget_pace_threshold:
+			return True
+		return False
+
 	# -- Worker count --
 
 	def get_effective_worker_count(self, configured: int) -> int:
@@ -230,4 +282,7 @@ class DegradationManager:
 			"rate_limit_count": len(self._rate_limit_timestamps),
 			"verification_failures": self._verification_failure_count,
 			"consecutive_successes": self._consecutive_successes,
+			"cost_per_merge": self.cost_per_merge(),
+			"unit_costs_recorded": len(self._unit_costs),
+			"budget_pace": self._last_budget_pace,
 		}
