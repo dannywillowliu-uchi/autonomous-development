@@ -266,6 +266,24 @@ class TestWorkspacePoolConcurrency:
 
 		await pool.cleanup()
 
+	async def test_concurrent_acquire_respects_max_clones(
+		self, source_repo: Path, pool_dir: Path,
+	) -> None:
+		"""Concurrent acquires exceeding max_clones never over-allocate."""
+		max_clones = 3
+		pool = WorkspacePool(source_repo, pool_dir, max_clones=max_clones)
+		await pool.initialize()
+
+		# Fire 6 concurrent acquires against a pool of 3
+		results = await asyncio.gather(*[pool.acquire() for _ in range(6)])
+		acquired = [r for r in results if r is not None]
+
+		assert len(acquired) == max_clones
+		assert pool.total_clones == max_clones
+		assert len(set(acquired)) == max_clones  # all unique
+
+		await pool.cleanup()
+
 	async def test_concurrent_acquire_release_cycles(
 		self, source_repo: Path, pool_dir: Path,
 	) -> None:

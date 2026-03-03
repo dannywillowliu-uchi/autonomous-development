@@ -33,6 +33,7 @@ class WorkspacePool:
 		self.green_branch = green_branch
 		self._available: list[Path] = []
 		self._in_use: set[Path] = set()
+		self._lock = asyncio.Lock()
 
 	@property
 	def total_clones(self) -> int:
@@ -69,18 +70,20 @@ class WorkspacePool:
 	async def acquire(self) -> Path | None:
 		"""Get a clone from the pool, creating one if needed.
 
-		Returns None if at max_clones limit.
+		Returns None if at max_clones limit.  Serialized via asyncio.Lock
+		to prevent concurrent callers from racing past the size check.
 		"""
-		if self._available:
-			workspace = self._available.pop()
-			self._in_use.add(workspace)
-			return workspace
+		async with self._lock:
+			if self._available:
+				workspace = self._available.pop()
+				self._in_use.add(workspace)
+				return workspace
 
-		clone = await self._create_clone()
-		if clone is None:
-			return None
-		self._in_use.add(clone)
-		return clone
+			clone = await self._create_clone()
+			if clone is None:
+				return None
+			self._in_use.add(clone)
+			return clone
 
 	async def release(self, workspace: Path) -> None:
 		"""Return a clone to the pool after resetting it."""
