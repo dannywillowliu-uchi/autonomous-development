@@ -7,6 +7,7 @@ import pytest
 from mission_control.db import Database
 from mission_control.feedback import (
 	_extract_keywords,
+	diagnose_failure,
 	get_worker_context,
 )
 from mission_control.models import (
@@ -231,3 +232,233 @@ class TestDBFeedbackCRUD:
 		assert results[0].round_number == 5
 		assert results[1].round_number == 4
 		assert results[2].round_number == 3
+
+
+class TestDiagnoseFailure:
+	"""Tests for diagnose_failure() -- pattern matching failure categories."""
+
+	def test_empty_output(self) -> None:
+		result = diagnose_failure("")
+		assert "No output captured" in result
+
+	def test_none_like_empty(self) -> None:
+		"""Empty string triggers the no-output branch."""
+		result = diagnose_failure("")
+		assert "[" not in result or "No output" in result
+
+	# -- Merge conflicts --
+
+	def test_merge_conflict_markers(self) -> None:
+		output = (
+			"Auto-merging src/foo.py\n"
+			"CONFLICT (content): Merge conflict in src/foo.py\n"
+			"<<<<<<< HEAD\n"
+			"def old():\n"
+			"=======\n"
+			"def new():\n"
+			">>>>>>> feature\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Merge conflict]" in result
+		assert "rebase" in result.lower()
+
+	def test_conflict_keyword_only(self) -> None:
+		output = "error: CONFLICT (modify/delete): path/to/file.py"
+		result = diagnose_failure(output)
+		assert "[Merge conflict]" in result
+
+	# -- Syntax errors --
+
+	def test_syntax_error_basic(self) -> None:
+		output = (
+			'  File "src/app.py", line 42\n'
+			"    def foo(\n"
+			"           ^\n"
+			"SyntaxError: invalid syntax\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Syntax error]" in result
+		assert "parentheses" in result or "syntax" in result.lower()
+
+	def test_syntax_error_indentation(self) -> None:
+		output = (
+			'  File "src/app.py", line 10\n'
+			"    return x\n"
+			"IndentationError: unexpected indent\n"
+			"SyntaxError\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Syntax error]" in result
+
+	def test_invalid_syntax_without_class_name(self) -> None:
+		output = "line 5: invalid syntax near 'def'"
+		result = diagnose_failure(output)
+		assert "[Syntax error]" in result
+
+	# -- Import errors --
+
+	def test_module_not_found(self) -> None:
+		output = (
+			"Traceback (most recent call last):\n"
+			'  File "src/main.py", line 1, in <module>\n'
+			"    from mission_control.nonexistent import Foo\n"
+			"ModuleNotFoundError: No module named 'mission_control.nonexistent'\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Import error]" in result
+		assert "mission_control.nonexistent" in result
+		assert "pip install" in result.lower()
+
+	def test_import_error_relative(self) -> None:
+		output = (
+			"ImportError: cannot import name 'BadClass' from 'mission_control.models'\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Import error]" in result
+		assert "BadClass" in result
+
+	def test_import_error_no_module_name(self) -> None:
+		output = "ImportError: DLL load failed"
+		result = diagnose_failure(output)
+		assert "[Import error]" in result
+
+	# -- Pytest assertion failures --
+
+	def test_pytest_failed_tests(self) -> None:
+		output = (
+			"tests/test_foo.py::test_add PASSED\n"
+			"tests/test_foo.py::test_subtract FAILED\n"
+			"tests/test_bar.py::test_multiply FAILED\n"
+			"\n"
+			"FAILED tests/test_foo.py::test_subtract - AssertionError: assert 3 == 4\n"
+			"FAILED tests/test_bar.py::test_multiply - AssertionError: assert 6 == 8\n"
+			"2 failed, 1 passed\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Test failure]" in result
+		assert "test_subtract" in result or "test_foo" in result
+
+	def test_assertion_error_only(self) -> None:
+		output = (
+			"E       AssertionError: expected True but got False\n"
+			"        assert result is True\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Test failure]" in result
+
+	def test_assert_keyword_in_traceback(self) -> None:
+		output = (
+			"    assert response.status_code == 200\n"
+			"AssertionError\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Test failure]" in result
+		assert "do not modify tests" in result.lower()
+
+	# -- Ruff / lint errors --
+
+	def test_ruff_errors(self) -> None:
+		output = (
+			"src/mission_control/worker.py:10:1: F401 `os` imported but unused\n"
+			"src/mission_control/worker.py:25:80: E501 Line too long (130 > 120)\n"
+			"Found 2 errors.\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Lint error]" in result
+		assert "F401" in result
+		assert "E501" in result
+
+	def test_ruff_with_command_output(self) -> None:
+		output = (
+			"$ ruff check src/ tests/\n"
+			"src/foo.py:1:1: F811 Redefinition of unused `bar`\n"
+			"Found 1 error.\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Lint error]" in result
+		assert "F811" in result
+
+	def test_ruff_warning_codes(self) -> None:
+		output = (
+			"ruff check output:\n"
+			"src/x.py:5:1: W291 trailing whitespace\n"
+			"Found 1 error.\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Lint error]" in result
+		assert "W291" in result
+
+	# -- Timeout --
+
+	def test_timeout_pattern(self) -> None:
+		output = "Process timed out after 300 seconds"
+		result = diagnose_failure(output)
+		assert "[Timeout]" in result
+		assert "scope" in result.lower() or "limit" in result.lower()
+
+	def test_deadline_exceeded(self) -> None:
+		output = "error: deadline exceeded waiting for worker response"
+		result = diagnose_failure(output)
+		assert "[Timeout]" in result
+
+	def test_killed_signal(self) -> None:
+		output = "Worker process killed by signal 9 (SIGKILL)"
+		result = diagnose_failure(output)
+		assert "[Timeout]" in result
+
+	def test_time_out_two_words(self) -> None:
+		output = "The operation timed out while running pytest"
+		result = diagnose_failure(output)
+		assert "[Timeout]" in result
+
+	# -- Generic / unknown failures --
+
+	def test_unknown_failure_with_error_line(self) -> None:
+		output = (
+			"Running task...\n"
+			"Processing files...\n"
+			"Fatal error: disk full\n"
+			"Aborted.\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Unknown failure]" in result
+		assert "disk full" in result.lower()
+
+	def test_unknown_failure_no_error_hints(self) -> None:
+		output = "Something happened but no clear error pattern."
+		result = diagnose_failure(output)
+		assert "[Unknown failure]" in result
+		assert "root cause" in result.lower()
+
+	# -- Priority / ordering --
+
+	def test_merge_conflict_takes_priority_over_syntax(self) -> None:
+		"""Merge conflicts should be detected before syntax errors."""
+		output = (
+			"SyntaxError: invalid syntax\n"
+			"<<<<<<< HEAD\n"
+			"old code\n"
+			"=======\n"
+			"new code\n"
+			">>>>>>> branch\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Merge conflict]" in result
+
+	def test_syntax_error_takes_priority_over_test_failure(self) -> None:
+		"""Syntax errors should be detected before test failures."""
+		output = (
+			"FAILED tests/test_foo.py::test_bar\n"
+			"SyntaxError: invalid syntax\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Syntax error]" in result
+
+	def test_import_error_takes_priority_over_test_failure(self) -> None:
+		"""Import errors block test execution, so detect first."""
+		output = (
+			"FAILED tests/test_foo.py::test_bar\n"
+			"ModuleNotFoundError: No module named 'foo'\n"
+		)
+		result = diagnose_failure(output)
+		assert "[Import error]" in result

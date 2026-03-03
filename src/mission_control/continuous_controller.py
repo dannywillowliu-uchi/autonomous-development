@@ -2454,10 +2454,13 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			cont.retry_max_delay_seconds,
 		)
 
-		# Append failure context to description
+		# Append failure context with targeted diagnosis
+		from mission_control.feedback import diagnose_failure
+
+		diagnosis = diagnose_failure(failure_reason)
 		unit.description += (
 			f"\n\n[Retry attempt {unit.attempt}] Previous failure: "
-			f"{failure_reason[-1000:]}. Avoid the same mistake."
+			f"{failure_reason[-1000:]}\n\n{diagnosis}"
 		)
 
 		# Reset unit for re-dispatch
