@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from mission_control.backends.base import WorkerBackend, WorkerHandle
+from mission_control.backends.local import HealthCheckResult
 from mission_control.config import ContainerConfig, MissionConfig, claude_subprocess_env
 from mission_control.workspace import WorkspacePool
 
@@ -35,6 +36,7 @@ class ContainerBackend(WorkerBackend):
 		base_branch: str = "main",
 		max_output_mb: int = 50,
 		config: MissionConfig | None = None,
+		container_health_timeout: int = 10,
 	) -> None:
 		self._config = config
 		self._pool = WorkspacePool(
@@ -44,6 +46,7 @@ class ContainerBackend(WorkerBackend):
 			base_branch=base_branch,
 		)
 		self._container_config = container_config
+		self._container_health_timeout = container_health_timeout
 		self._processes: dict[str, asyncio.subprocess.Process] = {}
 		self._container_names: dict[str, str] = {}
 		self._stdout_bufs: dict[str, bytes] = {}
@@ -156,9 +159,131 @@ class ContainerBackend(WorkerBackend):
 
 		return cmd
 
+	async def _verify_container_workspace(
+		self, worker_id: str, workspace_path: str,
+	) -> HealthCheckResult:
+		"""Run pre-flight health checks on a container workspace.
+
+		The workspace lives on the host filesystem and is volume-mounted into
+		containers, so checks run on the host path directly. Additionally
+		checks for stale containers that would conflict with a new spawn.
+
+		Checks:
+		1. No stale container with the same name (docker inspect)
+		2. .git/HEAD exists in the host workspace
+		3. git status --porcelain exits 0 on the host workspace
+		"""
+		issues: list[str] = []
+		cc = self._container_config
+		container_name = self._container_names.get(worker_id, f"mc-worker-{worker_id}")
+		timeout = self._container_health_timeout
+		workspace = Path(workspace_path)
+
+		# If the host workspace directory doesn't exist, nothing to verify.
+		if not workspace.is_dir():
+			logger.info(
+				"Container health check skipped for %s: workspace %s does not exist",
+				container_name, workspace_path,
+			)
+			return HealthCheckResult(passed=True)
+
+		# 1. Check for stale container via docker inspect
+		try:
+			inspect_proc = await asyncio.create_subprocess_exec(
+				cc.docker_executable, "inspect", "--format", "{{.State.Running}}", container_name,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.STDOUT,
+			)
+			await asyncio.wait_for(inspect_proc.wait(), timeout=timeout)
+			if inspect_proc.returncode == 0:
+				# Container exists -- stale leftover from a previous run
+				issues.append(f"Stale container {container_name} found")
+		except asyncio.TimeoutError:
+			issues.append(f"docker inspect timed out after {timeout}s for {container_name}")
+		except OSError as exc:
+			issues.append(f"docker inspect failed with OS error for {container_name}: {exc}")
+
+		# 2. Check .git/HEAD exists in the host workspace
+		git_head = workspace / ".git" / "HEAD"
+		try:
+			git_head.read_text()
+		except (OSError, FileNotFoundError):
+			issues.append(f".git/HEAD missing or unreadable at {workspace_path}")
+
+		# 3. Run git status --porcelain on the host workspace
+		try:
+			status_proc = await asyncio.create_subprocess_exec(
+				"git", "status", "--porcelain",
+				cwd=workspace_path,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.STDOUT,
+			)
+			await asyncio.wait_for(status_proc.wait(), timeout=timeout)
+			if status_proc.returncode != 0:
+				issues.append(
+					f"git status failed (rc={status_proc.returncode}) at {workspace_path}"
+				)
+		except asyncio.TimeoutError:
+			issues.append(f"git status timed out after {timeout}s at {workspace_path}")
+		except OSError as exc:
+			issues.append(f"git status failed with OS error: {exc}")
+
+		result = HealthCheckResult(passed=len(issues) == 0, issues=issues)
+		logger.info(
+			"Container health check for %s (workspace=%s): passed=%s issues=%s",
+			container_name, workspace_path, result.passed, result.issues,
+		)
+		return result
+
+	async def _repair_container(self, worker_id: str) -> None:
+		"""Stop and remove a container to allow re-provisioning."""
+		cc = self._container_config
+		container_name = self._container_names.get(worker_id, f"mc-worker-{worker_id}")
+		timeout = self._container_health_timeout
+
+		# Stop the container
+		try:
+			stop_proc = await asyncio.create_subprocess_exec(
+				cc.docker_executable, "stop", "--time", "5", container_name,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.STDOUT,
+			)
+			await asyncio.wait_for(stop_proc.communicate(), timeout=timeout)
+		except (asyncio.TimeoutError, OSError) as exc:
+			logger.warning("docker stop failed for %s during repair: %s", container_name, exc)
+
+		# Remove the container (--force in case stop didn't work)
+		try:
+			rm_proc = await asyncio.create_subprocess_exec(
+				cc.docker_executable, "rm", "--force", container_name,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.STDOUT,
+			)
+			await asyncio.wait_for(rm_proc.communicate(), timeout=timeout)
+		except (asyncio.TimeoutError, OSError) as exc:
+			logger.warning("docker rm failed for %s during repair: %s", container_name, exc)
+
 	async def spawn(
 		self, worker_id: str, workspace_path: str, command: list[str], timeout: int
 	) -> WorkerHandle:
+		# Pre-flight health check: verify container workspace integrity.
+		health = await self._verify_container_workspace(worker_id, workspace_path)
+		if not health.passed:
+			for issue in health.issues:
+				logger.warning("Container health check failed: %s", issue)
+			# Attempt one repair cycle: stop, remove, re-provision the container.
+			logger.info("Attempting container repair for worker %s", worker_id)
+			await self._repair_container(worker_id)
+			# Re-check after repair
+			health = await self._verify_container_workspace(worker_id, workspace_path)
+			if not health.passed:
+				for issue in health.issues:
+					logger.warning("Container health check failed after repair: %s", issue)
+				raise RuntimeError(
+					f"Container health check failed after repair for {worker_id}: "
+					+ "; ".join(health.issues)
+				)
+
 		docker_cmd = self._build_docker_command(worker_id, workspace_path, command)
 
 		proc = await asyncio.create_subprocess_exec(
