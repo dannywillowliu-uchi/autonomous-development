@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 	output_summary TEXT NOT NULL DEFAULT ''
 );
 
+CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
+
 CREATE TABLE IF NOT EXISTS snapshots (
 	id TEXT PRIMARY KEY,
 	session_id TEXT,
@@ -178,6 +180,8 @@ CREATE TABLE IF NOT EXISTS missions (
 	final_score REAL NOT NULL DEFAULT 0.0,
 	stopped_reason TEXT NOT NULL DEFAULT ''
 );
+
+CREATE INDEX IF NOT EXISTS idx_missions_status ON missions(status, started_at);
 
 CREATE TABLE IF NOT EXISTS rounds (
 	id TEXT PRIMARY KEY,
@@ -723,6 +727,9 @@ class Database:
 				else:
 					logger.warning("Migration failed for %s.%s: %s", table, column, exc)
 					raise
+		self.conn.execute(
+			"CREATE INDEX IF NOT EXISTS idx_work_units_epoch_id ON work_units(epoch_id)"
+		)
 
 	def _migrate_token_columns(self) -> None:
 		"""Add token tracking columns to existing tables (idempotent)."""
