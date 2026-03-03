@@ -19,6 +19,7 @@ from mission_control.context_gathering import (
 from mission_control.db import Database
 from mission_control.json_utils import extract_json_from_text
 from mission_control.models import CriticFinding, Mission, WorkUnit
+from mission_control.recursive_planner import _parse_subprocess_cost
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ class CriticAgent:
 		units: list[WorkUnit],
 		prev_finding: CriticFinding,
 		batch_signals: BatchSignals | None = None,
-	) -> CriticFinding:
+	) -> tuple[CriticFinding, float]:
 		"""Feasibility review: check whether proposed units are achievable."""
 		units_text = "\n".join(
 			f"  {i+1}. [{u.priority}] {u.title}: {u.description[:200]} "
@@ -152,15 +153,16 @@ CRITIC_RESULT:{{"findings": ["..."],\
  "confidence": 0.8,\
  "strategy_text": ""}}"""
 
-		output = await self._invoke_llm(prompt, "critic-review", use_mcp=False)
-		return _parse_critic_output(output)
+		output, cost = await self._invoke_llm(prompt, "critic-review", use_mcp=False)
+		finding = _parse_critic_output(output)
+		return finding, cost
 
 	async def propose_next(
 		self,
 		mission: Mission,
 		result: Any,
 		context: str,
-	) -> CriticFinding:
+	) -> tuple[CriticFinding, float]:
 		"""Analyze completed mission and propose next objective for chaining."""
 		objective_met = getattr(result, "objective_met", False)
 		total_merged = getattr(result, "total_units_merged", 0)
@@ -194,8 +196,9 @@ CRITIC_RESULT:{{"findings": ["what was accomplished..."],\
  "strategy_text": "Rationale for next objective...",\
  "proposed_objective": "The next objective to pursue"}}"""
 
-		output = await self._invoke_llm(prompt, "critic-chaining", use_mcp=True)
-		return _parse_critic_output(output)
+		output, cost = await self._invoke_llm(prompt, "critic-chaining", use_mcp=True)
+		finding = _parse_critic_output(output)
+		return finding, cost
 
 	def gather_context(self, mission: Mission | None = None) -> str:
 		"""Gather all available project context for critic prompts."""
@@ -233,8 +236,12 @@ CRITIC_RESULT:{{"findings": ["what was accomplished..."],\
 
 	async def _invoke_llm(
 		self, prompt: str, label: str, *, use_mcp: bool = False,
-	) -> str:
-		"""Run a prompt through a Claude subprocess."""
+	) -> tuple[str, float]:
+		"""Run a prompt through a Claude subprocess.
+
+		Returns:
+			Tuple of (output_text, cost_usd).
+		"""
 		delib = self._config.deliberation
 		budget = delib.critic_budget_usd
 		model = delib.critic_model or self._config.scheduler.model
@@ -258,6 +265,7 @@ CRITIC_RESULT:{{"findings": ["what was accomplished..."],\
 				timeout=timeout,
 			)
 			output = stdout.decode() if stdout else ""
+			stderr_text = stderr.decode() if stderr else ""
 		except asyncio.TimeoutError:
 			log.error("%s LLM timed out after %ds", label, timeout)
 			try:
@@ -265,14 +273,15 @@ CRITIC_RESULT:{{"findings": ["what was accomplished..."],\
 				await proc.wait()
 			except ProcessLookupError:
 				pass
-			return ""
+			return "", budget
 		except (FileNotFoundError, OSError) as exc:
 			log.warning("%s LLM failed to start: %s", label, exc)
-			return ""
+			return "", 0.0
 
 		if proc.returncode != 0:
 			err_msg = stderr.decode()[:200] if stderr else "unknown error"
 			log.warning("%s LLM failed (rc=%d): %s", label, proc.returncode, err_msg)
-			return ""
+			return "", budget
 
-		return output
+		cost = _parse_subprocess_cost(stderr_text, budget)
+		return output, cost

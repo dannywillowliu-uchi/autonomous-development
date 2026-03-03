@@ -125,7 +125,7 @@ class TestPlanRound:
 		)
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=leaf_result):
-			plan, units = await planner.plan_round("Build feature")
+			plan, units, _cost = await planner.plan_round("Build feature")
 
 		assert plan.objective == "Build feature"
 		assert plan.total_units == 2
@@ -142,7 +142,7 @@ class TestPlanRound:
 		empty_result = PlannerResult(type="leaves", units=[])
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=empty_result):
-			plan, units = await planner.plan_round("Already done")
+			plan, units, _cost = await planner.plan_round("Already done")
 
 		assert plan.total_units == 0
 		assert units == []
@@ -161,7 +161,7 @@ class TestPlanRound:
 		)
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=leaf_result):
-			plan, units = await planner.plan_round("Dep chain")
+			plan, units, _cost = await planner.plan_round("Dep chain")
 
 		assert units[0].depends_on == ""
 		assert units[1].depends_on == units[0].id
@@ -185,7 +185,7 @@ class TestPlanRound:
 		)
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=leaf_result):
-			plan, units = await planner.plan_round("Add tests")
+			plan, units, _cost = await planner.plan_round("Add tests")
 
 		wu = units[0]
 		assert wu.title == "Add tests"
@@ -209,7 +209,7 @@ class TestPlanRound:
 		)
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=leaf_result):
-			plan, units = await planner.plan_round("Overlap test")
+			plan, units, _cost = await planner.plan_round("Overlap test")
 
 		# B should depend on A due to shared.py overlap
 		assert units[0].id in units[1].depends_on
@@ -485,7 +485,7 @@ class TestDependsOnIndicesResolution:
 		)
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=leaf_result):
-			plan, units = await planner.plan_round("Test deps")
+			plan, units, _cost = await planner.plan_round("Test deps")
 
 		assert len(units) == 3
 		assert units[2].depends_on == ""
@@ -503,7 +503,7 @@ class TestDependsOnIndicesResolution:
 		)
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=leaf_result):
-			plan, units = await planner.plan_round("Test self-ref")
+			plan, units, _cost = await planner.plan_round("Test self-ref")
 
 		assert units[0].depends_on == ""
 
@@ -523,7 +523,7 @@ class TestDependsOnIndicesResolution:
 		)
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=leaf_result):
-			plan, units = await planner.plan_round("Test non-int")
+			plan, units, _cost = await planner.plan_round("Test non-int")
 
 		assert units[1].depends_on == ""
 
@@ -540,7 +540,7 @@ class TestDependsOnIndicesResolution:
 		)
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=leaf_result):
-			plan, units = await planner.plan_round("Test empty deps")
+			plan, units, _cost = await planner.plan_round("Test empty deps")
 
 		for wu in units:
 			assert wu.depends_on == ""
@@ -559,7 +559,7 @@ class TestDependsOnIndicesResolution:
 		)
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=leaf_result):
-			plan, units = await planner.plan_round("Test dep chain")
+			plan, units, _cost = await planner.plan_round("Test dep chain")
 
 		assert units[0].depends_on == ""
 		assert units[1].depends_on == units[0].id
@@ -582,7 +582,7 @@ class TestDependsOnIndicesResolution:
 		)
 
 		with patch.object(planner, "_run_planner_subprocess", new_callable=AsyncMock, return_value=leaf_result):
-			plan, units = await planner.plan_round("Test mixed deps")
+			plan, units, _cost = await planner.plan_round("Test mixed deps")
 
 		# Only indices 0 and 1 are valid (99 out of range, -1 negative)
 		assert units[2].depends_on == f"{units[0].id},{units[1].id}"
@@ -1216,7 +1216,7 @@ class TestGetNextUnits:
 
 		mock_wu = WorkUnit(id="wu1", plan_id="p1", title="Task 1")
 		mock_plan = Plan(id="p1", objective="test")
-		planner._inner.plan_round = AsyncMock(return_value=(mock_plan, [mock_wu]))
+		planner._inner.plan_round = AsyncMock(return_value=(mock_plan, [mock_wu], 0.10))
 
 		mission = _mission()
 		plan, units, epoch = await planner.get_next_units(mission, max_units=3)
@@ -1239,7 +1239,7 @@ class TestGetNextUnits:
 			call_count += 1
 			plan = Plan(id=f"p{call_count}", objective="test")
 			wu = WorkUnit(id=f"wu{call_count}", title=f"Task {call_count}")
-			return plan, [wu]
+			return plan, [wu], 0.10
 
 		planner._inner.plan_round = AsyncMock(side_effect=mock_plan_round)
 		mission = _mission()
@@ -1256,7 +1256,7 @@ class TestGetNextUnits:
 		planner = ContinuousPlanner(config, db)
 
 		mock_plan = Plan(id="p1", objective="test")
-		planner._inner.plan_round = AsyncMock(return_value=(mock_plan, []))
+		planner._inner.plan_round = AsyncMock(return_value=(mock_plan, [], 0.0))
 
 		mission = _mission()
 		plan, units, epoch = await planner.get_next_units(mission, max_units=3)
@@ -1270,7 +1270,7 @@ class TestGetNextUnits:
 
 		mock_units = [WorkUnit(id=f"wu{i}", title=f"Task {i}") for i in range(5)]
 		mock_plan = Plan(id="p1", objective="test")
-		planner._inner.plan_round = AsyncMock(return_value=(mock_plan, mock_units))
+		planner._inner.plan_round = AsyncMock(return_value=(mock_plan, mock_units, 0.10))
 
 		mission = _mission()
 		plan, units, epoch = await planner.get_next_units(mission, max_units=2)
@@ -1284,7 +1284,7 @@ class TestGetNextUnits:
 
 		mock_plan = Plan(id="p1", objective="test")
 		wu = WorkUnit(id="wu1", title="Task")
-		planner._inner.plan_round = AsyncMock(return_value=(mock_plan, [wu]))
+		planner._inner.plan_round = AsyncMock(return_value=(mock_plan, [wu], 0.10))
 
 		mission = _mission()
 		await planner.get_next_units(
