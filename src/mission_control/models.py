@@ -704,3 +704,29 @@ class SemanticMemory:
 	application_count: int = 0
 	created_at: str = field(default_factory=_now_iso)
 
+
+# -- Campaign models --
+
+
+@dataclass
+class CampaignObjective:
+	"""A single objective within a campaign, with dependency tracking."""
+
+	objective: str = ""
+	depends_on_indices: list[int] = field(default_factory=list)
+	status: str = "pending"  # pending/running/completed/failed/skipped
+	mission_id: str | None = None
+	config_overrides: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class Campaign:
+	"""A structured multi-objective workflow executed as chained missions."""
+
+	id: str = field(default_factory=_new_id)
+	name: str = ""
+	objectives: list[CampaignObjective] = field(default_factory=list)
+	status: str = "pending"  # pending/running/completed/failed
+	started_at: str | None = None
+	finished_at: str | None = None
+
