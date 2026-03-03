@@ -229,7 +229,7 @@ class TestInvokePlannerLlm:
 		mock_proc.communicate.return_value = (b"", b"Error occurred")
 
 		with patch("mission_control.recursive_planner.asyncio.create_subprocess_exec", return_value=mock_proc):
-			result, cost = await planner._invoke_planner_llm("Test objective")
+			result = await planner._invoke_planner_llm("Test objective")
 
 		assert result.type == "leaves"
 		assert len(result.units) == 1
@@ -249,7 +249,7 @@ class TestInvokePlannerLlm:
 		mock_proc.communicate.return_value = (response.encode(), b"")
 
 		with patch("mission_control.recursive_planner.asyncio.create_subprocess_exec", return_value=mock_proc):
-			result, cost = await planner._invoke_planner_llm("Test objective")
+			result = await planner._invoke_planner_llm("Test objective")
 
 		assert result.type == "leaves"
 		assert result.units[0]["title"] == "Parsed task"
@@ -266,7 +266,7 @@ class TestInvokePlannerLlm:
 		mock_proc.wait = AsyncMock()
 
 		with patch("mission_control.recursive_planner.asyncio.create_subprocess_exec", return_value=mock_proc):
-			result, cost = await planner._invoke_planner_llm("Test objective")
+			result = await planner._invoke_planner_llm("Test objective")
 
 		assert result.type == "leaves"
 		assert len(result.units) == 1
@@ -291,7 +291,7 @@ class TestInvokePlannerLlm:
 			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		) as mock_exec:
-			result, cost = await planner._invoke_planner_llm("obj with $() backticks")
+			result = await planner._invoke_planner_llm("obj with $() backticks")
 
 		mock_exec.assert_called_once()
 		call_args = mock_exec.call_args
@@ -330,7 +330,7 @@ class TestPlannerRetry:
 			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
 			side_effect=[mock_proc1, mock_proc2],
 		) as mock_exec:
-			result, cost = await planner._invoke_planner_llm("Test objective")
+			result = await planner._invoke_planner_llm("Test objective")
 
 		assert result.type == "leaves"
 		assert result.units[0]["title"] == "Real task"
@@ -353,7 +353,7 @@ class TestPlannerRetry:
 			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
 			side_effect=[mock_proc1, mock_proc2],
 		) as mock_exec:
-			result, cost = await planner._invoke_planner_llm("Test objective")
+			result = await planner._invoke_planner_llm("Test objective")
 
 		assert result.type == "leaves"
 		assert len(result.units) == 1
@@ -373,7 +373,7 @@ class TestPlannerRetry:
 			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		) as mock_exec:
-			result, cost = await planner._invoke_planner_llm("Test objective")
+			result = await planner._invoke_planner_llm("Test objective")
 
 		assert result.type == "leaves"
 		assert result.units[0]["title"] == "Execute scope"
@@ -394,7 +394,7 @@ class TestPlannerRetry:
 			"mission_control.recursive_planner.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		) as mock_exec:
-			result, cost = await planner._invoke_planner_llm("Test objective")
+			result = await planner._invoke_planner_llm("Test objective")
 
 		assert result.type == "leaves"
 		assert result.units[0]["title"] == "Execute scope"

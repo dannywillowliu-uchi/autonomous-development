@@ -1541,14 +1541,6 @@ class ContinuousController:
 				await asyncio.sleep(5)
 				continue
 
-			# Account for planner/critic subprocess costs in mission budget
-			if epoch.planner_cost_usd > 0:
-				mission.total_cost_usd += epoch.planner_cost_usd
-				try:
-					self.db.update_mission(mission)
-				except Exception as exc:
-					logger.error("Failed to update mission cost for planner: %s", exc)
-
 			if not units:
 				logger.info("Planner returned no units -- objective complete")
 				result.objective_met = True
@@ -2889,7 +2881,6 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				self.config, model=model, output_format="stream-json",
 				permission_mode="bypassPermissions", budget=budget,
 				session_id=session_id, prompt=prompt,
-				setting_sources="project",
 			)
 
 			effective_timeout = unit.timeout or self.config.scheduler.session_timeout
