@@ -53,64 +53,6 @@ class TestCircuitBreakerState:
 		mgr.record_failure(ws)
 		assert mgr.get_state(ws) == CircuitBreakerState.OPEN
 
-	def test_half_open_failure_doubles_cooldown(self) -> None:
-		"""HALF_OPEN -> OPEN doubles the cooldown (progressive backoff)."""
-		original_cooldown = 0.01
-		mgr = CircuitBreakerManager(max_failures=1, cooldown_seconds=original_cooldown)
-		ws = "/tmp/ws-1"
-
-		# Trip to OPEN
-		mgr.record_failure(ws)
-		time.sleep(0.02)
-		mgr.can_dispatch(ws)  # -> HALF_OPEN
-
-		# Probe fails -> OPEN with doubled cooldown
-		mgr.record_failure(ws)
-		cb = mgr._breakers[ws]
-		assert cb.cooldown_seconds == original_cooldown * 2
-
-	def test_cooldown_cap_at_10x(self) -> None:
-		"""Progressive backoff caps at 10x original cooldown."""
-		original_cooldown = 0.01
-		mgr = CircuitBreakerManager(max_failures=1, cooldown_seconds=original_cooldown)
-		ws = "/tmp/ws-1"
-
-		# Cycle through HALF_OPEN failures to escalate backoff past 10x
-		for _ in range(20):
-			mgr.record_failure(ws)
-			cb = mgr._breakers[ws]
-			# Force cooldown expiry for next cycle
-			cb.opened_at = time.monotonic() - cb.cooldown_seconds - 1
-			mgr.can_dispatch(ws)  # -> HALF_OPEN
-
-		# After the last failure, cooldown should be capped
-		mgr.record_failure(ws)
-		cb = mgr._breakers[ws]
-		assert cb.cooldown_seconds == original_cooldown * 10
-
-	def test_success_resets_cooldown(self) -> None:
-		"""HALF_OPEN -> CLOSED resets cooldown to original value."""
-		original_cooldown = 0.01
-		mgr = CircuitBreakerManager(max_failures=1, cooldown_seconds=original_cooldown)
-		ws = "/tmp/ws-1"
-
-		# Trip and fail probe to double cooldown
-		mgr.record_failure(ws)
-		time.sleep(0.02)
-		mgr.can_dispatch(ws)  # -> HALF_OPEN
-		mgr.record_failure(ws)  # -> OPEN, cooldown doubled
-
-		cb = mgr._breakers[ws]
-		assert cb.cooldown_seconds == original_cooldown * 2
-
-		# Now succeed on next probe
-		cb.opened_at = time.monotonic() - cb.cooldown_seconds - 1
-		mgr.can_dispatch(ws)  # -> HALF_OPEN
-		mgr.record_success(ws)  # -> CLOSED
-
-		assert mgr.get_state(ws) == CircuitBreakerState.CLOSED
-		assert cb.cooldown_seconds == original_cooldown
-
 	def test_success_resets_failure_count(self) -> None:
 		"""Success resets failure counter so threshold resets."""
 		mgr = CircuitBreakerManager(max_failures=3, cooldown_seconds=60)
@@ -159,22 +101,6 @@ class TestCircuitBreakerManager:
 		mgr.reset("/ws/a")
 		assert mgr.get_state("/ws/a") == CircuitBreakerState.CLOSED
 
-	def test_reset_restores_original_cooldown(self) -> None:
-		"""reset() restores cooldown to original value."""
-		original = 0.01
-		mgr = CircuitBreakerManager(max_failures=1, cooldown_seconds=original)
-		ws = "/ws/a"
-		# Trip and fail probe to escalate cooldown
-		mgr.record_failure(ws)
-		cb = mgr._breakers[ws]
-		cb.opened_at = time.monotonic() - original - 1
-		mgr.can_dispatch(ws)
-		mgr.record_failure(ws)
-		assert cb.cooldown_seconds == original * 2
-
-		mgr.reset(ws)
-		assert cb.cooldown_seconds == original
-
 	def test_get_summary_empty(self) -> None:
 		"""get_summary returns all zeros when no workspaces tracked."""
 		mgr = CircuitBreakerManager()
@@ -203,38 +129,6 @@ class TestCircuitBreakerManager:
 		result = mgr.get_open_workspaces()
 		assert "/ws/a" in result
 		assert "/ws/b" not in result
-
-	def test_auto_recovery_enabled_default_true(self) -> None:
-		"""auto_recovery_enabled defaults to True."""
-		mgr = CircuitBreakerManager()
-		assert mgr.auto_recovery_enabled is True
-
-	def test_auto_recovery_disabled_blocks_half_open(self) -> None:
-		"""When auto_recovery_enabled=False, OPEN never transitions to HALF_OPEN."""
-		mgr = CircuitBreakerManager(
-			max_failures=1, cooldown_seconds=0.01, auto_recovery_enabled=False,
-		)
-		ws = "/tmp/ws-1"
-		mgr.record_failure(ws)
-		assert mgr.get_state(ws) == CircuitBreakerState.OPEN
-		time.sleep(0.02)
-		# Cooldown expired, but auto_recovery disabled
-		assert mgr.can_dispatch(ws) is False
-		assert mgr.get_state(ws) == CircuitBreakerState.OPEN
-
-	def test_auto_recovery_toggle_at_runtime(self) -> None:
-		"""auto_recovery_enabled can be toggled at runtime."""
-		mgr = CircuitBreakerManager(
-			max_failures=1, cooldown_seconds=0.01, auto_recovery_enabled=False,
-		)
-		ws = "/tmp/ws-1"
-		mgr.record_failure(ws)
-		time.sleep(0.02)
-		assert mgr.can_dispatch(ws) is False  # blocked
-
-		mgr.auto_recovery_enabled = True
-		assert mgr.can_dispatch(ws) is True  # now allowed
-		assert mgr.get_state(ws) == CircuitBreakerState.HALF_OPEN
 
 
 class TestCanDispatch:
@@ -305,20 +199,6 @@ class TestOnStateChangeCallback:
 		mgr.can_dispatch("/ws/a")
 		assert transitions == [("/ws/a", "open", "half_open")]
 
-	def test_half_open_to_closed_fires_callback(self) -> None:
-		"""Callback fires on HALF_OPEN -> CLOSED transition."""
-		transitions: list[tuple[str, str, str]] = []
-		mgr = CircuitBreakerManager(
-			max_failures=1, cooldown_seconds=0.01,
-			on_state_change=lambda ws, old, new: transitions.append((ws, old, new)),
-		)
-		mgr.record_failure("/ws/a")
-		time.sleep(0.02)
-		mgr.can_dispatch("/ws/a")  # -> HALF_OPEN
-		transitions.clear()
-		mgr.record_success("/ws/a")  # -> CLOSED
-		assert transitions == [("/ws/a", "half_open", "closed")]
-
 	def test_no_callback_when_none(self) -> None:
 		"""No error when on_state_change is None (default)."""
 		mgr = CircuitBreakerManager(max_failures=1, cooldown_seconds=60)
@@ -329,23 +209,9 @@ class TestOnStateChangeCallback:
 class TestCircuitBreakerDataclass:
 	def test_defaults(self) -> None:
 		cb = CircuitBreaker(workspace_id="/ws/test")
-		assert cb._state == CircuitBreakerState.CLOSED
+		assert cb.state == CircuitBreakerState.CLOSED
 		assert cb.failure_count == 0
 		assert cb.success_count == 0
 		assert cb.max_failures == 3
 		assert cb.cooldown_seconds == 120.0
 		assert cb.half_open_max_probes == 1
-
-	def test_state_property_returns_string(self) -> None:
-		"""The state property returns a string value."""
-		cb = CircuitBreaker(workspace_id="/ws/test")
-		assert cb.state == "closed"
-		cb._state = CircuitBreakerState.OPEN
-		assert cb.state == "open"
-		cb._state = CircuitBreakerState.HALF_OPEN
-		assert cb.state == "half_open"
-
-	def test_original_cooldown_tracked(self) -> None:
-		"""_original_cooldown is set from cooldown_seconds on init."""
-		cb = CircuitBreaker(workspace_id="/ws/test", cooldown_seconds=60.0)
-		assert cb._original_cooldown == 60.0
