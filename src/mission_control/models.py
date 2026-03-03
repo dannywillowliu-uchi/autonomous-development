@@ -152,6 +152,16 @@ class VerificationReport:
 		return [r.kind for r in self.results if not r.passed and not r.skipped]
 
 
+@dataclass
+class IncrementalVerificationResult:
+	"""Result of a change-aware incremental verification run."""
+
+	report: VerificationReport = field(default_factory=VerificationReport)
+	tests_selected: int = 0
+	tests_skipped: int = 0
+	selection_method: str = "full"  # "heuristic" | "full"
+
+
 # -- Parallel mode models --
 
 

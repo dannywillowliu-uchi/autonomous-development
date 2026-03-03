@@ -93,8 +93,9 @@ class TestRunVerificationNodes:
 
 		mock_result = {"output": "10 passed in 0.1s", "returncode": 0}
 		with patch("mission_control.state._run_command", new_callable=AsyncMock, return_value=mock_result):
-			report = await run_verification_nodes(config, "/tmp")
+			incremental = await run_verification_nodes(config, "/tmp")
 
+		report = incremental.report
 		assert report.overall_passed is True
 		assert len(report.results) == 4  # pytest, ruff, mypy, bandit
 		assert report.raw_output == "10 passed in 0.1s"
@@ -120,8 +121,9 @@ class TestRunVerificationNodes:
 				return {"output": "All checks passed", "returncode": 0}
 
 		with patch("mission_control.state._run_command", side_effect=mock_run):
-			report = await run_verification_nodes(config, "/tmp")
+			incremental = await run_verification_nodes(config, "/tmp")
 
+		report = incremental.report
 		assert report.overall_passed is True
 		assert len(report.results) == 2
 
@@ -146,8 +148,9 @@ class TestRunVerificationNodes:
 				return {"output": ">> Issue: something bad", "returncode": 1}
 
 		with patch("mission_control.state._run_command", side_effect=mock_run):
-			report = await run_verification_nodes(config, "/tmp")
+			incremental = await run_verification_nodes(config, "/tmp")
 
+		report = incremental.report
 		assert report.overall_passed is True  # optional failure doesn't block
 		assert len(report.failed_kinds()) == 1
 		assert VerificationNodeKind.BANDIT in report.failed_kinds()

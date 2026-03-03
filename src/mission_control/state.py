@@ -7,10 +7,12 @@ import json
 import re
 import shlex
 import time
+from pathlib import Path
 from typing import Any
 
 from mission_control.config import MissionConfig
 from mission_control.models import (
+	IncrementalVerificationResult,
 	Snapshot,
 	SnapshotDelta,
 	VerificationNodeKind,
@@ -241,31 +243,123 @@ async def _run_single_node(
 	)
 
 
-async def run_verification_nodes(config: MissionConfig, cwd: str) -> VerificationReport:
+async def _build_affected_tests(
+	changed_files: list[str], project_path: str,
+) -> list[str] | None:
+	"""Map changed source files to affected test files via import-path heuristics.
+
+	Runs ``pytest --collect-only -q`` to discover all test files, then matches
+	changed source modules to test files using naming conventions
+	(e.g. ``src/foo.py`` -> ``test_foo.py``, ``test_foo_*.py``).
+
+	Returns a list of affected test file paths, or None when the mapping
+	cannot be determined (collection failure, no Python changes, etc.).
+	"""
+	python_changed = [f for f in changed_files if f.endswith(".py")]
+	if not python_changed:
+		return None
+
+	# Discover all test files via pytest collection
+	result = await _run_command("python -m pytest --collect-only -q --no-header", project_path, timeout=60)
+	if result["returncode"] != 0 and not result["output"].strip():
+		return None
+
+	# Parse collected test node IDs -- each line is like "tests/test_foo.py::test_bar"
+	collected_tests: set[str] = set()
+	for line in result["output"].splitlines():
+		line = line.strip()
+		if "::" in line:
+			test_file = line.split("::")[0]
+			collected_tests.add(test_file)
+		elif line.endswith(".py"):
+			collected_tests.add(line)
+
+	if not collected_tests:
+		return None
+
+	# Build module-name -> test-file mapping via naming heuristics
+	affected: set[str] = set()
+	for changed in python_changed:
+		stem = Path(changed).stem  # e.g. "state" from "src/mission_control/state.py"
+		if stem.startswith("test_"):
+			# Changed file is itself a test -- include it directly
+			for t in collected_tests:
+				if Path(t).name == Path(changed).name:
+					affected.add(t)
+			continue
+
+		# Match test_<stem>.py and test_<stem>_*.py
+		for test_path in collected_tests:
+			test_name = Path(test_path).stem  # e.g. "test_state" or "test_state_incremental"
+			if test_name == f"test_{stem}" or test_name.startswith(f"test_{stem}_"):
+				affected.add(test_path)
+
+	if not affected:
+		return None
+
+	return sorted(affected)
+
+
+async def run_verification_nodes(
+	config: MissionConfig, cwd: str, *, changed_files: list[str] | None = None,
+) -> IncrementalVerificationResult:
 	"""Run verification as typed nodes and return a structured report.
+
+	When *changed_files* is provided, attempts targeted test selection via
+	import-path heuristics.  Falls back to the full suite when selection
+	fails or *changed_files* is None.
 
 	If config.target.verification.nodes is empty, falls back to single-command
 	mode for backward compatibility.
 	"""
+	# Attempt incremental test selection
+	affected_tests: list[str] | None = None
+	if changed_files is not None:
+		affected_tests = await _build_affected_tests(changed_files, cwd)
+
+	selection_method = "heuristic" if affected_tests else "full"
+
 	verification = config.target.verification
 	nodes = verification.nodes
 
 	if not nodes:
 		# Backward compat: single command mode
-		result = await _run_command(verification.command, cwd, verification.timeout)
-		return _build_result_from_single_command(result["output"], result["returncode"])
+		cmd = verification.command
+		if affected_tests and "pytest" in cmd:
+			cmd = f"python -m pytest {' '.join(shlex.quote(t) for t in affected_tests)} -q"
+		result = await _run_command(cmd, cwd, verification.timeout)
+		report = _build_result_from_single_command(result["output"], result["returncode"])
+		total_tests = report.results[0].metrics.get("test_total", 0) if report.results else 0
+		return IncrementalVerificationResult(
+			report=report,
+			tests_selected=total_tests if affected_tests else 0,
+			tests_skipped=0,
+			selection_method=selection_method,
+		)
 
 	# Multi-node mode: run required nodes sequentially, optional can overlap
+	required_nodes = list(nodes)
+	optional_nodes: list = []
+
+	# Separate required/optional
 	required_nodes = [n for n in nodes if n.required]
 	optional_nodes = [n for n in nodes if not n.required]
 
 	results: list[VerificationResult] = []
+	total_collected = 0
+	tests_selected = 0
 
 	# Run required nodes sequentially (order matters)
 	for node in required_nodes:
+		command = node.command
+		if affected_tests and node.kind == "pytest":
+			command = f"python -m pytest {' '.join(shlex.quote(t) for t in affected_tests)} -q"
 		vr = await _run_single_node(
-			node.kind, node.command, cwd, node.timeout, node.required, node.weight,
+			node.kind, command, cwd, node.timeout, node.required, node.weight,
 		)
+		if node.kind == "pytest":
+			total_collected = vr.metrics.get("test_total", 0)
+			tests_selected = total_collected if affected_tests else 0
 		results.append(vr)
 
 	# Run optional nodes concurrently
@@ -280,14 +374,21 @@ async def run_verification_nodes(config: MissionConfig, cwd: str) -> Verificatio
 		results.extend(optional_results)
 
 	raw_output = "\n".join(r.output for r in results)
-	return VerificationReport(results=results, raw_output=raw_output)
+	report = VerificationReport(results=results, raw_output=raw_output)
+	return IncrementalVerificationResult(
+		report=report,
+		tests_selected=tests_selected,
+		tests_skipped=0,
+		selection_method=selection_method,
+	)
 
 
 async def snapshot_project_health(config: MissionConfig, cwd: str | None = None) -> Snapshot:
 	"""Take a project health snapshot by running verification commands."""
 	cwd = cwd or str(config.target.resolved_path)
 
-	report = await run_verification_nodes(config, cwd)
+	incremental = await run_verification_nodes(config, cwd)
+	report = incremental.report
 
 	# Aggregate metrics from all results
 	pytest_data: dict[str, int] = {"test_total": 0, "test_passed": 0, "test_failed": 0}

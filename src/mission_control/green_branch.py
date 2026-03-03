@@ -1301,7 +1301,8 @@ class GreenBranchManager:
 
 		nodes = self.config.target.verification.nodes
 		if nodes:
-			return await run_verification_nodes(self.config, self.workspace)
+			incremental = await run_verification_nodes(self.config, self.workspace)
+			return incremental.report
 		# Single-command fallback using self._run_command
 		ok, output = await self._run_command(self.config.target.verification.command)
 		return _build_result_from_single_command(output, 0 if ok else 1)
