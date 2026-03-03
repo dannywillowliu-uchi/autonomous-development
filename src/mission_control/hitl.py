@@ -9,13 +9,14 @@ Approval can come from Telegram commands or by editing the file directly.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -41,6 +42,16 @@ class ApprovalRequest:
 			self.request_id = uuid.uuid4().hex[:12]
 		if not self.created_at:
 			self.created_at = time.monotonic()
+
+
+@dataclass
+class ApprovalResult:
+	"""Result of a wait_for_approval() call."""
+
+	approved: bool
+	timed_out: bool
+	elapsed_seconds: float
+	reminder_count: int
 
 
 class ApprovalGate:
@@ -136,6 +147,121 @@ class ApprovalGate:
 					self._finalize_file(approval_file, "timeout_denied")
 					logger.info("HITL timeout -> deny (id=%s)", req.request_id)
 					return False
+
+			await asyncio.sleep(poll_interval)
+
+	async def wait_for_approval(
+		self,
+		req: ApprovalRequest,
+		timeout_seconds: float = 1800,
+		reminder_interval_seconds: float = 600,
+		reminder_callback: Callable[[str, float, Path], Any] | None = None,
+		escalation_callback: Callable[[str, float, Path], Any] | None = None,
+	) -> ApprovalResult:
+		"""Wait for approval with timeout, reminders, and escalation.
+
+		Args:
+			req: The approval request.
+			timeout_seconds: Max wait time in seconds. 0 means infinite.
+			reminder_interval_seconds: Interval between reminder callbacks.
+			reminder_callback: Called periodically with (description, elapsed, file_path).
+			escalation_callback: Called on timeout with (description, elapsed, file_path).
+
+		Returns:
+			ApprovalResult with approval outcome and timing details.
+		"""
+		self._approvals_dir.mkdir(parents=True, exist_ok=True)
+		approval_file = self._approvals_dir / f"{req.request_id}.json"
+		file_data = {
+			"request_id": req.request_id,
+			"gate_type": req.gate_type,
+			"context": req.context,
+			"status": "pending",
+			"created_at": req.created_at,
+			"decided_at": None,
+		}
+		approval_file.write_text(json.dumps(file_data, indent=2))
+		logger.info(
+			"HITL wait_for_approval: gate=%s id=%s timeout=%.0fs reminder_interval=%.0fs",
+			req.gate_type, req.request_id, timeout_seconds, reminder_interval_seconds,
+		)
+
+		if self._notifier:
+			context_lines = [f"  {k}: {v}" for k, v in req.context.items()]
+			context_str = "\n".join(context_lines)
+			msg = (
+				f"*HITL Approval Required* ({req.gate_type})\n"
+				f"ID: `{req.request_id}`\n"
+				f"Context:\n{context_str}\n\n"
+				f"Reply with:\n"
+				f"`/approve_{req.request_id}`\n"
+				f"`/deny_{req.request_id}`\n\n"
+				f"Timeout: {timeout_seconds}s"
+			)
+			await self._notifier.send(msg)
+
+		poll_interval = self._config.hitl.telegram_poll_interval
+		start = time.monotonic()
+		last_reminder = start
+		reminder_count = 0
+		action_desc = req.context.get("description", req.gate_type)
+
+		while True:
+			status = self._check_file_status(approval_file)
+			if status == "approved":
+				self._finalize_file(approval_file, "approved")
+				return ApprovalResult(
+					approved=True, timed_out=False,
+					elapsed_seconds=time.monotonic() - start,
+					reminder_count=reminder_count,
+				)
+			if status == "denied":
+				self._finalize_file(approval_file, "denied")
+				return ApprovalResult(
+					approved=False, timed_out=False,
+					elapsed_seconds=time.monotonic() - start,
+					reminder_count=reminder_count,
+				)
+
+			if self._notifier and self._bot_token:
+				async with self._telegram_lock:
+					telegram_status = await self._check_telegram_updates(req.request_id)
+				if telegram_status == "approved":
+					self._finalize_file(approval_file, "approved")
+					return ApprovalResult(
+						approved=True, timed_out=False,
+						elapsed_seconds=time.monotonic() - start,
+						reminder_count=reminder_count,
+					)
+				if telegram_status == "denied":
+					self._finalize_file(approval_file, "denied")
+					return ApprovalResult(
+						approved=False, timed_out=False,
+						elapsed_seconds=time.monotonic() - start,
+						reminder_count=reminder_count,
+					)
+
+			now = time.monotonic()
+			elapsed = now - start
+
+			if reminder_callback and reminder_interval_seconds > 0 and now - last_reminder >= reminder_interval_seconds:
+				last_reminder = now
+				reminder_count += 1
+				ret = reminder_callback(action_desc, elapsed, approval_file)
+				if inspect.isawaitable(ret):
+					await ret
+
+			if timeout_seconds > 0 and elapsed >= timeout_seconds:
+				if escalation_callback:
+					ret = escalation_callback(action_desc, elapsed, approval_file)
+					if inspect.isawaitable(ret):
+						await ret
+				self._finalize_file(approval_file, "timeout")
+				return ApprovalResult(
+					approved=False, timed_out=True,
+					elapsed_seconds=elapsed,
+					reminder_count=reminder_count,
+				)
 
 			await asyncio.sleep(poll_interval)
 
