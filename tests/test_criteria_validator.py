@@ -47,26 +47,26 @@ class TestValidateCriteriaExistingFiles:
 
 
 class TestValidateCriteriaMissingFiles:
-	"""Criteria referencing missing files should produce errors."""
+	"""Criteria referencing missing files should produce warnings."""
 
 	def test_missing_test_file(self, tmp_path: Path) -> None:
 		issues = validate_criteria("pytest tests/test_missing.py", tmp_path)
 		assert len(issues) == 1
-		assert issues[0].severity == Severity.error
+		assert issues[0].severity == Severity.warning
 		assert "does not exist" in issues[0].message
 		assert issues[0].criteria_fragment == "tests/test_missing.py"
 
 	def test_missing_directory(self, tmp_path: Path) -> None:
 		issues = validate_criteria("ruff check src/", tmp_path)
-		errors = [i for i in issues if i.severity == Severity.error]
-		assert len(errors) == 1
-		assert "does not exist" in errors[0].message
+		warnings = [i for i in issues if i.severity == Severity.warning]
+		assert len(warnings) == 1
+		assert "does not exist" in warnings[0].message
 
 	def test_multiple_missing_paths(self, tmp_path: Path) -> None:
 		criteria = "pytest tests/test_a.py && ruff check src/"
 		issues = validate_criteria(criteria, tmp_path)
-		errors = [i for i in issues if i.severity == Severity.error]
-		assert len(errors) == 2
+		warnings = [i for i in issues if i.severity == Severity.warning]
+		assert len(warnings) == 2
 
 	def test_one_exists_one_missing(self, tmp_path: Path) -> None:
 		(tmp_path / "tests").mkdir()
@@ -74,9 +74,9 @@ class TestValidateCriteriaMissingFiles:
 
 		criteria = "pytest tests/test_a.py && ruff check src/"
 		issues = validate_criteria(criteria, tmp_path)
-		errors = [i for i in issues if i.severity == Severity.error]
-		assert len(errors) == 1
-		assert "src/" in errors[0].criteria_fragment
+		warnings = [i for i in issues if i.severity == Severity.warning]
+		assert len(warnings) == 1
+		assert "src/" in warnings[0].criteria_fragment
 
 
 class TestDirectoryTraversal:
@@ -179,8 +179,9 @@ class TestIsCriteriaValid:
 		(tmp_path / "tests" / "test_ok.py").touch()
 		assert is_criteria_valid("pytest tests/test_ok.py", tmp_path) is True
 
-	def test_error_returns_false(self, tmp_path: Path) -> None:
-		assert is_criteria_valid("pytest tests/test_nope.py", tmp_path) is False
+	def test_missing_file_is_valid(self, tmp_path: Path) -> None:
+		# Missing files are warnings, not errors -- workers can create them
+		assert is_criteria_valid("pytest tests/test_nope.py", tmp_path) is True
 
 	def test_traversal_returns_false(self, tmp_path: Path) -> None:
 		assert is_criteria_valid("pytest ../bad.py", tmp_path) is False
@@ -227,12 +228,12 @@ class TestChainedCriteriaValidation:
 		(tmp_path / "src").mkdir()
 		criteria = "pytest tests/test_missing.py -v && ruff check src/"
 		issues = validate_criteria(criteria, tmp_path)
-		error_fragments = {i.criteria_fragment for i in issues if i.severity == Severity.error}
-		assert "tests/test_missing.py" in error_fragments
-		assert "src/" not in error_fragments
+		warning_fragments = {i.criteria_fragment for i in issues if i.severity == Severity.warning}
+		assert "tests/test_missing.py" in warning_fragments
+		assert "src/" not in warning_fragments
 
-	def test_both_segments_can_fail(self, tmp_path: Path) -> None:
+	def test_both_segments_can_warn(self, tmp_path: Path) -> None:
 		criteria = "pytest tests/gone.py && ruff check nope/"
 		issues = validate_criteria(criteria, tmp_path)
-		errors = [i for i in issues if i.severity == Severity.error]
-		assert len(errors) == 2
+		warnings = [i for i in issues if i.severity == Severity.warning]
+		assert len(warnings) == 2

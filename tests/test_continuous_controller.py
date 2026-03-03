@@ -457,6 +457,141 @@ class TestExecuteSingleUnit:
 		assert "Pool exhausted" in unit.output_summary
 
 
+class TestCriteriaValidation:
+	"""Pre-dispatch criteria validation in _execute_single_unit."""
+
+	def _make_ctrl(
+		self, config: MissionConfig, db: Database, tmp_path: Path,
+	) -> tuple[ContinuousController, WorkUnit, Epoch]:
+		db.insert_mission(Mission(id="m1", objective="test"))
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		ctrl = ContinuousController(config, db)
+
+		mock_backend = AsyncMock()
+		mock_backend.provision_workspace.return_value = str(tmp_path)
+		mock_backend.release_workspace = AsyncMock()
+		ctrl._backend = mock_backend
+		ctrl._semaphore = DynamicSemaphore(1)
+
+		async def mock_locked_call(method: str, *args: object) -> Any:
+			return getattr(db, method)(*args)
+		db.locked_call = mock_locked_call  # type: ignore[attr-defined]
+
+		unit = WorkUnit(id="wu1", plan_id="p1", title="Task")
+		db.insert_work_unit(unit)
+		return ctrl, unit, epoch
+
+	@pytest.mark.asyncio
+	async def test_error_level_blocks_dispatch(self, config: MissionConfig, db: Database, tmp_path: Path) -> None:
+		"""Shell syntax errors in acceptance_criteria should fail the unit pre-dispatch."""
+		ctrl, unit, epoch = self._make_ctrl(config, db, tmp_path)
+		unit.acceptance_criteria = "pytest 'unclosed"
+		db.update_work_unit(unit)
+
+		await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
+
+		assert unit.status == "failed"
+		assert "Shell syntax error" in unit.output_summary
+
+	@pytest.mark.asyncio
+	async def test_warning_injected_into_context(self, config: MissionConfig, db: Database, tmp_path: Path) -> None:
+		"""Missing test files should inject warnings into the worker prompt, not block."""
+		ctrl, unit, epoch = self._make_ctrl(config, db, tmp_path)
+		unit.acceptance_criteria = "pytest tests/test_new.py -q"
+		db.update_work_unit(unit)
+
+		captured_prompt = {}
+
+		async def mock_spawn(uid: str, ws: str, cmd: list[str], **kw: object) -> MagicMock:
+			captured_prompt["cmd"] = cmd
+			handle = MagicMock()
+			handle.pid = 123
+			handle.workspace_path = ws
+			return handle
+
+		ctrl._backend.spawn = AsyncMock(side_effect=mock_spawn)
+		ctrl._backend.check_status = AsyncMock(return_value="exited")
+		ctrl._backend.get_output = AsyncMock(return_value="")
+		ctrl._backend.kill = AsyncMock()
+
+		with patch("mission_control.continuous_controller.render_mission_worker_prompt") as mock_render:
+			mock_render.return_value = "test prompt"
+			with (
+				patch("mission_control.memory.load_context_for_mission_worker", return_value=""),
+				patch("mission_control.continuous_controller.get_worker_context", return_value=""),
+				patch("mission_control.continuous_controller.load_specialist_template", return_value=""),
+				patch("mission_control.continuous_controller.build_claude_cmd", return_value=["echo", "test"]),
+				patch(
+					"mission_control.continuous_controller.parse_stream_json",
+					return_value=MagicMock(
+						mc_result=None, text_content="",
+						usage=MagicMock(
+							input_tokens=0, output_tokens=0,
+							cache_creation_tokens=0, cache_read_tokens=0,
+						),
+					),
+				),
+				patch("mission_control.continuous_controller.parse_mc_result", return_value=None),
+			):
+				await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
+
+			# The context kwarg passed to render should contain the criteria warning
+			call_kwargs = mock_render.call_args
+			context_arg = call_kwargs.kwargs.get("context") or call_kwargs[1].get("context", "")
+			assert "Criteria Warnings" in context_arg
+			assert "tests/test_new.py" in context_arg
+			assert "You MUST create them" in context_arg
+
+	@pytest.mark.asyncio
+	async def test_clean_criteria_passes_through(self, config: MissionConfig, db: Database, tmp_path: Path) -> None:
+		"""Valid criteria with existing files should pass without blocking or warnings."""
+		ctrl, unit, epoch = self._make_ctrl(config, db, tmp_path)
+
+		# Create the referenced paths so validation passes clean
+		(tmp_path / "tests").mkdir()
+		(tmp_path / "tests" / "test_foo.py").touch()
+		(tmp_path / "src").mkdir()
+		unit.acceptance_criteria = "pytest tests/test_foo.py -q && ruff check src/"
+		db.update_work_unit(unit)
+
+		with patch("mission_control.continuous_controller.render_mission_worker_prompt") as mock_render:
+			mock_render.return_value = "test prompt"
+			with (
+				patch("mission_control.memory.load_context_for_mission_worker", return_value=""),
+				patch("mission_control.continuous_controller.get_worker_context", return_value=""),
+				patch("mission_control.continuous_controller.load_specialist_template", return_value=""),
+				patch("mission_control.continuous_controller.build_claude_cmd", return_value=["echo", "test"]),
+				patch(
+					"mission_control.continuous_controller.parse_stream_json",
+					return_value=MagicMock(
+						mc_result=None, text_content="",
+						usage=MagicMock(
+							input_tokens=0, output_tokens=0,
+							cache_creation_tokens=0, cache_read_tokens=0,
+						),
+					),
+				),
+				patch("mission_control.continuous_controller.parse_mc_result", return_value=None),
+			):
+				ctrl._backend.spawn = AsyncMock(return_value=MagicMock(pid=123, workspace_path=str(tmp_path)))
+				ctrl._backend.check_status = AsyncMock(return_value="exited")
+				ctrl._backend.get_output = AsyncMock(return_value="")
+				ctrl._backend.kill = AsyncMock()
+
+				await ctrl._execute_single_unit(unit, epoch, Mission(id="m1"))
+
+			# Should not have been failed
+			assert unit.status != "failed" or "Criteria validation" not in (unit.output_summary or "")
+			# Context should NOT contain criteria warnings
+			call_kwargs = mock_render.call_args
+			context_arg = call_kwargs.kwargs.get("context") or call_kwargs[1].get("context", "")
+			assert "Criteria Warnings" not in context_arg
+
+
 class TestEndToEnd:
 	@pytest.mark.asyncio
 	async def test_units_flow_dispatch_to_completion(self, config: MissionConfig, db: Database) -> None:

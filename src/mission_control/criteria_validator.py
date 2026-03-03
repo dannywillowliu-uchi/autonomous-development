@@ -130,7 +130,7 @@ def _check_file_existence(path_str: str, project_root: Path) -> list[ValidationI
 	full_path = project_root / path_str
 	if not full_path.exists():
 		issues.append(ValidationIssue(
-			severity=Severity.error,
+			severity=Severity.warning,
 			message=f"Referenced path does not exist: {path_str}",
 			criteria_fragment=path_str,
 		))

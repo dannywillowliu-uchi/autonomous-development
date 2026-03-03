@@ -33,6 +33,7 @@ from mission_control.constants import (
 	UNIT_EVENT_SPECULATION_COMPLETED,
 )
 from mission_control.continuous_planner import ContinuousPlanner
+from mission_control.criteria_validator import Severity, validate_criteria
 from mission_control.db import Database
 from mission_control.degradation import DegradationManager, DegradationTransition
 from mission_control.deliberative_planner import DeliberativePlanner
@@ -2642,6 +2643,19 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				await self._fail_unit(unit, None, epoch, "circuit breaker open", "")
 				return
 
+			# Pre-dispatch criteria validation
+			criteria_warnings: list[str] = []
+			if unit.acceptance_criteria:
+				ws_path = workspace if "::" not in workspace else workspace.split("::")[0]
+				criteria_issues = validate_criteria(unit.acceptance_criteria, Path(ws_path))
+				errors = [i for i in criteria_issues if i.severity == Severity.error]
+				if errors:
+					msg = "Criteria validation failed: " + "; ".join(e.message for e in errors)
+					logger.warning("Pre-dispatch block for unit %s: %s", unit.id[:12], msg)
+					await self._fail_unit(unit, None, epoch, msg, "")
+					return
+				criteria_warnings = [i.message for i in criteria_issues if i.severity == Severity.warning]
+
 			branch_name = f"mc/unit-{unit.id}"
 			unit.branch_name = branch_name
 			unit.status = "running"
@@ -2699,6 +2713,16 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 					for k in relevant
 				)
 				context = (context or "") + f"\n\n## Accumulated Knowledge\n{knowledge_section}"
+
+			# Inject criteria warnings so worker knows which files to create
+			if criteria_warnings:
+				warn_lines = "\n".join(f"- {w}" for w in criteria_warnings)
+				warn_header = (
+					"## Criteria Warnings\n"
+					"The following paths referenced in acceptance criteria "
+					"do not exist yet. You MUST create them:"
+				)
+				context = (context or "") + f"\n\n{warn_header}\n{warn_lines}"
 
 			# Read MISSION_STATE.md from target repo
 			mission_state = ""
