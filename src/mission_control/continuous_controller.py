@@ -229,14 +229,14 @@ class ContinuousController:
 		try:
 			if config.prompt_evolution.enabled is True:
 				from mission_control.prompt_evolution import PromptEvolutionEngine
-				self._prompt_evolution = PromptEvolutionEngine(db, config.prompt_evolution)
+				self._prompt_evolution = PromptEvolutionEngine(db, config.prompt_evolution, mission_config=config)
 		except Exception:
 			logger.warning("Failed to initialize prompt evolution", exc_info=True)
 		self._memory_manager: Any = None
 		try:
 			if config.episodic_memory.enabled is True:
 				from mission_control.memory import MemoryManager
-				self._memory_manager = MemoryManager(db, config.episodic_memory)
+				self._memory_manager = MemoryManager(db, config.episodic_memory, mission_config=config)
 		except Exception:
 			logger.warning("Failed to initialize memory manager", exc_info=True)
 		self._active_fixups: dict[str, asyncio.Task[None]] = {}

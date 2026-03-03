@@ -2212,11 +2212,68 @@ class TestRunFixupSession:
 		mgr._run_command.assert_awaited_once()
 		cmd = mgr._run_command.call_args[0][0]
 		assert cmd[0] == "claude"
-		assert "--print" in cmd
+		assert "-p" in cmd
 		assert "--output-format" in cmd
 		assert "text" in cmd
-		assert "-p" in cmd
 		assert "fix the bug" in cmd
+
+	async def test_fixup_session_uses_build_claude_cmd(self) -> None:
+		"""_run_fixup_session uses build_claude_cmd, including MCP flags when configured."""
+		mgr = _fixup_manager()
+		mgr.config.mcp.enabled = True
+		mgr.config.mcp.config_path = "/tmp/mcp.json"
+		mgr._run_command = AsyncMock(return_value=(True, "done"))
+
+		await mgr._run_fixup_session("fix the bug")
+
+		cmd = mgr._run_command.call_args[0][0]
+		assert "--mcp-config" in cmd
+		assert "/tmp/mcp.json" in cmd
+		assert "--max-turns" in cmd
+		idx = cmd.index("--max-turns")
+		assert cmd[idx + 1] == "5"
+
+	async def test_zfc_generate_uses_build_claude_cmd(self) -> None:
+		"""_zfc_generate_fixup_strategies uses build_claude_cmd with MCP flags."""
+		mgr = _fixup_manager()
+		mgr.config.zfc.zfc_fixup_prompts = True
+		mgr.config.zfc.llm_timeout = 5
+		mgr.config.mcp.enabled = True
+		mgr.config.mcp.config_path = "/tmp/mcp.json"
+
+		output = 'FIXUP_STRATEGIES:{"strategies": ["Fix A", "Fix B", "Fix C"]}'
+		mock_proc = AsyncMock()
+		mock_proc.communicate.return_value = (output.encode(), b"")
+		mock_proc.returncode = 0
+
+		with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+			await mgr._zfc_generate_fixup_strategies("test failure", 3)
+
+		cmd_args = mock_exec.call_args[0]
+		assert cmd_args[0] == "claude"
+		assert "--mcp-config" in cmd_args
+		assert "/tmp/mcp.json" in cmd_args
+		assert "--max-turns" in cmd_args
+		idx = list(cmd_args).index("--max-turns")
+		assert cmd_args[idx + 1] == "1"
+
+	async def test_zfc_generate_passes_config_to_env(self) -> None:
+		"""_zfc_generate_fixup_strategies passes config to claude_subprocess_env."""
+		mgr = _fixup_manager()
+		mgr.config.zfc.zfc_fixup_prompts = True
+		mgr.config.zfc.llm_timeout = 5
+
+		output = 'FIXUP_STRATEGIES:{"strategies": ["Fix A"]}'
+		mock_proc = AsyncMock()
+		mock_proc.communicate.return_value = (output.encode(), b"")
+		mock_proc.returncode = 0
+
+		with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+			await mgr._zfc_generate_fixup_strategies("test failure", 1)
+
+		env_kwarg = mock_exec.call_args[1].get("env", {})
+		# env should be a dict (produced by claude_subprocess_env with config)
+		assert isinstance(env_kwarg, dict)
 
 
 # ---------------------------------------------------------------------------
