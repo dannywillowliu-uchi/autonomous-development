@@ -2753,4 +2753,230 @@ class TestProcessBatch:
 		assert processed == ["wu0", "wu1", "wu2"]
 
 
+class TestPreDispatchBudgetGate:
+	"""Tests for the pre-dispatch budget gate in _orchestration_loop."""
+
+	@pytest.mark.asyncio
+	async def test_all_units_dropped_when_ema_projects_over_budget(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""When every unit would exceed budget, loop stops with ema_budget_exceeded."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+
+		# Seed EMA so projected_cost() returns a value
+		ctrl._ema.update(5.0)
+
+		# Budget so even one unit would exceed it
+		config.scheduler.budget.max_per_run_usd = 1.0
+
+		plan = Plan(objective="test")
+		epoch = Epoch(mission_id="m1")
+		units = [
+			WorkUnit(id="wu1", plan_id="p1", title="Task 1"),
+			WorkUnit(id="wu2", plan_id="p1", title="Task 2"),
+		]
+
+		ctrl._planner = MagicMock()
+		ctrl._planner.get_next_units = AsyncMock(return_value=(plan, units, epoch))
+		ctrl._backend = MagicMock()
+		ctrl._semaphore = DynamicSemaphore(2)
+
+		execute_mock = AsyncMock()
+		mission = Mission(id="m1", objective="test", total_cost_usd=0.5)
+		result = ContinuousMissionResult()
+
+		with patch.object(ctrl, "_should_stop", return_value=""), \
+			patch.object(ctrl, "_execute_batch", execute_mock):
+			await ctrl._orchestration_loop(mission, result)
+
+		assert result.stopped_reason == "ema_budget_exceeded"
+		assert not ctrl.running
+		execute_mock.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_partial_filtering_keeps_affordable_units(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""When only some units fit the budget, affordable ones are dispatched."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		ctrl = ContinuousController(config, db)
+
+		# EMA of 2.0: projected = 2 * (1 + 0.5/sqrt(1)) = 3.0
+		ctrl._ema.update(2.0)
+		projected = ctrl._ema.projected_cost()
+		assert projected is not None
+
+		# Budget allows exactly 1 unit
+		config.scheduler.budget.max_per_run_usd = projected + 0.01
+
+		plan = Plan(id="p1", objective="test")
+		epoch = Epoch(id="ep1", mission_id="m1")
+		units = [
+			WorkUnit(id="wu1", plan_id="p1", title="Task 1"),
+			WorkUnit(id="wu2", plan_id="p1", title="Task 2"),
+			WorkUnit(id="wu3", plan_id="p1", title="Task 3"),
+		]
+
+		dispatched_units: list[WorkUnit] = []
+		should_stop_calls = 0
+
+		def mock_should_stop(mission: Mission) -> str:
+			nonlocal should_stop_calls
+			should_stop_calls += 1
+			if should_stop_calls > 1:
+				return "user_stopped"
+			return ""
+
+		async def mock_execute_batch(
+			batch_units: list[WorkUnit], ep: Epoch, m: Mission,
+		) -> list[WorkerCompletion]:
+			dispatched_units.extend(batch_units)
+			return []
+
+		ctrl._planner = MagicMock()
+		ctrl._planner.get_next_units = AsyncMock(return_value=(plan, units, epoch))
+		ctrl._backend = MagicMock()
+		ctrl._semaphore = DynamicSemaphore(2)
+
+		mission = Mission(id="m1", objective="test", total_cost_usd=0.0)
+		result = ContinuousMissionResult()
+
+		with patch.object(ctrl, "_should_stop", side_effect=mock_should_stop), \
+			patch.object(ctrl, "_execute_batch", side_effect=mock_execute_batch), \
+			patch.object(ctrl, "_process_batch", new_callable=AsyncMock), \
+			patch("mission_control.continuous_controller.update_mission_state"):
+			await ctrl._orchestration_loop(mission, result)
+
+		assert len(dispatched_units) == 1
+		assert dispatched_units[0].id == "wu1"
+
+	@pytest.mark.asyncio
+	async def test_mission_stops_cleanly_when_all_units_filtered(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""When budget gate filters all units, _execute_batch is never called."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+
+		ctrl._ema.update(10.0)
+		config.scheduler.budget.max_per_run_usd = 0.01
+
+		plan = Plan(objective="test")
+		epoch = Epoch(mission_id="m1")
+		units = [WorkUnit(id="wu1", plan_id="p1", title="Task 1")]
+
+		ctrl._planner = MagicMock()
+		ctrl._planner.get_next_units = AsyncMock(return_value=(plan, units, epoch))
+		ctrl._backend = MagicMock()
+		ctrl._semaphore = DynamicSemaphore(2)
+
+		execute_mock = AsyncMock()
+		mission = Mission(id="m1", objective="test", total_cost_usd=0.0)
+		result = ContinuousMissionResult()
+
+		with patch.object(ctrl, "_should_stop", return_value=""), \
+			patch.object(ctrl, "_execute_batch", execute_mock):
+			await ctrl._orchestration_loop(mission, result)
+
+		assert result.stopped_reason == "ema_budget_exceeded"
+		assert not ctrl.running
+		execute_mock.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_no_filtering_when_budget_is_zero(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""Budget gate is skipped when max_per_run_usd is 0 (unlimited)."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		ctrl = ContinuousController(config, db)
+		ctrl._ema.update(100.0)
+		config.scheduler.budget.max_per_run_usd = 0  # Unlimited
+
+		plan = Plan(id="p1", objective="test")
+		epoch = Epoch(id="ep1", mission_id="m1")
+		units = [WorkUnit(id="wu1", plan_id="p1", title="Task 1")]
+
+		dispatched_units: list[WorkUnit] = []
+		should_stop_calls = 0
+
+		def mock_should_stop(mission: Mission) -> str:
+			nonlocal should_stop_calls
+			should_stop_calls += 1
+			if should_stop_calls > 1:
+				return "user_stopped"
+			return ""
+
+		async def mock_execute_batch(
+			batch_units: list[WorkUnit], ep: Epoch, m: Mission,
+		) -> list[WorkerCompletion]:
+			dispatched_units.extend(batch_units)
+			return []
+
+		ctrl._planner = MagicMock()
+		ctrl._planner.get_next_units = AsyncMock(return_value=(plan, units, epoch))
+		ctrl._backend = MagicMock()
+		ctrl._semaphore = DynamicSemaphore(2)
+
+		mission = Mission(id="m1", objective="test", total_cost_usd=0.0)
+		result = ContinuousMissionResult()
+
+		with patch.object(ctrl, "_should_stop", side_effect=mock_should_stop), \
+			patch.object(ctrl, "_execute_batch", side_effect=mock_execute_batch), \
+			patch.object(ctrl, "_process_batch", new_callable=AsyncMock), \
+			patch("mission_control.continuous_controller.update_mission_state"):
+			await ctrl._orchestration_loop(mission, result)
+
+		assert len(dispatched_units) == 1
+		assert result.stopped_reason != "ema_budget_exceeded"
+
+	@pytest.mark.asyncio
+	async def test_no_filtering_when_ema_has_no_data(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""Budget gate is skipped when EMA has no data (projected_cost returns None)."""
+		db.insert_mission(Mission(id="m1", objective="test"))
+
+		ctrl = ContinuousController(config, db)
+		# Don't seed EMA -- projected_cost() returns None
+		config.scheduler.budget.max_per_run_usd = 0.01
+
+		plan = Plan(id="p2", objective="test")
+		epoch = Epoch(id="ep1", mission_id="m1")
+		units = [WorkUnit(id="wu1", plan_id="p1", title="Task 1")]
+
+		dispatched_units: list[WorkUnit] = []
+		should_stop_calls = 0
+
+		def mock_should_stop(mission: Mission) -> str:
+			nonlocal should_stop_calls
+			should_stop_calls += 1
+			if should_stop_calls > 1:
+				return "user_stopped"
+			return ""
+
+		async def mock_execute_batch(
+			batch_units: list[WorkUnit], ep: Epoch, m: Mission,
+		) -> list[WorkerCompletion]:
+			dispatched_units.extend(batch_units)
+			return []
+
+		ctrl._planner = MagicMock()
+		ctrl._planner.get_next_units = AsyncMock(return_value=(plan, units, epoch))
+		ctrl._backend = MagicMock()
+		ctrl._semaphore = DynamicSemaphore(2)
+
+		mission = Mission(id="m1", objective="test", total_cost_usd=0.0)
+		result = ContinuousMissionResult()
+
+		with patch.object(ctrl, "_should_stop", side_effect=mock_should_stop), \
+			patch.object(ctrl, "_execute_batch", side_effect=mock_execute_batch), \
+			patch.object(ctrl, "_process_batch", new_callable=AsyncMock), \
+			patch("mission_control.continuous_controller.update_mission_state"):
+			await ctrl._orchestration_loop(mission, result)
+
+		assert len(dispatched_units) == 1
+		assert result.stopped_reason != "ema_budget_exceeded"
 
