@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from mission_control.batch_analyzer import EpochCostSummary
 from mission_control.config import MissionConfig, TargetConfig, VerificationConfig
 from mission_control.models import Epoch, Handoff, KnowledgeItem, Mission, SemanticMemory, WorkUnit
 from mission_control.planner_context import build_planner_context, update_mission_state
@@ -18,6 +19,7 @@ def _mock_db() -> MagicMock:
 	db.get_work_units_for_mission.return_value = []
 	db.get_epochs_for_mission.return_value = []
 	db.get_knowledge_for_mission.return_value = []
+	db.get_unit_events_for_mission.return_value = []
 	return db
 
 
@@ -157,6 +159,49 @@ class TestBuildPlannerContext:
 		db.get_top_semantic_memories.side_effect = RuntimeError("bang")
 		result = build_planner_context(db, "m1")
 		assert result == ""
+
+	def test_cost_trend_appears_when_epochs_have_data(self) -> None:
+		db = _mock_db()
+		db.get_epochs_for_mission.return_value = [
+			Epoch(id="ep1", mission_id="m1", number=1),
+		]
+		db.get_work_units_for_mission.return_value = [
+			WorkUnit(
+				id="wu1", plan_id="p1", title="T",
+				epoch_id="ep1", status="completed",
+				cost_usd=2.0, input_tokens=100, output_tokens=50,
+			),
+		]
+		from mission_control.models import UnitEvent
+		db.get_unit_events_for_mission.return_value = [
+			UnitEvent(
+				mission_id="m1", epoch_id="ep1", work_unit_id="wu1",
+				event_type="dispatched",
+			),
+			UnitEvent(
+				mission_id="m1", epoch_id="ep1", work_unit_id="wu1",
+				event_type="merged",
+			),
+		]
+		result = build_planner_context(db, "m1")
+		assert "## Cost Trend (recent epochs)" in result
+		assert "| Epoch |" in result
+		assert "ep1" in result
+
+	def test_cost_trend_absent_when_no_epochs(self) -> None:
+		db = _mock_db()
+		result = build_planner_context(db, "m1")
+		assert "Cost Trend" not in result
+
+	def test_cost_trend_resilient_on_error(self) -> None:
+		db = _mock_db()
+		db.get_epochs_for_mission.side_effect = RuntimeError("fail")
+		db.get_recent_handoffs.return_value = [
+			_make_handoff(concerns=["err"]),
+		]
+		result = build_planner_context(db, "m1")
+		assert "## Recent Failures" in result
+		assert "Cost Trend" not in result
 
 
 # ---------------------------------------------------------------------------

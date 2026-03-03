@@ -1341,7 +1341,9 @@ class TestBuildPlannerContext:
 		db.insert_handoff(handoff)
 
 		result = build_planner_context(db, "m1")
-		assert result == ""
+		# No failures or learned rules, but cost trend appears when epochs exist
+		assert "## Recent Failures" not in result
+		assert "## Learned Rules" not in result
 
 	def test_nonexistent_mission_returns_empty(self, db: Database) -> None:
 		result = build_planner_context(db, "nonexistent")
