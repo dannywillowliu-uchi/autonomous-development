@@ -74,6 +74,8 @@ class CircuitBreakerManager:
 			)
 			cb.state = CircuitBreakerState.CLOSED
 			cb._half_open_probes = 0
+			if self._on_state_change:
+				self._on_state_change(workspace_id, "half_open", "closed")
 
 	def record_failure(self, workspace_id: str) -> None:
 		"""Record a failed unit execution for this workspace."""
