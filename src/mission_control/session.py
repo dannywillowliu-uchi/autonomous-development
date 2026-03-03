@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -101,61 +100,4 @@ def validate_mc_result(raw: dict[str, object]) -> dict[str, object]:
 def build_branch_name(session_id: str) -> str:
 	"""Generate a git branch name for a session."""
 	return f"mc/session-{session_id}"
-
-
-async def create_branch(branch_name: str, base_branch: str, cwd: str) -> bool:
-	"""Create and checkout a new git branch."""
-	proc = await asyncio.create_subprocess_exec(
-		"git", "checkout", "-b", branch_name, base_branch,
-		cwd=cwd,
-		stdout=asyncio.subprocess.PIPE,
-		stderr=asyncio.subprocess.STDOUT,
-	)
-	await proc.communicate()
-	return proc.returncode == 0
-
-
-async def delete_branch(branch_name: str, base_branch: str, cwd: str) -> bool:
-	"""Switch to base branch and delete the session branch."""
-	checkout = await asyncio.create_subprocess_exec(
-		"git", "checkout", base_branch,
-		cwd=cwd,
-		stdout=asyncio.subprocess.PIPE,
-		stderr=asyncio.subprocess.STDOUT,
-	)
-	await checkout.communicate()
-	if checkout.returncode != 0:
-		return False
-
-	delete = await asyncio.create_subprocess_exec(
-		"git", "branch", "-D", branch_name,
-		cwd=cwd,
-		stdout=asyncio.subprocess.PIPE,
-		stderr=asyncio.subprocess.STDOUT,
-	)
-	await delete.communicate()
-	return delete.returncode == 0
-
-
-async def merge_branch(branch_name: str, base_branch: str, cwd: str) -> bool:
-	"""Merge session branch into base branch."""
-	checkout = await asyncio.create_subprocess_exec(
-		"git", "checkout", base_branch,
-		cwd=cwd,
-		stdout=asyncio.subprocess.PIPE,
-		stderr=asyncio.subprocess.STDOUT,
-	)
-	await checkout.communicate()
-	if checkout.returncode != 0:
-		return False
-
-	merge = await asyncio.create_subprocess_exec(
-		"git", "merge", "--no-ff", branch_name, "-m", f"Merge {branch_name}",
-		cwd=cwd,
-		stdout=asyncio.subprocess.PIPE,
-		stderr=asyncio.subprocess.STDOUT,
-	)
-	await merge.communicate()
-	return merge.returncode == 0
-
 
