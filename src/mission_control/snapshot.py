@@ -18,6 +18,7 @@ _SKIP_FILES = {"__init__.py", "conftest.py"}
 _SKIP_PREFIXES = ("test_",)
 
 _snapshot_cache: dict[Path, str] = {}
+_snapshot_entries_cache: dict[Path, list[tuple[str, list[str]]]] = {}
 
 
 def get_project_snapshot(root: Path) -> str:
@@ -32,6 +33,62 @@ def get_project_snapshot(root: Path) -> str:
 def clear_snapshot_cache() -> None:
 	"""Flush the snapshot cache (call at epoch boundaries)."""
 	_snapshot_cache.clear()
+	_snapshot_entries_cache.clear()
+
+
+def invalidate_snapshot(root: Path) -> None:
+	"""Remove a specific *root* from the snapshot cache."""
+	resolved = root.resolve()
+	_snapshot_cache.pop(resolved, None)
+	_snapshot_entries_cache.pop(resolved, None)
+
+
+def build_incremental_snapshot(root: Path, changed_files: list[str]) -> str:
+	"""Re-parse only *changed_files* and merge into the cached snapshot.
+
+	If no cached snapshot exists for *root*, falls back to a full build.
+	When *changed_files* is empty, returns the existing cached snapshot
+	(or builds a fresh one).
+	"""
+	resolved = root.resolve()
+
+	# Bootstrap: full build if nothing is cached yet
+	if resolved not in _snapshot_entries_cache:
+		full = build_project_snapshot(resolved)
+		_snapshot_cache[resolved] = full
+		return full
+
+	if not changed_files:
+		return _snapshot_cache.get(resolved, "")
+
+	# Build a lookup of existing entries for fast replacement
+	entries = list(_snapshot_entries_cache[resolved])
+	entry_map: dict[str, int] = {rel: idx for idx, (rel, _) in enumerate(entries)}
+
+	for raw_path in changed_files:
+		fpath = resolved / raw_path.strip()
+		if not fpath.suffix == ".py" or not fpath.exists():
+			# If the file was deleted, remove its entry
+			rel = raw_path.strip()
+			if rel in entry_map:
+				idx = entry_map.pop(rel)
+				entries[idx] = ("", [])  # mark for removal
+			continue
+		rel = str(fpath.relative_to(resolved))
+		sigs = _extract_signatures(fpath)
+		if rel in entry_map:
+			entries[entry_map[rel]] = (rel, sigs)
+		else:
+			entries.append((rel, sigs))
+			entry_map[rel] = len(entries) - 1
+
+	# Remove tombstoned entries and re-sort
+	entries = sorted([(r, s) for r, s in entries if r], key=lambda e: e[0])
+	_snapshot_entries_cache[resolved] = entries
+
+	result = _format_full(entries) if entries else ""
+	_snapshot_cache[resolved] = result
+	return result
 
 
 def build_project_snapshot(root: Path) -> str:
@@ -45,10 +102,15 @@ def build_project_snapshot(root: Path) -> str:
 		sigs = _extract_signatures(fpath)
 		entries.append((rel, sigs))
 
+	_snapshot_entries_cache[root] = list(entries)
+
 	if not entries:
+		_snapshot_cache[root] = ""
 		return ""
 
-	return _format_full(entries)
+	result = _format_full(entries)
+	_snapshot_cache[root] = result
+	return result
 
 
 def _collect_py_files(root: Path) -> list[Path]:
