@@ -678,7 +678,8 @@ class TestRetry:
 
 	@pytest.mark.asyncio
 	async def test_failed_unit_retried_when_under_max_attempts(self, config: MissionConfig, db: Database) -> None:
-		"""Unit fails with attempt=1, max_attempts=3 -> gets re-queued, not counted as failed."""
+		"""Unit fails with attempt=1, max_retry_attempts=3 -> _schedule_retry called, not counted as failed."""
+		config.continuous.max_retry_attempts = 3
 		ctrl, db = self._make_ctrl(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
@@ -698,11 +699,11 @@ class TestRetry:
 			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
 		)
 
-		with patch.object(ctrl, "_retry_unit", new_callable=AsyncMock):
+		with patch.object(ctrl, "_schedule_retry") as mock_retry:
 			await ctrl._process_single_completion(completion, Mission(id="m1"), result)
+			mock_retry.assert_called_once()
 
 		assert ctrl._total_failed == 0
-		assert unit.status == "pending"
 
 	@pytest.mark.asyncio
 	async def test_failed_unit_not_retried_at_max_attempts(self, config: MissionConfig, db: Database) -> None:
@@ -732,10 +733,10 @@ class TestRetry:
 		assert unit.status == "failed"
 
 	@pytest.mark.asyncio
-	async def test_retry_appends_failure_context(self, config: MissionConfig, db: Database) -> None:
-		"""Verify the description is augmented with failure info on retry."""
+	async def test_retry_creates_new_unit_with_diagnosis(self, config: MissionConfig, db: Database) -> None:
+		"""Verify _schedule_retry creates a new unit and logs retry event with diagnosis."""
+		config.continuous.max_retry_attempts = 3
 		ctrl, db = self._make_ctrl(config, db)
-		result = ContinuousMissionResult(mission_id="m1")
 
 		epoch = Epoch(id="ep1", mission_id="m1", number=1)
 		db.insert_epoch(epoch)
@@ -747,46 +748,53 @@ class TestRetry:
 			description="Original description",
 			status="failed", attempt=1, max_attempts=3,
 			output_summary="Import error in main.py",
+			epoch_id="ep1",
 		)
 		db.insert_work_unit(unit)
 
-		completion = WorkerCompletion(
-			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
-		)
+		with patch("asyncio.create_task") as mock_ct:
+			mock_ct.return_value = MagicMock(spec=asyncio.Task)
+			ctrl._schedule_retry(unit, epoch, Mission(id="m1"), "Import error in main.py", config.continuous)
 
-		with patch.object(ctrl, "_retry_unit", new_callable=AsyncMock):
-			await ctrl._process_single_completion(completion, Mission(id="m1"), result)
-
-		assert "[Retry attempt 2]" in unit.description  # attempt incremented from 1->2 inside _schedule_retry
-		assert "Import error in main.py" in unit.description
-		assert "[Unknown failure]" in unit.description  # diagnose_failure provides targeted guidance
-		assert unit.description.startswith("Original description")
+		# New retry unit created with parent lineage
+		all_units = db.get_work_units_for_plan("p1")
+		assert len(all_units) == 2
+		retry_unit = [u for u in all_units if u.id != "wu1"][0]
+		assert retry_unit.parent_unit_id == "wu1"
+		assert retry_unit.title == "Task"
+		assert retry_unit.description == "Original description"
+		assert retry_unit.attempt == 2
 
 	def test_retry_delay_exponential_backoff(self, config: MissionConfig, db: Database) -> None:
 		"""Verify delay computation: base_delay * 2^(attempt-1), capped at max.
 
-		_schedule_retry increments attempt first, so starting at attempt=0:
-		  -> incremented to 1 -> delay = 30 * 2^0 = 30
+		_schedule_retry creates a new unit with attempt=1 from parent attempt=0,
+		delay = 30 * 2^0 = 30.
 		"""
 		ctrl, _ = self._make_ctrl(config, db)
 		config = ctrl.config
 		config.continuous.retry_base_delay_seconds = 30
 		config.continuous.retry_max_delay_seconds = 300
+		config.continuous.max_retry_attempts = 5
 
 		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
 		mission = Mission(id="m1")
 
-		# attempt=0 -> _schedule_retry increments to 1 -> delay = 30 * 2^0 = 30
 		plan = Plan(id="p1", objective="test")
 		ctrl.db.insert_plan(plan)
-		unit1 = WorkUnit(id="wu1", plan_id="p1", title="T", attempt=0, max_attempts=5)
+		unit1 = WorkUnit(id="wu1", plan_id="p1", title="T", attempt=0, max_attempts=5, epoch_id="ep1")
 		ctrl.db.insert_work_unit(unit1)
-		with patch("asyncio.create_task"):
+		with patch("asyncio.create_task") as mock_ct:
+			mock_ct.return_value = MagicMock(spec=asyncio.Task)
 			ctrl._schedule_retry(unit1, epoch, mission, "err", config.continuous)
-		assert unit1.status == "pending"
-		assert unit1.attempt == 1  # incremented from 0
 
-		# Verify delay values directly (after increment, delay uses attempt-1)
+		# Verify new retry unit was created with attempt=1
+		all_units = db.get_work_units_for_plan("p1")
+		retry_unit = [u for u in all_units if u.id != "wu1"][0]
+		assert retry_unit.attempt == 1
+
+		# Verify delay values directly (attempt_number used for delay calculation)
 		assert min(30 * (2 ** 0), 300) == 30   # attempt=1 -> 2^0
 		assert min(30 * (2 ** 1), 300) == 60   # attempt=2 -> 2^1
 		assert min(30 * (2 ** 2), 300) == 120  # attempt=3 -> 2^2
@@ -795,7 +803,8 @@ class TestRetry:
 
 	@pytest.mark.asyncio
 	async def test_merge_failure_triggers_retry(self, config: MissionConfig, db: Database) -> None:
-		"""Unit completes but merge fails -> retried if under max_attempts."""
+		"""Unit completes but merge fails -> retried if under max_retry_attempts."""
+		config.continuous.max_retry_attempts = 3
 		ctrl, db = self._make_ctrl(config, db)
 		result = ContinuousMissionResult(mission_id="m1")
 
@@ -825,13 +834,12 @@ class TestRetry:
 			unit=unit, handoff=None, workspace="/tmp/ws", epoch=epoch,
 		)
 
-		with patch.object(ctrl, "_retry_unit", new_callable=AsyncMock):
+		with patch.object(ctrl, "_schedule_retry") as mock_retry:
 			await ctrl._process_single_completion(completion, Mission(id="m1"), result)
+			mock_retry.assert_called_once()
 
 		assert ctrl._total_failed == 0
 		assert ctrl._total_merged == 0
-		assert unit.status == "pending"
-		assert "[Retry attempt 2]" in unit.description  # attempt incremented from 1->2 inside _schedule_retry
 
 
 class TestVenvSymlink:

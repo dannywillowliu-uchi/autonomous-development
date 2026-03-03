@@ -210,6 +210,7 @@ class WorkUnit:
 	cost_usd: float = 0.0
 	speculation_score: float = 0.0
 	speculation_parent_id: str = ""
+	parent_unit_id: str = ""  # retry lineage: ID of the unit this retry originated from
 	write_scope: list[str] = field(default_factory=list)  # files/dirs this unit intends to modify
 
 

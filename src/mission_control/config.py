@@ -151,6 +151,7 @@ class ContinuousConfig:
 	layer_drain_timeout_per_unit: int = 120
 	reconcile_interval: int = 5  # run reconciler every N merges regardless of verify_before_merge
 	enforce_acceptance_criteria: bool = True  # run per-unit acceptance_criteria commands on merge
+	max_retry_attempts: int = 2  # max retries for failed units (0 = no retry)
 
 
 @dataclass
