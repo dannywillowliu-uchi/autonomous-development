@@ -606,6 +606,7 @@ def render_mission_worker_prompt(
 	mission_state: str = "",
 	overlap_warnings: str = "",
 	specialist_template: str = "",
+	project_root: Path | None = None,
 ) -> str:
 	"""Render constraint-based prompt for mission mode workers."""
 	verify_cmd = unit.verification_command or config.target.verification.command
@@ -613,6 +614,19 @@ def render_mission_worker_prompt(
 	ac_block = ""
 	if unit.acceptance_criteria:
 		ac_block = f"\n## Acceptance Criteria\n{_sanitize_braces(unit.acceptance_criteria)}\n"
+
+	# Build an incremental snapshot focused on the unit's files_hint
+	if project_root is not None:
+		try:
+			from mission_control.snapshot import build_incremental_snapshot
+			hint_files = [f.strip() for f in (unit.files_hint or "").split(",") if f.strip()]
+			snap = build_incremental_snapshot(project_root, hint_files)
+			if snap:
+				snap_section = f"\n## Project Snapshot\n```\n{_sanitize_braces(snap)}\n```\n"
+				context = (context or "") + snap_section
+		except Exception:
+			pass
+
 	if unit.unit_type == "research":
 		template = RESEARCH_WORKER_PROMPT_TEMPLATE
 	elif unit.unit_type == "experiment":

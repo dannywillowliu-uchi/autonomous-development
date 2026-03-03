@@ -63,6 +63,7 @@ from mission_control.notifier import TelegramNotifier
 from mission_control.overlap import _parse_files_hint, topological_layers
 from mission_control.planner_context import build_planner_context, update_mission_state
 from mission_control.session import parse_mc_result
+from mission_control.snapshot import clear_snapshot_cache
 from mission_control.token_parser import compute_token_cost, parse_stream_json
 from mission_control.trace_log import TraceEvent, TraceLogger
 from mission_control.tracing import MissionTracer
@@ -1315,6 +1316,9 @@ class ContinuousController:
 				result.stopped_reason = reason
 				self.running = False
 				break
+
+			# Invalidate snapshot cache so the planner sees current signatures
+			clear_snapshot_cache()
 
 			state = build_planner_context(self.db, mission.id)
 
@@ -2987,6 +2991,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				mission_state=mission_state,
 				overlap_warnings=overlap_warnings,
 				specialist_template=specialist_template,
+				project_root=self.config.target.resolved_path,
 			)
 
 			budget = self.config.scheduler.budget.max_per_session_usd
