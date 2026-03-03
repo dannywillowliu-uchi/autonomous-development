@@ -199,6 +199,20 @@ class TestOnStateChangeCallback:
 		mgr.can_dispatch("/ws/a")
 		assert transitions == [("/ws/a", "open", "half_open")]
 
+	def test_half_open_to_closed_fires_callback(self) -> None:
+		"""Callback fires on HALF_OPEN -> CLOSED transition (successful probe)."""
+		transitions: list[tuple[str, str, str]] = []
+		mgr = CircuitBreakerManager(
+			max_failures=1, cooldown_seconds=0.01,
+			on_state_change=lambda ws, old, new: transitions.append((ws, old, new)),
+		)
+		mgr.record_failure("/ws/a")
+		time.sleep(0.02)
+		mgr.can_dispatch("/ws/a")  # OPEN -> HALF_OPEN
+		transitions.clear()
+		mgr.record_success("/ws/a")  # HALF_OPEN -> CLOSED
+		assert transitions == [("/ws/a", "half_open", "closed")]
+
 	def test_no_callback_when_none(self) -> None:
 		"""No error when on_state_change is None (default)."""
 		mgr = CircuitBreakerManager(max_failures=1, cooldown_seconds=60)
