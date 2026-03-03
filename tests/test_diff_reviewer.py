@@ -6,8 +6,10 @@ from mission_control.diff_reviewer import (
 	_build_review_prompt,
 	_clamp_score,
 	_parse_review_output,
+	compute_review_trend,
+	is_quality_declining,
 )
-from mission_control.models import WorkUnit
+from mission_control.models import UnitReview, WorkUnit
 
 
 class TestBuildReviewPrompt:
@@ -104,3 +106,93 @@ class TestClampScore:
 
 	def test_float_input(self) -> None:
 		assert _clamp_score(7.8) == 7
+
+
+def _review(alignment: int = 5, approach: int = 5, test_quality: int = 5) -> UnitReview:
+	"""Helper to build a UnitReview with specific dimension scores."""
+	return UnitReview(
+		alignment_score=alignment,
+		approach_score=approach,
+		test_score=test_quality,
+		avg_score=round((alignment + approach + test_quality) / 3, 1),
+	)
+
+
+class TestComputeReviewTrend:
+	def test_empty_reviews(self) -> None:
+		result = compute_review_trend([])
+		assert result["overall_avg"] == 0.0
+		assert result["recent_avg"] == 0.0
+		assert result["trend"] == "stable"
+		assert result["worst_dimension"] == "alignment"
+
+	def test_single_review(self) -> None:
+		reviews = [_review(7, 8, 6)]
+		result = compute_review_trend(reviews, window=3)
+		# Single review: overall == recent, so trend is stable
+		assert result["overall_avg"] == result["recent_avg"]
+		assert result["trend"] == "stable"
+		assert result["worst_dimension"] == "test_quality"
+
+	def test_stable_quality(self) -> None:
+		reviews = [_review(7, 7, 7) for _ in range(6)]
+		result = compute_review_trend(reviews, window=3)
+		assert result["trend"] == "stable"
+		assert result["overall_avg"] == result["recent_avg"]
+
+	def test_declining_quality(self) -> None:
+		# First 4 reviews are strong, last 3 are weak
+		reviews = [_review(9, 9, 9)] * 4 + [_review(3, 3, 3)] * 3
+		result = compute_review_trend(reviews, window=3)
+		assert result["trend"] == "declining"
+		assert result["recent_avg"] < result["overall_avg"]
+
+	def test_improving_quality(self) -> None:
+		# First 4 reviews are weak, last 3 are strong
+		reviews = [_review(3, 3, 3)] * 4 + [_review(9, 9, 9)] * 3
+		result = compute_review_trend(reviews, window=3)
+		assert result["trend"] == "improving"
+		assert result["recent_avg"] > result["overall_avg"]
+
+	def test_worst_dimension_identification(self) -> None:
+		# Recent reviews have low test_quality
+		reviews = [_review(8, 8, 2)] * 3
+		result = compute_review_trend(reviews, window=3)
+		assert result["worst_dimension"] == "test_quality"
+
+		# Recent reviews have low approach
+		reviews = [_review(8, 2, 8)] * 3
+		result = compute_review_trend(reviews, window=3)
+		assert result["worst_dimension"] == "approach"
+
+		# Recent reviews have low alignment
+		reviews = [_review(2, 8, 8)] * 3
+		result = compute_review_trend(reviews, window=3)
+		assert result["worst_dimension"] == "alignment"
+
+
+class TestIsQualityDeclining:
+	def test_empty_reviews(self) -> None:
+		assert is_quality_declining([]) is False
+
+	def test_stable_quality_not_declining(self) -> None:
+		reviews = [_review(7, 7, 7)] * 6
+		assert is_quality_declining(reviews) is False
+
+	def test_detects_decline(self) -> None:
+		reviews = [_review(9, 9, 9)] * 5 + [_review(3, 3, 3)] * 3
+		assert is_quality_declining(reviews, window=3, threshold=1.5) is True
+
+	def test_improving_not_declining(self) -> None:
+		reviews = [_review(3, 3, 3)] * 5 + [_review(9, 9, 9)] * 3
+		assert is_quality_declining(reviews) is False
+
+	def test_single_review_not_declining(self) -> None:
+		reviews = [_review(5, 5, 5)]
+		assert is_quality_declining(reviews) is False
+
+	def test_threshold_sensitivity(self) -> None:
+		# Small drop: declining at low threshold, not at high
+		reviews = [_review(8, 8, 8)] * 5 + [_review(6, 6, 6)] * 3
+		assert is_quality_declining(reviews, threshold=0.5) is True
+		assert is_quality_declining(reviews, threshold=3.0) is False
