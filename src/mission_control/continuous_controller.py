@@ -2274,7 +2274,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			results = await self._green_branch.merge_batch(units_for_batch)
 		except Exception as exc:
 			logger.error("merge_batch failed: %s", exc, exc_info=True)
-			# Mark all entries as failed and release their workspaces
+			# Mark all entries as failed
 			for entry in entries:
 				self._total_failed += 1
 				_exc_details = {
@@ -2289,11 +2289,6 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 					details=json.dumps(_exc_details),
 					stream_details=_exc_details,
 				)
-				if entry.completion.workspace and self._backend:
-					try:
-						await self._backend.release_workspace(entry.completion.workspace)
-					except Exception:
-						pass
 			return
 
 		# Process each result with per-unit bookkeeping
@@ -2886,7 +2881,6 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				self.config, model=model, output_format="stream-json",
 				permission_mode="bypassPermissions", budget=budget,
 				session_id=session_id, prompt=prompt,
-				setting_sources="project",
 			)
 
 			effective_timeout = unit.timeout or self.config.scheduler.session_timeout
