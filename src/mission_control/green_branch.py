@@ -685,7 +685,7 @@ class GreenBranchManager:
 
 	async def _zfc_generate_fixup_strategies(self, failure_output: str, n: int) -> list[str] | None:
 		"""Generate N fixup strategies via LLM. Returns list of strategy strings or None."""
-		from mission_control.config import claude_subprocess_env
+		from mission_control.config import build_claude_cmd, claude_subprocess_env
 
 		prompt = (
 			f"You are a code fixup strategist. Given a test/verification failure, "
@@ -701,15 +701,19 @@ class GreenBranchManager:
 		timeout = zfc.llm_timeout
 
 		try:
+			cmd = build_claude_cmd(
+				self.config,
+				model=model,
+				output_format="text",
+				max_turns=1,
+				prompt=prompt,
+			)
 			proc = await asyncio.create_subprocess_exec(
-				"claude", "--print", "--output-format", "text",
-				"--model", model,
-				"--max-turns", "1",
-				"-p", prompt,
+				*cmd,
 				cwd=self.workspace,
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.PIPE,
-				env=claude_subprocess_env(),
+				env=claude_subprocess_env(self.config),
 			)
 			stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
 			output = stdout.decode() if stdout else ""
@@ -888,13 +892,16 @@ class GreenBranchManager:
 
 		Returns (success, output) tuple.
 		"""
+		from mission_control.config import build_claude_cmd
+
 		model = self._get_fixup_model()
-		cmd = [
-			"claude", "--print", "--output-format", "text",
-			"--model", model,
-			"--max-turns", "5",
-			"-p", prompt,
-		]
+		cmd = build_claude_cmd(
+			self.config,
+			model=model,
+			output_format="text",
+			max_turns=5,
+			prompt=prompt,
+		)
 		return await self._run_command(cmd)
 
 	@staticmethod

@@ -252,9 +252,10 @@ def _read_project_claude_md(config: MissionConfig) -> str:
 class MemoryManager:
 	"""Three-layer memory system: episodic storage, retrieval with access tracking, and semantic distillation."""
 
-	def __init__(self, db: Database, config: EpisodicMemoryConfig) -> None:
+	def __init__(self, db: Database, config: EpisodicMemoryConfig, mission_config: MissionConfig | None = None) -> None:
 		self.db = db
 		self.config = config
+		self.mission_config = mission_config
 
 	def store_episode(
 		self,
@@ -321,7 +322,7 @@ class MemoryManager:
 				stdin=asyncio.subprocess.PIPE,
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.PIPE,
-				env=claude_subprocess_env(),
+				env=claude_subprocess_env(self.mission_config),
 			)
 			stdout, _ = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=120)
 			rule_content = stdout.decode().strip()

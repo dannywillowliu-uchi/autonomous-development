@@ -7,7 +7,7 @@ import logging
 import math
 from uuid import uuid4
 
-from mission_control.config import PromptEvolutionConfig, claude_subprocess_env
+from mission_control.config import MissionConfig, PromptEvolutionConfig, claude_subprocess_env
 from mission_control.db import Database
 from mission_control.models import PromptOutcome, PromptVariant, _now_iso
 
@@ -17,9 +17,15 @@ logger = logging.getLogger(__name__)
 class PromptEvolutionEngine:
 	"""UCB1 multi-armed bandit for prompt variant selection and mutation."""
 
-	def __init__(self, db: Database, config: PromptEvolutionConfig) -> None:
+	def __init__(
+		self,
+		db: Database,
+		config: PromptEvolutionConfig,
+		mission_config: MissionConfig | None = None,
+	) -> None:
 		self.db = db
 		self.config = config
+		self.mission_config = mission_config
 
 	def record_outcome(self, variant_id: str, outcome: str, context: str = "") -> None:
 		"""Record a pass/fail outcome for a variant and recompute win_rate from DB counts."""
@@ -104,7 +110,7 @@ class PromptEvolutionEngine:
 				stdin=asyncio.subprocess.PIPE,
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.PIPE,
-				env=claude_subprocess_env(),
+				env=claude_subprocess_env(self.mission_config),
 			)
 			stdout, _ = await asyncio.wait_for(proc.communicate(prompt.encode()), timeout=120)
 			mutated_content = stdout.decode().strip()
