@@ -1394,6 +1394,25 @@ class ContinuousController:
 			layer_tasks: list[asyncio.Task[WorkerCompletion | None]] = []
 
 			for unit in layer:
+				# Per-unit budget guard: skip dispatch if remaining budget is
+				# exhausted. Mirrors the pattern in _dispatch_speculated_unit.
+				budget_limit = self.config.scheduler.budget.max_per_run_usd
+				if budget_limit > 0:
+					remaining = budget_limit - mission.total_cost_usd
+					if remaining <= 0:
+						logger.info(
+							"Budget exhausted ($%.2f/$%.2f), skipping unit %s",
+							mission.total_cost_usd, budget_limit, unit.title[:50],
+						)
+						continue
+					ema_val = self._ema.value
+					if ema_val is not None and ema_val > remaining:
+						logger.info(
+							"Budget guard: EMA $%.2f > remaining $%.2f, skipping unit %s",
+							ema_val, remaining, unit.title[:50],
+						)
+						continue
+
 				unit.epoch_id = epoch.id
 				try:
 					self.db.insert_work_unit(unit)
@@ -1526,6 +1545,15 @@ class ContinuousController:
 						locked_files.setdefault(f, []).append(f"in-flight: {ru.title[:40]}")
 			except Exception as exc:
 				logger.debug("Failed to gather in-flight locked files: %s", exc)
+
+			# Pre-planning budget gate: costs may have accumulated from completing
+			# units while we gathered context above. Re-check before invoking
+			# the planner which itself takes time and money.
+			budget_limit = self.config.scheduler.budget.max_per_run_usd
+			if budget_limit > 0 and mission.total_cost_usd >= budget_limit:
+				result.stopped_reason = "budget_hard_cap_exceeded"
+				self.running = False
+				break
 
 			try:
 				plan, units, epoch = await self._planner.get_next_units(
@@ -2881,6 +2909,7 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 				self.config, model=model, output_format="stream-json",
 				permission_mode="bypassPermissions", budget=budget,
 				session_id=session_id, prompt=prompt,
+				setting_sources="project",
 			)
 
 			effective_timeout = unit.timeout or self.config.scheduler.session_timeout
@@ -3104,8 +3133,13 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			if elapsed >= cont.max_wall_time_seconds:
 				return "wall_time_exceeded"
 
-		# EMA budget gate: stop if projected next unit cost exceeds remaining budget
+		# Hard-cap budget check: stop immediately if total cost has reached the limit.
+		# This fires even during cold-start when EMA has no data points.
 		budget_limit = self.config.scheduler.budget.max_per_run_usd
+		if budget_limit > 0 and mission.total_cost_usd >= budget_limit:
+			return "budget_hard_cap_exceeded"
+
+		# EMA budget gate: stop if projected next unit cost exceeds remaining budget
 		if budget_limit > 0 and self._ema.would_exceed_budget(mission.total_cost_usd, budget_limit):
 			return "ema_budget_exceeded"
 

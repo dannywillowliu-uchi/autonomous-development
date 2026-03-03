@@ -2753,4 +2753,181 @@ class TestProcessBatch:
 		assert processed == ["wu0", "wu1", "wu2"]
 
 
+class TestBudgetHardCap:
+	"""Tests for the hard-cap budget guard in _should_stop."""
+
+	def test_hard_cap_fires_at_limit(self, config: MissionConfig, db: Database) -> None:
+		"""_should_stop returns budget_hard_cap_exceeded when cost >= limit."""
+		config.scheduler.budget.max_per_run_usd = 10.0
+		ctrl = ContinuousController(config, db)
+		mission = Mission(id="m1", total_cost_usd=10.0)
+		assert ctrl._should_stop(mission) == "budget_hard_cap_exceeded"
+
+	def test_hard_cap_fires_over_limit(self, config: MissionConfig, db: Database) -> None:
+		config.scheduler.budget.max_per_run_usd = 10.0
+		ctrl = ContinuousController(config, db)
+		mission = Mission(id="m1", total_cost_usd=15.0)
+		assert ctrl._should_stop(mission) == "budget_hard_cap_exceeded"
+
+	def test_hard_cap_no_ema_data(self, config: MissionConfig, db: Database) -> None:
+		"""Hard cap fires even during cold-start when EMA has no data points."""
+		config.scheduler.budget.max_per_run_usd = 5.0
+		ctrl = ContinuousController(config, db)
+		# EMA has no data points -- without hard cap, _should_stop would return ""
+		assert ctrl._ema.count == 0
+		mission = Mission(id="m1", total_cost_usd=5.0)
+		assert ctrl._should_stop(mission) == "budget_hard_cap_exceeded"
+
+	def test_hard_cap_skipped_when_budget_zero(self, config: MissionConfig, db: Database) -> None:
+		"""When budget is 0 (disabled), hard cap should not fire."""
+		config.scheduler.budget.max_per_run_usd = 0.0
+		ctrl = ContinuousController(config, db)
+		mission = Mission(id="m1", total_cost_usd=100.0)
+		assert ctrl._should_stop(mission) == ""
+
+	def test_hard_cap_before_ema(self, config: MissionConfig, db: Database) -> None:
+		"""Hard cap fires before EMA check when both would trigger."""
+		config.scheduler.budget.max_per_run_usd = 10.0
+		ctrl = ContinuousController(config, db)
+		for _ in range(4):
+			ctrl._ema.update(5.0)
+		mission = Mission(id="m1", total_cost_usd=10.0)
+		# Should be hard_cap, not ema_budget_exceeded
+		assert ctrl._should_stop(mission) == "budget_hard_cap_exceeded"
+
+
+class TestPrePlanningBudgetGate:
+	"""Tests for the budget gate before get_next_units in _orchestration_loop."""
+
+	@pytest.mark.asyncio
+	async def test_loop_stops_when_budget_exceeded_before_planning(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""Orchestration loop should break before calling planner when budget exhausted."""
+		config.scheduler.budget.max_per_run_usd = 10.0
+		db.insert_mission(Mission(id="m1", objective="test"))
+		ctrl = ContinuousController(config, db)
+		ctrl._planner = MagicMock()
+		ctrl._planner.get_next_units = AsyncMock()
+		ctrl._backend = MagicMock()
+		ctrl._semaphore = DynamicSemaphore(2)
+
+		# First call to _should_stop passes (cost under limit), but cost
+		# rises above limit before the pre-planning gate check.
+		mission = Mission(id="m1", objective="test", total_cost_usd=5.0)
+		result = ContinuousMissionResult()
+
+		call_count = 0
+		original_should_stop = ctrl._should_stop
+
+		def side_effect_should_stop(m: Mission) -> str:
+			nonlocal call_count
+			call_count += 1
+			if call_count == 1:
+				# First check passes -- simulate costs accumulating
+				m.total_cost_usd = 12.0
+				return ""
+			return original_should_stop(m)
+
+		with patch.object(ctrl, "_should_stop", side_effect=side_effect_should_stop):
+			await ctrl._orchestration_loop(mission, result)
+
+		assert result.stopped_reason == "budget_hard_cap_exceeded"
+		# Planner should never have been called
+		ctrl._planner.get_next_units.assert_not_called()
+
+
+class TestPerUnitBudgetGuard:
+	"""Tests for the per-unit budget check in _execute_batch."""
+
+	@pytest.mark.asyncio
+	async def test_skips_units_when_budget_exhausted(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""Units should be skipped when remaining budget <= 0."""
+		config.scheduler.budget.max_per_run_usd = 10.0
+		db.insert_mission(Mission(id="m1", objective="test"))
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		ctrl = ContinuousController(config, db)
+		ctrl._backend = MagicMock()
+		ctrl._semaphore = DynamicSemaphore(2)
+
+		units = [
+			WorkUnit(id="wu1", plan_id="p1", title="Task 1"),
+			WorkUnit(id="wu2", plan_id="p1", title="Task 2"),
+		]
+		# Budget already exhausted
+		mission = Mission(id="m1", objective="test", total_cost_usd=10.0)
+
+		with patch.object(ctrl, "_execute_single_unit", new_callable=AsyncMock) as mock_exec:
+			result = await ctrl._execute_batch(units, epoch, mission)
+
+		# No units should have been dispatched
+		assert len(result) == 0
+		mock_exec.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_skips_units_when_ema_exceeds_remaining(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""Units should be skipped when EMA value > remaining budget."""
+		config.scheduler.budget.max_per_run_usd = 10.0
+		db.insert_mission(Mission(id="m1", objective="test"))
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		ctrl = ContinuousController(config, db)
+		ctrl._backend = MagicMock()
+		ctrl._semaphore = DynamicSemaphore(2)
+		# Set EMA to $5 per unit
+		for _ in range(4):
+			ctrl._ema.update(5.0)
+
+		units = [WorkUnit(id="wu1", plan_id="p1", title="Task 1")]
+		# Only $3 remaining, but EMA is $5
+		mission = Mission(id="m1", objective="test", total_cost_usd=7.0)
+
+		with patch.object(ctrl, "_execute_single_unit", new_callable=AsyncMock) as mock_exec:
+			result = await ctrl._execute_batch(units, epoch, mission)
+
+		assert len(result) == 0
+		mock_exec.assert_not_called()
+
+	@pytest.mark.asyncio
+	async def test_dispatches_when_within_budget(
+		self, config: MissionConfig, db: Database,
+	) -> None:
+		"""Units should dispatch normally when budget has room."""
+		config.scheduler.budget.max_per_run_usd = 100.0
+		db.insert_mission(Mission(id="m1", objective="test"))
+		plan = Plan(id="p1", objective="test")
+		db.insert_plan(plan)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+
+		ctrl = ContinuousController(config, db)
+		ctrl._backend = MagicMock()
+		ctrl._semaphore = DynamicSemaphore(2)
+
+		completion_obj = WorkerCompletion(
+			unit=WorkUnit(id="wu1", plan_id="p1", title="Task"),
+			handoff=None, workspace="/tmp/ws", epoch=epoch,
+		)
+
+		async def mock_execute(unit: WorkUnit, epoch: Epoch, mission: Mission) -> WorkerCompletion | None:
+			return completion_obj
+
+		units = [WorkUnit(id="wu1", plan_id="p1", title="Task 1")]
+		mission = Mission(id="m1", objective="test", total_cost_usd=5.0)
+
+		with patch.object(ctrl, "_execute_single_unit", side_effect=mock_execute):
+			result = await ctrl._execute_batch(units, epoch, mission)
+
+		assert len(result) == 1
 

@@ -66,7 +66,14 @@ class ExponentialMovingAverage:
 		return self._ema
 
 	def would_exceed_budget(self, spent: float, budget: float) -> bool:
-		"""Check if projected next unit cost would exceed remaining budget."""
+		"""Check if projected next unit cost would exceed remaining budget.
+
+		Returns True immediately if spent >= budget (hard cap), regardless
+		of EMA state. This prevents dispatching when already over budget
+		during cold-start (no EMA data points yet).
+		"""
+		if budget > 0 and spent >= budget:
+			return True
 		projected = self.projected_cost()
 		if projected is None:
 			return False

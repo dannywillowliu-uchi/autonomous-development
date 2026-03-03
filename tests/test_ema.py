@@ -171,9 +171,28 @@ class TestEdgeCases:
 
 
 class TestBudgetCheck:
-	def test_empty_ema_never_exceeds(self) -> None:
+	def test_empty_ema_within_budget(self) -> None:
+		"""With no EMA data and spent < budget, should not exceed."""
 		ema = ExponentialMovingAverage()
-		assert not ema.would_exceed_budget(spent=100.0, budget=50.0)
+		assert not ema.would_exceed_budget(spent=10.0, budget=50.0)
+
+	def test_hard_cap_fires_with_no_ema_data(self) -> None:
+		"""When spent >= budget, should exceed regardless of EMA state (cold-start)."""
+		ema = ExponentialMovingAverage()
+		assert ema.would_exceed_budget(spent=50.0, budget=50.0)
+		assert ema.would_exceed_budget(spent=60.0, budget=50.0)
+
+	def test_hard_cap_fires_with_ema_data(self) -> None:
+		"""Even with EMA data, spent >= budget triggers hard cap."""
+		ema = ExponentialMovingAverage(alpha=0.3)
+		for _ in range(4):
+			ema.update(1.0)
+		assert ema.would_exceed_budget(spent=50.0, budget=50.0)
+
+	def test_hard_cap_skipped_when_budget_zero(self) -> None:
+		"""Hard cap only applies when budget > 0."""
+		ema = ExponentialMovingAverage()
+		assert not ema.would_exceed_budget(spent=100.0, budget=0.0)
 
 	def test_within_budget(self) -> None:
 		ema = ExponentialMovingAverage(alpha=0.3, conservatism_base=0.5)
