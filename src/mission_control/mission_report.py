@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from mission_control.config import MissionConfig
+from mission_control.constants import (
+	UNIT_EVENT_MERGE_FAILED,
+	UNIT_EVENT_MERGED,
+	UNIT_EVENT_RETRY_QUEUED,
+)
 from mission_control.continuous_controller import ContinuousMissionResult
 from mission_control.db import Database
 from mission_control.models import Mission
@@ -78,6 +83,16 @@ def generate_mission_report(
 		for g in grades
 	]
 
+	# Compute merge quality metrics from timeline
+	successful_merges = sum(1 for e in timeline if e["event_type"] == UNIT_EVENT_MERGED)
+	merge_failures = sum(1 for e in timeline if e["event_type"] == UNIT_EVENT_MERGE_FAILED)
+	retries = sum(1 for e in timeline if e["event_type"] == UNIT_EVENT_RETRY_QUEUED)
+	reverts = sum(1 for e in timeline if "revert" in e["event_type"])
+	total_merge_attempts = successful_merges + merge_failures
+	merge_quality_score: float | None = (
+		successful_merges / total_merge_attempts if total_merge_attempts > 0 else None
+	)
+
 	report: dict[str, Any] = {
 		"objective": mission.objective,
 		"outcome": {
@@ -96,6 +111,14 @@ def generate_mission_report(
 		"unit_reviews": review_data,
 		"trajectory_ratings": rating_data,
 		"decomposition_grades": grade_data,
+		"merge_quality": {
+			"total_merge_attempts": total_merge_attempts,
+			"successful_merges": successful_merges,
+			"merge_failures": merge_failures,
+			"retries": retries,
+			"reverts": reverts,
+			"merge_quality_score": merge_quality_score,
+		},
 		"timeline": timeline,
 	}
 

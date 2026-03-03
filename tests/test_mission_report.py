@@ -212,3 +212,174 @@ class TestGenerateReport:
 		assert report["timeline"][2]["event_type"] == "merged"
 
 		db.close()
+
+
+class TestMergeQuality:
+	"""Tests for the merge_quality section of the mission report."""
+
+	def _insert_event(
+		self,
+		db: Database,
+		mission: Mission,
+		epoch: Epoch,
+		unit_id: str,
+		event_type: str,
+		ts: str,
+	) -> None:
+		db.insert_unit_event(UnitEvent(
+			mission_id=mission.id,
+			epoch_id=epoch.id,
+			work_unit_id=unit_id,
+			event_type=event_type,
+			timestamp=ts,
+		))
+
+	def test_perfect_merge_quality(self, tmp_path: Path) -> None:
+		"""All merges succeed -- score should be 1.0."""
+		db = Database()
+		config = _make_config(tmp_path)
+		mission, epoch, plan = _seed_mission(db)
+
+		for i in range(3):
+			uid = f"u{i}"
+			wu = WorkUnit(id=uid, plan_id=plan.id, title=f"task {uid}", status="completed")
+			wu.epoch_id = epoch.id
+			db.insert_work_unit(wu)
+			self._insert_event(db, mission, epoch, uid, "dispatched", f"2026-01-01T00:0{i}:00+00:00")
+			self._insert_event(db, mission, epoch, uid, "merged", f"2026-01-01T00:0{i}:30+00:00")
+
+		result = ContinuousMissionResult(mission_id=mission.id, objective=mission.objective)
+		report = generate_mission_report(result, mission, db, config)
+
+		mq = report["merge_quality"]
+		assert mq["total_merge_attempts"] == 3
+		assert mq["successful_merges"] == 3
+		assert mq["merge_failures"] == 0
+		assert mq["retries"] == 0
+		assert mq["reverts"] == 0
+		assert mq["merge_quality_score"] == 1.0
+
+		db.close()
+
+	def test_failures_and_reverts(self, tmp_path: Path) -> None:
+		"""Mix of merges, failures, retries, and reverts."""
+		db = Database()
+		config = _make_config(tmp_path)
+		mission, epoch, plan = _seed_mission(db)
+
+		# u0: dispatched -> merged (success)
+		wu0 = WorkUnit(id="u0", plan_id=plan.id, title="task u0", status="completed")
+		wu0.epoch_id = epoch.id
+		db.insert_work_unit(wu0)
+		self._insert_event(db, mission, epoch, "u0", "dispatched", "2026-01-01T00:00:00+00:00")
+		self._insert_event(db, mission, epoch, "u0", "merged", "2026-01-01T00:01:00+00:00")
+
+		# u1: dispatched -> merge_failed -> retry_queued -> merged (success on retry)
+		wu1 = WorkUnit(id="u1", plan_id=plan.id, title="task u1", status="completed")
+		wu1.epoch_id = epoch.id
+		db.insert_work_unit(wu1)
+		self._insert_event(db, mission, epoch, "u1", "dispatched", "2026-01-01T00:02:00+00:00")
+		self._insert_event(db, mission, epoch, "u1", "merge_failed", "2026-01-01T00:03:00+00:00")
+		self._insert_event(db, mission, epoch, "u1", "retry_queued", "2026-01-01T00:03:30+00:00")
+		self._insert_event(db, mission, epoch, "u1", "merged", "2026-01-01T00:04:00+00:00")
+
+		# u2: dispatched -> merged -> reverted
+		wu2 = WorkUnit(id="u2", plan_id=plan.id, title="task u2", status="reverted")
+		wu2.epoch_id = epoch.id
+		db.insert_work_unit(wu2)
+		self._insert_event(db, mission, epoch, "u2", "dispatched", "2026-01-01T00:05:00+00:00")
+		self._insert_event(db, mission, epoch, "u2", "merged", "2026-01-01T00:06:00+00:00")
+		self._insert_event(db, mission, epoch, "u2", "revert", "2026-01-01T00:07:00+00:00")
+
+		result = ContinuousMissionResult(mission_id=mission.id, objective=mission.objective)
+		report = generate_mission_report(result, mission, db, config)
+
+		mq = report["merge_quality"]
+		# merged events: u0, u1, u2 = 3 successful
+		assert mq["successful_merges"] == 3
+		# merge_failed events: u1 = 1
+		assert mq["merge_failures"] == 1
+		# total attempts = 3 + 1 = 4
+		assert mq["total_merge_attempts"] == 4
+		assert mq["retries"] == 1
+		assert mq["reverts"] == 1
+		# score = 3/4 = 0.75
+		assert mq["merge_quality_score"] == 0.75
+
+		db.close()
+
+	def test_empty_timeline(self, tmp_path: Path) -> None:
+		"""No events at all -- score should be None."""
+		db = Database()
+		config = _make_config(tmp_path)
+		mission = Mission(objective="empty", status="running")
+		db.insert_mission(mission)
+
+		result = ContinuousMissionResult(mission_id=mission.id, objective=mission.objective)
+		report = generate_mission_report(result, mission, db, config)
+
+		mq = report["merge_quality"]
+		assert mq["total_merge_attempts"] == 0
+		assert mq["successful_merges"] == 0
+		assert mq["merge_failures"] == 0
+		assert mq["retries"] == 0
+		assert mq["reverts"] == 0
+		assert mq["merge_quality_score"] is None
+
+		db.close()
+
+	def test_all_failures_score_zero(self, tmp_path: Path) -> None:
+		"""All merge attempts fail -- score should be 0.0."""
+		db = Database()
+		config = _make_config(tmp_path)
+		mission, epoch, plan = _seed_mission(db)
+
+		for i in range(2):
+			uid = f"u{i}"
+			wu = WorkUnit(id=uid, plan_id=plan.id, title=f"task {uid}", status="failed")
+			wu.epoch_id = epoch.id
+			db.insert_work_unit(wu)
+			self._insert_event(db, mission, epoch, uid, "dispatched", f"2026-01-01T00:0{i}:00+00:00")
+			self._insert_event(db, mission, epoch, uid, "merge_failed", f"2026-01-01T00:0{i}:30+00:00")
+
+		result = ContinuousMissionResult(mission_id=mission.id, objective=mission.objective)
+		report = generate_mission_report(result, mission, db, config)
+
+		mq = report["merge_quality"]
+		assert mq["total_merge_attempts"] == 2
+		assert mq["successful_merges"] == 0
+		assert mq["merge_failures"] == 2
+		assert mq["merge_quality_score"] == 0.0
+
+		db.close()
+
+	def test_basic_report_includes_merge_quality(self, tmp_path: Path) -> None:
+		"""The existing basic test scenario should include merge_quality."""
+		db = Database()
+		config = _make_config(tmp_path)
+		mission, epoch, plan = _seed_mission(db)
+
+		wu = WorkUnit(id="u001", plan_id=plan.id, title="task u001", status="completed")
+		wu.epoch_id = epoch.id
+		db.insert_work_unit(wu)
+		db.insert_unit_event(UnitEvent(
+			mission_id=mission.id, epoch_id=epoch.id,
+			work_unit_id="u001", event_type="dispatched",
+			timestamp="2026-01-01T00:00:00+00:00",
+		))
+		db.insert_unit_event(UnitEvent(
+			mission_id=mission.id, epoch_id=epoch.id,
+			work_unit_id="u001", event_type="merged",
+			timestamp="2026-01-01T00:05:00+00:00",
+		))
+
+		result = ContinuousMissionResult(mission_id=mission.id, objective=mission.objective)
+		report = generate_mission_report(result, mission, db, config)
+
+		assert "merge_quality" in report
+		mq = report["merge_quality"]
+		assert mq["successful_merges"] == 1
+		assert mq["total_merge_attempts"] == 1
+		assert mq["merge_quality_score"] == 1.0
+
+		db.close()
