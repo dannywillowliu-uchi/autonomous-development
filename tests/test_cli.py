@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from mission_control.cli import (
 	build_parser,
+	cmd_diagnose,
 	cmd_init,
 	cmd_live,
 	cmd_mission,
@@ -322,3 +323,134 @@ class TestCmdTrace:
 		assert result == 0
 		out = capsys.readouterr().out  # type: ignore[union-attr]
 		assert "No trace events" in out
+
+
+# Minimal valid TOML that load_config can parse
+_DIAG_TOML = '[target]\nname = "test"\npath = "/tmp/test"\n'
+
+
+class TestCmdDiagnose:
+	def _setup_healthy(self, tmp_path: Path) -> Path:
+		"""Create a config + DB with a completed mission and no problems."""
+		config_file = tmp_path / "mission-control.toml"
+		config_file.write_text(_DIAG_TOML)
+		db_path = tmp_path / "mission-control.db"
+		db = Database(db_path)
+		mission = Mission(id="m1", objective="Test", status="completed", total_cost_usd=3.50)
+		db.insert_mission(mission)
+		db.close()
+		return config_file
+
+	def test_healthy_state_all_ok(self, tmp_path: Path, capsys: object) -> None:
+		"""Healthy installation reports all OK."""
+		config_file = self._setup_healthy(tmp_path)
+		parser = build_parser()
+		args = parser.parse_args(["diagnose", "--config", str(config_file)])
+		result = cmd_diagnose(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "Overall: OK" in out
+		assert "[   OK] Database" in out
+		assert "[   OK] Cost Summary" in out
+
+	def test_stale_wal_detected(self, tmp_path: Path, capsys: object) -> None:
+		"""Stale WAL file triggers WARN."""
+		config_file = self._setup_healthy(tmp_path)
+		# Create a non-empty WAL file to simulate stale state
+		wal_file = tmp_path / "mission-control.db-wal"
+		wal_file.write_bytes(b"\x00" * 100)
+		parser = build_parser()
+		args = parser.parse_args(["diagnose", "--config", str(config_file)])
+		result = cmd_diagnose(args)
+		assert result == 0  # WARN doesn't cause exit 1
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "WARN" in out
+		assert "WAL/SHM" in out
+
+	def test_orphaned_running_units(self, tmp_path: Path, capsys: object) -> None:
+		"""Orphaned running work units trigger WARN."""
+		config_file = tmp_path / "mission-control.toml"
+		config_file.write_text(_DIAG_TOML)
+		db_path = tmp_path / "mission-control.db"
+		db = Database(db_path)
+		mission = Mission(id="m1", objective="Test", status="completed")
+		db.insert_mission(mission)
+		epoch = Epoch(id="ep1", mission_id="m1", number=1)
+		db.insert_epoch(epoch)
+		plan = Plan(id="p1", objective="Test")
+		db.insert_plan(plan)
+		# Create a work unit stuck in 'running' status
+		wu = WorkUnit(id="wu1", plan_id="p1", title="Stuck unit", status="running", epoch_id="ep1")
+		db.insert_work_unit(wu)
+		db.close()
+		parser = build_parser()
+		args = parser.parse_args(["diagnose", "--config", str(config_file)])
+		result = cmd_diagnose(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "Orphaned running work units: 1" in out
+		assert "WARN" in out
+
+	def test_missing_config_handled(self, tmp_path: Path, capsys: object) -> None:
+		"""Missing config file reports ERROR gracefully."""
+		parser = build_parser()
+		missing = str(tmp_path / "nonexistent.toml")
+		args = parser.parse_args(["diagnose", "--config", missing])
+		result = cmd_diagnose(args)
+		assert result == 1
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "ERROR" in out
+		assert "Config" in out
+
+	def test_cost_summary_formatting(self, tmp_path: Path, capsys: object) -> None:
+		"""Cost summary shows mission count and total cost."""
+		config_file = tmp_path / "mission-control.toml"
+		config_file.write_text(_DIAG_TOML)
+		db_path = tmp_path / "mission-control.db"
+		db = Database(db_path)
+		db.insert_mission(Mission(id="m1", objective="A", status="completed", total_cost_usd=5.25))
+		db.insert_mission(Mission(id="m2", objective="B", status="completed", total_cost_usd=3.75))
+		db.close()
+		parser = build_parser()
+		args = parser.parse_args(["diagnose", "--config", str(config_file)])
+		result = cmd_diagnose(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "Recent missions: 2" in out
+		assert "$9.00" in out
+
+	def test_json_output(self, tmp_path: Path, capsys: object) -> None:
+		"""--json flag produces valid JSON output."""
+		import json
+
+		config_file = self._setup_healthy(tmp_path)
+		parser = build_parser()
+		args = parser.parse_args(["diagnose", "--config", str(config_file), "--json"])
+		result = cmd_diagnose(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		data = json.loads(out)
+		assert "checks" in data
+		assert len(data["checks"]) == 4
+		names = {c["name"] for c in data["checks"]}
+		assert "Database" in names
+		assert "Config" in names
+		assert "Cost Summary" in names
+
+	def test_no_db_still_reports(self, tmp_path: Path, capsys: object) -> None:
+		"""When DB doesn't exist, diagnose still runs and reports WARN for DB."""
+		config_file = tmp_path / "mission-control.toml"
+		config_file.write_text(_DIAG_TOML)
+		parser = build_parser()
+		args = parser.parse_args(["diagnose", "--config", str(config_file)])
+		result = cmd_diagnose(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "Database file not found" in out
+
+	def test_diagnose_arg_parsing(self) -> None:
+		"""Diagnose subcommand parses correctly."""
+		parser = build_parser()
+		args = parser.parse_args(["diagnose"])
+		assert args.command == "diagnose"
+		assert args.json_output is False
