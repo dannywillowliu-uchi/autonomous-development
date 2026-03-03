@@ -379,17 +379,31 @@ Use these when you need to understand unfamiliar APIs, find implementation examp
 
 ## Guidelines
 - No TODOs, no partial implementations
-- Modify any files necessary to complete the task well, including creating new files if needed
+- ALWAYS read a file before editing it. Do not modify files you have not read in this session.
+- Only modify files listed in files_hint unless the task explicitly requires creating new files. \
+If you must touch other files, document why in your MC_RESULT concerns field.
 - Do NOT run `pip install`, `uv pip install`, or modify the Python environment -- it is pre-configured via symlink
 - Commit when done or explain why blocked
+
+## Anti-Patterns (NEVER DO)
+- Do NOT over-engineer. Do NOT add unnecessary abstractions, extra config options, or speculative features.
+- Do NOT add docstrings/comments to code you did not change. Keep changes minimal and focused.
+- Do NOT refactor surrounding code that is not part of the task.
+- Do NOT add type hints, imports, or formatting changes to lines you did not need to modify.
 
 ## Git Rules
 - You are on branch `{branch_name}`. Commit ONLY to this branch.
 - Do NOT run `git push` under any circumstances. The orchestrator handles pushing.
 - Do NOT switch branches. Stay on `{branch_name}`.
 
-## Verification
-Run: {verification_command}
+## Pre-Commit Checklist
+Before committing, complete ALL of the following in order:
+1. Run verification: {verification_command}
+2. Confirm all tests pass (zero failures).
+3. Confirm no lint errors.
+4. If acceptance criteria is provided above, run the acceptance criteria command and confirm it exits 0.
+5. Only after steps 1-4 pass, create your commit.
+If any step fails, fix the issue and re-run from step 1. Do NOT commit with failing checks.
 
 ## Context
 {context_block}
@@ -697,6 +711,7 @@ class WorkerAgent:
 		cmd = build_claude_cmd(
 			self.config, model=model, budget=budget,
 			permission_mode="bypassPermissions", prompt=prompt,
+			setting_sources="project",
 		)
 
 		handle = await self.backend.spawn(

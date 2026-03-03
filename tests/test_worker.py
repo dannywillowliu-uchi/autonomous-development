@@ -119,13 +119,65 @@ class TestConsolidationConstraint:
 		"""Mission worker prompt allows creating new files."""
 		unit = WorkUnit(title="Add feature", description="Add something")
 		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
-		assert "creating new files if needed" in prompt
+		assert "creating new files" in prompt
 
 	def test_editor_prompt_allows_new_files(self, config: MissionConfig) -> None:
 		"""Editor prompt allows creating new files."""
 		unit = WorkUnit(title="Add feature", description="Add something")
 		prompt = render_editor_prompt(unit, config, "/tmp/ws", architect_output="Change X")
 		assert "creating new files if needed" in prompt
+
+
+class TestMissionPromptHardening:
+	"""Tests for hardened mission worker prompt sections (revert-rate reduction)."""
+
+	def test_read_before_edit_instruction(self, config: MissionConfig) -> None:
+		"""Prompt tells workers to read files before editing."""
+		unit = WorkUnit(title="Fix bug", description="Fix something")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "read a file before editing it" in prompt.lower()
+
+	def test_scope_guardrail_files_hint(self, config: MissionConfig) -> None:
+		"""Prompt constrains modifications to files_hint unless task requires new files."""
+		unit = WorkUnit(title="Fix bug", description="Fix something", files_hint="src/foo.py")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "Only modify files listed in files_hint" in prompt
+		assert "MC_RESULT concerns" in prompt
+
+	def test_structured_pre_commit_checklist(self, config: MissionConfig) -> None:
+		"""Prompt includes structured pre-commit checklist instead of bare 'Run:' directive."""
+		unit = WorkUnit(title="Fix bug", description="Fix something")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "## Pre-Commit Checklist" in prompt
+		assert "Run verification:" in prompt
+		assert "Confirm all tests pass" in prompt
+		assert "Confirm no lint errors" in prompt
+		assert "Only after steps 1-4 pass" in prompt
+
+	def test_anti_patterns_section(self, config: MissionConfig) -> None:
+		"""Prompt includes anti-patterns section."""
+		unit = WorkUnit(title="Fix bug", description="Fix something")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "## Anti-Patterns (NEVER DO)" in prompt
+		assert "Do NOT over-engineer" in prompt
+		assert "Do NOT add docstrings/comments to code you did not change" in prompt
+		assert "Do NOT refactor surrounding code" in prompt
+
+	def test_acceptance_criteria_in_checklist(self, config: MissionConfig) -> None:
+		"""When acceptance_criteria is set, the pre-commit checklist includes it."""
+		unit = WorkUnit(
+			title="Fix bug", description="Fix something",
+			acceptance_criteria="pytest tests/test_foo.py -q",
+		)
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "acceptance criteria" in prompt.lower()
+		assert "exits 0" in prompt
+
+	def test_no_bare_run_directive(self, config: MissionConfig) -> None:
+		"""Mission prompt should not have a bare '## Verification\\nRun:' section."""
+		unit = WorkUnit(title="Fix bug", description="Fix something")
+		prompt = render_mission_worker_prompt(unit, config, "/tmp/ws", "mc/unit-x")
+		assert "## Verification\nRun:" not in prompt
 
 
 class TestResearchPromptSelection:
