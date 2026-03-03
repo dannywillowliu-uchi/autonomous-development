@@ -13,6 +13,7 @@ from typing import Any
 
 from mission_control.config import MissionConfig, load_config, validate_config
 from mission_control.db import Database
+from mission_control.diagnose import run_diagnose
 from mission_control.models import Mission
 
 DEFAULT_CONFIG = "mission-control.toml"
@@ -112,6 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
 	trace.add_argument("--worker", default=None, help="Filter by worker ID")
 	trace.add_argument("--type", default=None, dest="event_type", help="Filter by event type")
 	trace.add_argument("--json", action="store_true", dest="json_output", help="Output raw JSON instead of formatted")
+
+	# mc diagnose
+	diag = sub.add_parser("diagnose", help="Run operational health checks")
+	diag.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	diag.add_argument("--json", action="store_true", dest="json_output", help="JSON output")
 
 	# mc validate-config
 	vc = sub.add_parser("validate-config", help="Validate config file semantically")
@@ -903,6 +909,39 @@ def cmd_trace(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_diagnose(args: argparse.Namespace) -> int:
+	"""Run operational health checks on the mission-control installation."""
+	import json as json_mod
+
+	config_path = _find_config_path(args.config)
+	db_path = _get_db_path(args.config)
+	report = run_diagnose(config_path, db_path)
+
+	if args.json_output:
+		print(json_mod.dumps(report, indent=2))
+		return 0
+
+	for section in report["checks"]:
+		status = section["status"]
+		tag = {"OK": "OK", "WARN": "WARN", "ERROR": "ERROR"}.get(status, status)
+		print(f"[{tag:>5}] {section['name']}")
+		for detail in section.get("details", []):
+			print(f"         {detail}")
+		if section.get("remediation"):
+			print(f"         -> {section['remediation']}")
+
+	print()
+	statuses = [c["status"] for c in report["checks"]]
+	if "ERROR" in statuses:
+		print("Overall: ERROR")
+		return 1
+	elif "WARN" in statuses:
+		print("Overall: WARN")
+	else:
+		print("Overall: OK")
+	return 0
+
+
 def cmd_intel(args: argparse.Namespace) -> int:
 	"""Scan external sources for AI/agent ecosystem intelligence."""
 	import dataclasses
@@ -949,6 +988,7 @@ COMMANDS = {
 	"summary": cmd_summary,
 	"trace": cmd_trace,
 	"intel": cmd_intel,
+	"diagnose": cmd_diagnose,
 
 	"register": cmd_register,
 	"unregister": cmd_unregister,
