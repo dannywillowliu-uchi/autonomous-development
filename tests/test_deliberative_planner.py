@@ -76,14 +76,14 @@ def _mock_units(count: int = 2) -> list[WorkUnit]:
 	]
 
 
-def _mock_plan_round(units):
+def _mock_plan_round(units, cost: float = 0.10):
 	"""Create an AsyncMock for plan_round returning given units."""
 	mock_plan = Plan(id="p1", objective="test")
 	mock_plan.status = "active"
 	mock_plan.total_units = len(units)
 
 	async def side_effect(**kwargs):
-		return mock_plan, list(units)
+		return mock_plan, list(units), cost
 	return side_effect
 
 
@@ -106,7 +106,7 @@ class TestDeliberationLoop:
 			patch.object(
 				planner._critic, "review_plan",
 				new_callable=AsyncMock,
-				return_value=_sufficient_finding(),
+				return_value=(_sufficient_finding(), 0.05),
 			),
 			patch.object(
 				planner, "_gather_project_context",
@@ -136,12 +136,12 @@ class TestDeliberationLoop:
 		# Round 1: planner proposes -> critic rejects
 		# Round 2: planner refines -> critic approves
 		plan_results = [
-			(mock_plan, initial_units),
-			(mock_plan, refined_units),
+			(mock_plan, initial_units, 0.10),
+			(mock_plan, refined_units, 0.10),
 		]
 		review_results = [
-			_refinement_finding(),
-			_sufficient_finding(),
+			(_refinement_finding(), 0.05),
+			(_sufficient_finding(), 0.05),
 		]
 
 		with (
@@ -184,12 +184,12 @@ class TestDeliberationLoop:
 			patch.object(
 				planner._planner, "plan_round",
 				new_callable=AsyncMock,
-				return_value=(mock_plan, units),
+				return_value=(mock_plan, units, 0.10),
 			),
 			patch.object(
 				planner._critic, "review_plan",
 				new_callable=AsyncMock,
-				return_value=_refinement_finding(),
+				return_value=(_refinement_finding(), 0.05),
 			),
 			patch.object(
 				planner, "_gather_project_context",
@@ -217,7 +217,7 @@ class TestDeliberationLoop:
 			patch.object(
 				planner._planner, "plan_round",
 				new_callable=AsyncMock,
-				return_value=(mock_plan, []),
+				return_value=(mock_plan, [], 0.0),
 			),
 			patch.object(
 				planner._critic, "review_plan",
@@ -250,12 +250,12 @@ class TestDeliberationLoop:
 			patch.object(
 				planner._planner, "plan_round",
 				new_callable=AsyncMock,
-				return_value=(mock_plan, units),
+				return_value=(mock_plan, units, 0.10),
 			),
 			patch.object(
 				planner._critic, "review_plan",
 				new_callable=AsyncMock,
-				return_value=_sufficient_finding(),
+				return_value=(_sufficient_finding(), 0.05),
 			),
 			patch.object(
 				planner, "_gather_project_context",
@@ -284,11 +284,11 @@ class TestDeliberationLoop:
 
 		async def track_plan_round(**kwargs):
 			call_order.append("planner")
-			return mock_plan, units
+			return mock_plan, units, 0.10
 
 		async def track_review(*args, **kwargs):
 			call_order.append("critic_review")
-			return _sufficient_finding()
+			return _sufficient_finding(), 0.05
 
 		with (
 			patch.object(
@@ -376,7 +376,7 @@ class TestProposeNextObjective:
 			patch.object(
 				planner._critic, "propose_next",
 				new_callable=AsyncMock,
-				return_value=chaining_finding,
+				return_value=(chaining_finding, 0.05),
 			),
 		):
 			objective, rationale = await planner.propose_next_objective(mission, mock_result)
@@ -399,12 +399,12 @@ class TestEpochCounting:
 			patch.object(
 				planner._planner, "plan_round",
 				new_callable=AsyncMock,
-				return_value=(mock_plan, units),
+				return_value=(mock_plan, units, 0.10),
 			),
 			patch.object(
 				planner._critic, "review_plan",
 				new_callable=AsyncMock,
-				return_value=_sufficient_finding(),
+				return_value=(_sufficient_finding(), 0.05),
 			),
 			patch.object(
 				planner, "_gather_project_context",

@@ -158,13 +158,15 @@ class DeliberativePlanner:
 			)
 
 		max_rounds = self._config.deliberation.max_rounds
+		total_cost = 0.0
 
 		# Round 1: Planner proposes with full context + web search
-		plan, units = await self._planner.plan_round(
+		plan, units, planner_cost = await self._planner.plan_round(
 			objective=mission.objective,
 			round_number=self._epoch_counter,
 			feedback_context=enriched_feedback,
 		)
+		total_cost += planner_cost
 		units = resolve_file_overlaps(units)
 		plan.status = "active"
 		plan.total_units = len(units)
@@ -172,9 +174,10 @@ class DeliberativePlanner:
 		# Critic does feasibility review
 		finding = CriticFinding(verdict="sufficient")
 		if units:
-			finding = await self._critic.review_plan(
+			finding, critic_cost = await self._critic.review_plan(
 				mission.objective, units, CriticFinding(), batch_signals,
 			)
+			total_cost += critic_cost
 
 		# Rounds 2-N: If critic says needs_refinement, planner refines -> critic re-checks
 		for round_num in range(2, max_rounds + 1):
@@ -210,32 +213,35 @@ class DeliberativePlanner:
 			)
 			refinement_context += f"\n\n## Previous Plan (needs refinement)\n{current_units_text}"
 
-			plan, units = await self._planner.plan_round(
+			plan, units, planner_cost = await self._planner.plan_round(
 				objective=mission.objective,
 				round_number=self._epoch_counter,
 				feedback_context=refinement_context,
 			)
+			total_cost += planner_cost
 			units = resolve_file_overlaps(units)
 			plan.status = "active"
 			plan.total_units = len(units)
 
 			# Critic re-checks
 			if units:
-				finding = await self._critic.review_plan(
+				finding, critic_cost = await self._critic.review_plan(
 					mission.objective, units, finding, batch_signals,
 				)
+				total_cost += critic_cost
 
 		# Store knowledge from critic findings
 		self._store_knowledge(finding, mission)
 
 		epoch.units_planned = len(units)
+		epoch.planner_cost_usd = total_cost
 
 		# Limit to max_units
 		units = units[:max_units]
 
 		log.info(
-			"Deliberation complete: epoch=%d, units=%d",
-			self._epoch_counter, len(units),
+			"Deliberation complete: epoch=%d, units=%d, planner_cost=$%.2f",
+			self._epoch_counter, len(units), total_cost,
 		)
 
 		return plan, units, epoch
@@ -251,7 +257,7 @@ class DeliberativePlanner:
 			Tuple of (objective, rationale).
 		"""
 		context = await self._critic.gather_context_async(mission)
-		finding = await self._critic.propose_next(mission, result, context)
+		finding, _cost = await self._critic.propose_next(mission, result, context)
 		return finding.proposed_objective, finding.strategy_text
 
 	def _write_strategy(self, strategy: str) -> None:

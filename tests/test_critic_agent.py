@@ -192,11 +192,12 @@ class TestCriticReviewPlan:
 		verdict_data = {"verdict": "sufficient", "confidence": 0.9, "findings": ["plan looks good"]}
 		fake_output = f"{CRITIC_RESULT_MARKER}{json.dumps(verdict_data)}"
 
-		with patch.object(agent, "_invoke_llm", new_callable=AsyncMock, return_value=fake_output):
-			result = await agent.review_plan("Build API", units, prev)
+		with patch.object(agent, "_invoke_llm", new_callable=AsyncMock, return_value=(fake_output, 0.50)):
+			result, cost = await agent.review_plan("Build API", units, prev)
 
 		assert result.verdict == "sufficient"
 		assert result.confidence == 0.9
+		assert cost == 0.50
 
 	@pytest.mark.asyncio
 	async def test_review_needs_refinement(self, tmp_path: Path) -> None:
@@ -208,8 +209,8 @@ class TestCriticReviewPlan:
 		verdict_data = {"verdict": "needs_refinement", "gaps": ["too coarse-grained"]}
 		fake_output = f"{CRITIC_RESULT_MARKER}{json.dumps(verdict_data)}"
 
-		with patch.object(agent, "_invoke_llm", new_callable=AsyncMock, return_value=fake_output):
-			result = await agent.review_plan("Build API", units, prev)
+		with patch.object(agent, "_invoke_llm", new_callable=AsyncMock, return_value=(fake_output, 0.50)):
+			result, _cost = await agent.review_plan("Build API", units, prev)
 
 		assert result.verdict == "needs_refinement"
 		assert "too coarse-grained" in result.gaps
@@ -225,7 +226,7 @@ class TestCriticReviewPlan:
 		fake_output = f'{CRITIC_RESULT_MARKER}{json.dumps({"verdict": "sufficient"})}'
 
 		with patch.object(
-			agent, "_invoke_llm", new_callable=AsyncMock, return_value=fake_output,
+			agent, "_invoke_llm", new_callable=AsyncMock, return_value=(fake_output, 0.50),
 		) as mock_llm:
 			await agent.review_plan("Build API", units, prev)
 
@@ -259,9 +260,10 @@ class TestCriticProposeNext:
 		fake_output = f"{CRITIC_RESULT_MARKER}{json.dumps(verdict_data)}"
 
 		with (
-			patch.object(agent, "_invoke_llm", new_callable=AsyncMock, return_value=fake_output),
+			patch.object(agent, "_invoke_llm", new_callable=AsyncMock, return_value=(fake_output, 0.50)),
 			patch("mission_control.critic_agent.get_git_log", new_callable=AsyncMock, return_value=""),
 		):
-			result = await agent.propose_next(mission, mock_result, "context")
+			result, cost = await agent.propose_next(mission, mock_result, "context")
 
 		assert result.proposed_objective == "Add auth system"
+		assert cost == 0.50

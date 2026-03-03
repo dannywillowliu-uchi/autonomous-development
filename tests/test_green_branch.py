@@ -2467,7 +2467,7 @@ class TestLockedFilesInPlannerPrompt:
 		async def mock_plan_round(**kwargs):
 			captured_kwargs.update(kwargs)
 			plan = Plan(objective="test")
-			return plan, []
+			return plan, [], 0.0
 
 		planner._inner.plan_round = mock_plan_round  # type: ignore[assignment]
 

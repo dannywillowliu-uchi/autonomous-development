@@ -63,7 +63,7 @@ class ContinuousPlanner:
 				else ("## Accumulated Knowledge\n" + knowledge_context)
 			)
 
-		plan, units = await self._inner.plan_round(
+		plan, units, planner_cost = await self._inner.plan_round(
 			objective=mission.objective,
 			round_number=self._epoch_count,
 			feedback_context=enriched_context,
@@ -76,6 +76,7 @@ class ContinuousPlanner:
 		plan.status = "active"
 		plan.total_units = len(units)
 		epoch.units_planned = len(units)
+		epoch.planner_cost_usd = planner_cost
 
 		# Limit to max_units
 		units = units[:max_units]
