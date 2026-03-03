@@ -11,7 +11,9 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from mission_control.config import MissionConfig
 from mission_control.db import Database
@@ -180,3 +182,52 @@ async def get_intel_context(config: MissionConfig, ttl_hours: float = 6.0) -> st
 	except Exception:
 		log.debug("get_intel_context failed", exc_info=True)
 		return ""
+
+
+# ---------------------------------------------------------------------------
+# Verification failure context
+# ---------------------------------------------------------------------------
+
+_PYTEST_FAILED_RE = re.compile(r"FAILED\s+(\S+)\s+-\s+(.+)")
+
+
+@dataclasses.dataclass
+class VerificationFailureSummary:
+	"""Structured summary of pytest failures from a mission report."""
+
+	passed: bool
+	failures: list[tuple[str, str]]
+
+
+def get_verification_failures(db: Database, project_path: Path) -> VerificationFailureSummary:
+	"""Read the most recent mission_report.json and extract FAILED test lines.
+
+	Returns a summary with pass/fail status and a list of (test_name, short_error)
+	tuples.  If no report exists or verification passed, returns an empty summary.
+	"""
+	report_path = project_path / "mission_report.json"
+	try:
+		data = json.loads(report_path.read_text())
+	except (FileNotFoundError, json.JSONDecodeError):
+		return VerificationFailureSummary(passed=True, failures=[])
+
+	passed = data.get("verification_passed", True)
+	if passed:
+		return VerificationFailureSummary(passed=True, failures=[])
+
+	output = data.get("verification_output", "")
+	failures: list[tuple[str, str]] = []
+	for match in _PYTEST_FAILED_RE.finditer(output):
+		failures.append((match.group(1), match.group(2).strip()))
+
+	return VerificationFailureSummary(passed=False, failures=failures)
+
+
+def format_verification_failures(summary: VerificationFailureSummary) -> str:
+	"""Render a VerificationFailureSummary as a markdown section for planner injection."""
+	if summary.passed or not summary.failures:
+		return ""
+	lines = ["### Previous Verification Failures"]
+	for test_name, error in summary.failures:
+		lines.append(f"- `{test_name}`: {error}")
+	return "\n".join(lines)
