@@ -162,6 +162,60 @@ def _clamp_score(value: Any) -> int:
 		return 5
 
 
+_DIMENSIONS = ("alignment", "approach", "test_quality")
+_DIMENSION_ATTRS = {"alignment": "alignment_score", "approach": "approach_score", "test_quality": "test_score"}
+
+
+def _dimension_averages(reviews: list[UnitReview]) -> dict[str, float]:
+	"""Compute per-dimension averages across a list of reviews."""
+	if not reviews:
+		return {d: 0.0 for d in _DIMENSIONS}
+	return {
+		d: sum(getattr(r, _DIMENSION_ATTRS[d]) for r in reviews) / len(reviews)
+		for d in _DIMENSIONS
+	}
+
+
+def compute_review_trend(reviews: list[UnitReview], window: int = 3) -> dict:
+	"""Compute quality trend by comparing the last *window* reviews to the overall average.
+
+	Returns dict with keys: overall_avg, recent_avg, trend, worst_dimension.
+	"""
+	if not reviews:
+		return {"overall_avg": 0.0, "recent_avg": 0.0, "trend": "stable", "worst_dimension": "alignment"}
+
+	overall = _dimension_averages(reviews)
+	overall_avg = round(sum(overall.values()) / len(overall), 2)
+
+	recent = reviews[-window:]
+	recent_avgs = _dimension_averages(recent)
+	recent_avg = round(sum(recent_avgs.values()) / len(recent_avgs), 2)
+
+	if recent_avg > overall_avg + 0.5:
+		trend = "improving"
+	elif recent_avg < overall_avg - 0.5:
+		trend = "declining"
+	else:
+		trend = "stable"
+
+	worst_dimension = min(recent_avgs, key=lambda d: recent_avgs[d])
+
+	return {
+		"overall_avg": overall_avg,
+		"recent_avg": recent_avg,
+		"trend": trend,
+		"worst_dimension": worst_dimension,
+	}
+
+
+def is_quality_declining(reviews: list[UnitReview], window: int = 3, threshold: float = 1.5) -> bool:
+	"""Return True if the recent window average is more than *threshold* below the overall average."""
+	if not reviews:
+		return False
+	trend = compute_review_trend(reviews, window=window)
+	return trend["overall_avg"] - trend["recent_avg"] > threshold
+
+
 class DiffReviewer:
 	"""Reviews merged diffs via Claude subprocess."""
 
