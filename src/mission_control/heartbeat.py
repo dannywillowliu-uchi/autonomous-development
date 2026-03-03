@@ -3,12 +3,16 @@
 Checks at regular intervals whether the mission is making progress
 (new merges since last check). Sends Telegram alerts and can trigger
 a stall stop after consecutive idle heartbeats.
+
+Includes cost-aware monitoring: tracks spending rate over a sliding
+window and projects budget exhaustion time.
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -19,11 +23,14 @@ logger = logging.getLogger(__name__)
 
 
 class Heartbeat:
-	"""Time-based progress monitor.
+	"""Time-based progress monitor with cost awareness.
 
 	Every `interval` seconds, checks if the mission is making progress
 	by comparing recent merge activity. If no progress for `idle_threshold`
 	consecutive checks, returns a stall signal.
+
+	Tracks spending via a sliding window and alerts when the cost rate
+	exceeds a threshold or projected budget exhaustion is imminent.
 	"""
 
 	def __init__(
@@ -33,6 +40,9 @@ class Heartbeat:
 		notifier: TelegramNotifier | None = None,
 		db: Database | None = None,
 		enable_recovery: bool = True,
+		cost_window_seconds: float = 600.0,
+		cost_rate_threshold: float = 1.0,
+		exhaustion_warning_minutes: float = 10.0,
 	) -> None:
 		self._interval = interval
 		self._idle_threshold = idle_threshold
@@ -43,6 +53,81 @@ class Heartbeat:
 		self._last_merged_count: int = 0
 		self._consecutive_idle: int = 0
 		self._baseline_set: bool = False
+		# Cost tracking
+		self._cost_window_seconds = cost_window_seconds
+		self._cost_rate_threshold = cost_rate_threshold
+		self._exhaustion_warning_minutes = exhaustion_warning_minutes
+		self._cost_entries: deque[tuple[float, float]] = deque()
+
+	def _prune_cost_window(self, now: float | None = None) -> None:
+		"""Remove cost entries older than the sliding window."""
+		if now is None:
+			now = time.monotonic()
+		cutoff = now - self._cost_window_seconds
+		while self._cost_entries and self._cost_entries[0][0] < cutoff:
+			self._cost_entries.popleft()
+
+	def record_cost(self, amount_usd: float) -> None:
+		"""Record a cost event with the current timestamp."""
+		now = time.monotonic()
+		self._cost_entries.append((now, amount_usd))
+		self._prune_cost_window(now)
+
+	def get_cost_rate(self) -> float:
+		"""Return current spending rate in $/minute over the sliding window.
+
+		Returns 0.0 if there are fewer than 2 entries or no time span.
+		"""
+		now = time.monotonic()
+		self._prune_cost_window(now)
+		if len(self._cost_entries) < 2:
+			return 0.0
+		earliest_ts = self._cost_entries[0][0]
+		span_seconds = now - earliest_ts
+		if span_seconds <= 0:
+			return 0.0
+		total = sum(amount for _, amount in self._cost_entries)
+		return total / (span_seconds / 60.0)
+
+	def project_budget_exhaustion(self, remaining_budget: float) -> float | None:
+		"""Estimate minutes until budget is exhausted at the current rate.
+
+		Returns None if the rate is zero or cannot be calculated.
+		"""
+		rate = self.get_cost_rate()
+		if rate <= 0:
+			return None
+		return remaining_budget / rate
+
+	async def check_cost_health(self, remaining_budget: float | None = None) -> None:
+		"""Check cost rate and projected exhaustion, alert if unhealthy."""
+		rate = self.get_cost_rate()
+		if rate <= 0:
+			return
+
+		alerts: list[str] = []
+
+		if rate > self._cost_rate_threshold:
+			alerts.append(
+				f"Cost rate ${rate:.3f}/min exceeds threshold "
+				f"${self._cost_rate_threshold:.3f}/min"
+			)
+
+		if remaining_budget is not None:
+			minutes_left = self.project_budget_exhaustion(remaining_budget)
+			if minutes_left is not None and minutes_left < self._exhaustion_warning_minutes:
+				alerts.append(
+					f"Budget exhaustion in ~{minutes_left:.1f} min "
+					f"(${remaining_budget:.2f} remaining at ${rate:.3f}/min)"
+				)
+
+		if alerts and self._notifier:
+			msg = "Cost alert: " + "; ".join(alerts)
+			logger.warning(msg)
+			try:
+				await self._notifier.send(msg)
+			except Exception as exc:
+				logger.error("Failed to send cost alert: %s", exc)
 
 	async def recover(self) -> list[str]:
 		"""Attempt recovery when heartbeat detects idle stall.
@@ -117,12 +202,16 @@ class Heartbeat:
 		self,
 		total_merged: int,
 		total_failed: int,
+		remaining_budget: float | None = None,
 	) -> str:
 		"""Called from dispatch loop. Returns stop reason or empty string."""
 		now = time.monotonic()
 		if self._last_check_time > 0 and now - self._last_check_time < self._interval:
 			return ""
 		self._last_check_time = now
+
+		# Cost health check on every interval tick
+		await self.check_cost_health(remaining_budget)
 
 		# First check: just record baseline
 		if not self._baseline_set:
