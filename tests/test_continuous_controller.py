@@ -759,7 +759,7 @@ class TestRetry:
 
 		assert "[Retry attempt 2]" in unit.description  # attempt incremented from 1->2 inside _schedule_retry
 		assert "Import error in main.py" in unit.description
-		assert "Avoid the same mistake" in unit.description
+		assert "[Unknown failure]" in unit.description  # diagnose_failure provides targeted guidance
 		assert unit.description.startswith("Original description")
 
 	def test_retry_delay_exponential_backoff(self, config: MissionConfig, db: Database) -> None:
