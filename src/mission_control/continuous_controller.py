@@ -62,6 +62,9 @@ from mission_control.models import (
 from mission_control.notifier import TelegramNotifier
 from mission_control.overlap import _parse_files_hint, topological_layers
 from mission_control.planner_context import build_planner_context, update_mission_state
+from mission_control.torture_feedback import (
+	run_torture_suite, format_for_planner, format_for_feedback_context, store_torture_experience,
+)
 from mission_control.session import parse_mc_result
 from mission_control.snapshot import clear_snapshot_cache
 from mission_control.token_parser import compute_token_cost, parse_stream_json
@@ -75,6 +78,16 @@ from mission_control.worker import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _update_torture_baseline(project_path: str | Path) -> None:
+	"""Copy results.json to baseline.json to update the high-water mark."""
+	import shutil
+	results = Path(project_path) / "tests" / "torture" / "results.json"
+	baseline = Path(project_path) / "tests" / "torture" / "baseline.json"
+	if results.exists():
+		shutil.copy2(results, baseline)
+		logger.info("Updated torture baseline from results")
 
 
 class DynamicSemaphore:
@@ -249,6 +262,7 @@ class ContinuousController:
 		self._active_fixups: dict[str, asyncio.Task[None]] = {}
 		self._batch_analyzer: BatchAnalyzer = BatchAnalyzer(db)
 		self._current_strategy: str = ""
+		self._torture_feedback: str = ""
 		self._speculation_completions: dict[str, list[WorkerCompletion]] = {}
 		self._speculation_parent_units: dict[str, WorkUnit] = {}
 		self._merge_queue: list[_BatchMergeEntry] = []
@@ -1320,7 +1334,7 @@ class ContinuousController:
 			# Invalidate snapshot cache so the planner sees current signatures
 			clear_snapshot_cache()
 
-			state = build_planner_context(self.db, mission.id)
+			state = build_planner_context(self.db, mission.id, torture_context=self._torture_feedback)
 
 			knowledge_items = self.db.get_knowledge_for_mission(mission.id)
 			knowledge_context = ""
@@ -1418,11 +1432,33 @@ class ContinuousController:
 				except Exception as exc:
 					logger.warning("Batch push flush failed: %s", exc)
 
+			# Run torture test suite for correctness feedback
+			torture_results_str = None
+			torture_feedback_str = ""
+			try:
+				torture_results = await run_torture_suite(
+					str(self.config.target.resolved_path),
+					python_cmd=str(Path(self.config.target.resolved_path) / ".venv" / "bin" / "python"),
+				)
+				if torture_results is not None:
+					torture_results_str = format_for_planner(torture_results)
+					torture_feedback_str = format_for_feedback_context(torture_results)
+					# Store experiences for cross-mission learning
+					completed_units = [u for u in units if u.id in self._completed_unit_ids]
+					store_torture_experience(self.db, torture_results, epoch.id, completed_units)
+					# Update baseline if pass rate improved
+					if torture_results.delta_passed > 0 and torture_results.delta_failed == 0:
+						_update_torture_baseline(self.config.target.resolved_path)
+			except Exception as exc:
+				logger.warning("Torture feedback failed: %s", exc)
+			self._torture_feedback = torture_feedback_str
+
 			try:
 				update_mission_state(
 					self.db, mission, self.config, self._state_changelog,
 					degradation_status=self._degradation.get_status_dict(),
 					strategy=self._current_strategy,
+					torture_results=torture_results_str,
 				)
 			except Exception as exc:
 				logger.warning("Failed to update MISSION_STATE.md: %s", exc)
@@ -2871,8 +2907,9 @@ OBJECTIVE_CHECK:{{"met": false, "reason": "what still needs to be done"}}"""
 			# Pre-dispatch criteria validation
 			criteria_warnings: list[str] = []
 			if unit.acceptance_criteria:
-				ws_path = workspace if "::" not in workspace else workspace.split("::")[0]
-				criteria_issues = validate_criteria(unit.acceptance_criteria, Path(ws_path))
+				# Use the actual project root for path validation, not the worker workspace
+				project_path = Path(self.config.target.path) if self.config.target.path else Path(workspace if "::" not in workspace else workspace.split("::")[0])
+				criteria_issues = validate_criteria(unit.acceptance_criteria, project_path)
 				errors = [i for i in criteria_issues if i.severity == Severity.error]
 				if errors:
 					msg = "Criteria validation failed: " + "; ".join(e.message for e in errors)

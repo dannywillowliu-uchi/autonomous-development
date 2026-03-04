@@ -397,6 +397,15 @@ class SpeculationConfig:
 
 
 @dataclass
+class TortureConfig:
+	"""Configuration for torture test feedback loop."""
+
+	enabled: bool = True
+	runner_command: str = "tests/torture/runner.py"
+	baseline_path: str = "tests/torture/baseline.json"
+
+
+@dataclass
 class MCPRegistryConfig:
 	"""MCP tool registry settings."""
 
@@ -504,6 +513,7 @@ class MissionConfig:
 	prompt_evolution: PromptEvolutionConfig = field(default_factory=PromptEvolutionConfig)
 	episodic_memory: EpisodicMemoryConfig = field(default_factory=EpisodicMemoryConfig)
 	speculation: SpeculationConfig = field(default_factory=SpeculationConfig)
+	torture: TortureConfig = field(default_factory=TortureConfig)
 
 
 def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
@@ -955,6 +965,17 @@ def _build_speculation(data: dict[str, Any]) -> SpeculationConfig:
 	return sc
 
 
+def _build_torture(data: dict[str, Any]) -> TortureConfig:
+	tc = TortureConfig()
+	if "enabled" in data:
+		tc.enabled = bool(data["enabled"])
+	if "runner_command" in data:
+		tc.runner_command = str(data["runner_command"])
+	if "baseline_path" in data:
+		tc.baseline_path = str(data["baseline_path"])
+	return tc
+
+
 def _build_episodic_memory(data: dict[str, Any]) -> EpisodicMemoryConfig:
 	ec = EpisodicMemoryConfig()
 	if "enabled" in data:
@@ -1260,6 +1281,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.episodic_memory = _build_episodic_memory(data["episodic_memory"])
 	if "speculation" in data:
 		mc.speculation = _build_speculation(data["speculation"])
+	if "torture" in data:
+		mc.torture = _build_torture(data["torture"])
 	# Compute resolved extra env keys on this config instance
 	mc._resolved_extra_env_keys = set(mc.security.extra_env_keys) - _ENV_DENYLIST
 	# Allow env vars as fallback for Telegram credentials
