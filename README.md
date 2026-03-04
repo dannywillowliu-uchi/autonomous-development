@@ -209,6 +209,7 @@ See [`mission-control.toml.example`](mission-control.toml.example) for the full 
 | `[evaluator]` | End-of-mission evaluator agent (opt-in) |
 | `[mcp]` | MCP tool access for all subprocesses |
 | `[hitl]` | Human-in-the-loop approval gates |
+| `[core_tests]` | Per-epoch correctness test suite (opt-in, project-defined runner) |
 | `[discovery]` | Auto-discover next objective after completion |
 
 ## Architecture
@@ -227,6 +228,7 @@ src/mission_control/
 +-- batch_analyzer.py        # Heuristic pattern detection (hotspots, failures, stalled areas)
 +-- strategic_reflection.py  # LLM synthesis of batch signals -> patterns, tensions, revision
 +-- planner_context.py       # Minimal planner context + fixed-size MISSION_STATE.md writer
++-- core_tests.py            # Per-epoch core test runner integration + experience storage
 +-- # Workers
 +-- worker.py                # Worker prompt rendering + handoff parsing
 +-- specialist.py            # Specialist worker template routing
@@ -287,6 +289,8 @@ src/mission_control/
 
 **Adaptive planning**: The recursive planner decomposes objectives into a tree of work units with acceptance criteria and dependencies. File overlap detection automatically adds dependency edges. The planner reads `MISSION_STATE.md` and `MISSION_STRATEGY.md` from disk rather than receiving bloated context strings.
 
+**Core test feedback loop**: An optional per-epoch correctness signal. When `[core_tests]` is enabled, the controller runs a project-defined test command after each epoch and feeds pass/fail/regression data back to the planner via `MISSION_STATE.md` and the feedback context. Results persist across missions as experiences, so the planner learns which kinds of work improve (or regress) correctness. The runner must produce a standardized `results.json` (see `core_tests.py` for the schema). Any project can plug in its own runner -- the framework is agnostic to what the tests actually do.
+
 **Mission chaining**: With `--chain`, after a mission completes, the strategist proposes the next objective and a new mission starts automatically.
 
 **Live dashboard**: Real-time web dashboard (FastAPI + HTMX) showing mission state, worker status, merge activity, and cost tracking via Server-Sent Events.
@@ -312,7 +316,16 @@ To point mission-control at any repo:
    setup_command = "uv sync --extra dev"       # runs once before first worker
    ```
 
-3. **Launch**:
+3. **Optionally add a core test suite** for per-epoch correctness feedback:
+   ```toml
+   [core_tests]
+   enabled = true
+   runner_command = "python tests/core/runner.py"   # any shell command
+   baseline_path = "tests/core/baseline.json"       # for delta tracking
+   ```
+   The runner must produce a `results.json` with `summary` (total/passed/failed/skipped), `tests` (per-test status), and `deltas` (newly passing/failing). See `core_tests.py` for the full schema.
+
+4. **Launch**:
    ```bash
    cd /path/to/autonomous-development
    uv run mc mission --config /path/to/my-project/mission-control.toml
