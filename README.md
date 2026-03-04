@@ -96,20 +96,40 @@ Each mission:
 10. **Evaluator agent** -- At mission end, a Claude subprocess with shell/file access runs the software, checks endpoints, and inspects output
 11. **Strategize** -- Strategist proposes follow-up objectives; `--chain` auto-starts the next mission
 
-## Quickstart
+## Installation
+
+```bash
+pip install autonomous-dev
+```
+
+With optional extras:
+
+```bash
+pip install autonomous-dev[mcp]                  # MCP server for Claude Code
+pip install autonomous-dev[dashboard]             # Live web + TUI dashboards
+pip install autonomous-dev[mcp,dashboard,tracing] # Everything
+```
+
+Or install from source:
 
 ```bash
 git clone git@github.com:dannywillowliu-uchi/autonomous-development.git
 cd autonomous-development
 uv sync --extra dev
+```
 
+## Quickstart
+
+```bash
 # Copy and edit the example config to point at your project
 cp mission-control.toml.example mission-control.toml
 # Edit: target.path, target.objective, target.verification.command
 
 # Launch a mission
-uv run mc mission --config mission-control.toml
+mc mission --config mission-control.toml
 ```
+
+If running from source, use `uv run mc` instead of `mc`.
 
 That's it. mission-control will plan, dispatch parallel workers, merge results, and loop until the objective is met or it stalls.
 
@@ -322,37 +342,85 @@ The config file can live anywhere — pass its path with `--config`.
 
 ## All CLI commands
 
+> **Note:** If installed via pip, use `mc` directly. If running from source, use `uv run mc`.
+
 ```bash
 # Core
-uv run mc mission --config mission-control.toml [--workers N] [--chain]
-uv run mc status --config mission-control.toml
-uv run mc summary --config mission-control.toml
-uv run mc history --config mission-control.toml
+mc mission --config mission-control.toml [--workers N] [--chain]
+mc status --config mission-control.toml
+mc summary --config mission-control.toml
+mc history --config mission-control.toml
 
 # Dashboards
-uv run mc live --config mission-control.toml --port 8080
-uv run mc dashboard --config mission-control.toml
+mc live --config mission-control.toml --port 8080
+mc dashboard --config mission-control.toml
 
 # Discovery and planning
-uv run mc discover --config mission-control.toml
-uv run mc init --config mission-control.toml
-uv run mc validate-config --config mission-control.toml
+mc discover --config mission-control.toml
+mc init --config mission-control.toml
+mc validate-config --config mission-control.toml
 
 # Backlog management
-uv run mc priority list --config mission-control.toml
-uv run mc priority set <item-id> <score>
-uv run mc priority import --file BACKLOG.md
-uv run mc priority recalc
+mc priority list --config mission-control.toml
+mc priority set <item-id> <score>
+mc priority import --file BACKLOG.md
+mc priority recalc
 
 # Multi-project
-uv run mc register --config mission-control.toml
-uv run mc unregister --config mission-control.toml
-uv run mc projects
+mc register --config mission-control.toml
+mc unregister --config mission-control.toml
+mc projects
 
 # External interfaces
-uv run mc mcp --config mission-control.toml     # MCP server (stdio)
-uv run mc a2a --config mission-control.toml     # Agent-to-Agent protocol
+mc mcp --config mission-control.toml     # MCP server (stdio)
+mc a2a --config mission-control.toml     # Agent-to-Agent protocol
 ```
+
+## MCP Server Setup
+
+The MCP server lets Claude Code (or any MCP client) control missions directly from chat.
+
+Install with the MCP extra:
+
+```bash
+pip install autonomous-dev[mcp]
+```
+
+Add to your Claude Code MCP config (`~/.claude.json` or project `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "mission-control": {
+      "command": "mc",
+      "args": ["mcp", "--config", "/absolute/path/to/mission-control.toml"]
+    }
+  }
+}
+```
+
+If running from source, use `uv run mc` as the command.
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_projects` | List all registered projects and their status |
+| `get_project_status` | Get detailed status for a project (progress, workers, cost) |
+| `launch_mission` | Start a mission with objective and config |
+| `stop_mission` | Gracefully stop a running mission |
+| `retry_unit` | Retry a failed work unit |
+| `adjust_mission` | Adjust worker count or budget mid-mission |
+| `register_project` | Register a new project with config path |
+| `get_round_details` | Get details for a specific planning round |
+| `web_research` | Search the web (DuckDuckGo, PyPI, GitHub, URL fetch) |
+
+### Example prompts in Claude Code
+
+- "Register my project and start a mission to add authentication"
+- "How's the mission going? Show me the status"
+- "Retry the failed unit for the login endpoint"
+- "Stop the current mission"
 
 ## Tests
 

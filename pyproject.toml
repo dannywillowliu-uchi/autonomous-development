@@ -3,29 +3,35 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mission-control"
+name = "autonomous-dev"
 version = "0.1.0"
-description = "Long-running autonomous development framework for Claude Code"
+description = "Autonomous development daemon that continuously improves codebases using parallel Claude Code workers"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
-authors = []
-keywords = ["claude", "autonomous", "development", "scheduler"]
+license = "MIT"
+authors = [{name = "Danny Willow Liu"}]
+keywords = ["ai-agent", "code-generation", "mcp", "claude", "autonomous", "development"]
 classifiers = [
 	"Development Status :: 3 - Alpha",
 	"Intended Audience :: Developers",
-	"License :: OSI Approved :: MIT License",
 	"Programming Language :: Python :: 3",
 	"Programming Language :: Python :: 3.11",
 	"Programming Language :: Python :: 3.12",
 	"Programming Language :: Python :: 3.13",
+	"Topic :: Software Development",
+	"Topic :: Software Development :: Code Generators",
+	"Typing :: Typed",
 ]
 
 dependencies = [
-	"tomli>=2.0.0;python_version<'3.11'",
 	"httpx>=0.27.0",
 	"pydantic>=2.12.5",
 ]
+
+[project.urls]
+Homepage = "https://github.com/dannywillowliu-uchi/autonomous-development"
+Repository = "https://github.com/dannywillowliu-uchi/autonomous-development"
+Issues = "https://github.com/dannywillowliu-uchi/autonomous-development/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -76,9 +82,3 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = ""
-
-[dependency-groups]
-dev = [
-    "pytest>=9.0.2",
-    "pytest-asyncio>=1.3.0",
-]
