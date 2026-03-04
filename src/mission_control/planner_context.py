@@ -14,7 +14,7 @@ from mission_control.models import Mission
 logger = logging.getLogger(__name__)
 
 
-def build_planner_context(db: Database, mission_id: str, torture_context: str = "") -> str:
+def build_planner_context(db: Database, mission_id: str, core_test_context: str = "") -> str:
 	"""Build minimal planner context: cross-mission learnings + recent failures.
 
 	The planner reads MISSION_STATE.md and MISSION_STRATEGY.md from disk
@@ -58,9 +58,9 @@ def build_planner_context(db: Database, mission_id: str, torture_context: str = 
 	except Exception:
 		pass
 
-	if torture_context:
+	if core_test_context:
 		lines.append("")
-		lines.append(torture_context)
+		lines.append(core_test_context)
 
 	return "\n".join(lines)
 
@@ -73,7 +73,7 @@ def update_mission_state(
 	degradation_status: dict | None = None,
 	strategy: str = "",
 	reflection: object | None = None,
-	torture_results: str | None = None,
+	core_test_results: str | None = None,
 ) -> None:
 	"""Write MISSION_STATE.md as a fixed-size summary (not a growing log).
 
@@ -202,8 +202,8 @@ def update_mission_state(
 			lines.append(f"- {dir_name}/: {', '.join(Path(f).name for f in files)}")
 		lines.append("")
 
-	if torture_results:
-		lines.append(torture_results)
+	if core_test_results:
+		lines.append(core_test_results)
 
 	try:
 		state_path.write_text("\n".join(lines) + "\n")
