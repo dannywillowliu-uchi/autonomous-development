@@ -8,8 +8,9 @@ this module defines the contract (JSON schema) and integration points.
 Expected results.json schema from the runner:
 {
   "summary": {"total": N, "passed": N, "failed": N, "skipped": N},
-  "tests": {"test_name": {"status": "PASS|FAIL|SKIP", "category": "...", "error_msg": "...", "exit_code": N}},
-  "deltas": {"newly_passing": [...], "newly_failing": [...], "newly_compiling": [...]}
+  "tests": {"test_name": {"status": "PASS|FAIL|SKIP", "category": "...", "error_msg": "...", "diagnostic": "...", "exit_code": N}},
+  "deltas": {"newly_passing": [...], "newly_failing": [...], "newly_compiling": [...]},
+  "skip_analysis": {"pattern": {"count": N, "examples": [...]}}
 }
 """
 
@@ -33,6 +34,13 @@ class CoreTestFailure:
 
 
 @dataclass
+class SkipPattern:
+	pattern: str
+	count: int
+	examples: list[str] = field(default_factory=list)
+
+
+@dataclass
 class CoreTestResults:
 	total: int = 0
 	passed: int = 0
@@ -43,6 +51,7 @@ class CoreTestResults:
 	newly_failing: list[str] = field(default_factory=list)
 	newly_compiling: list[str] = field(default_factory=list)
 	failures: list[CoreTestFailure] = field(default_factory=list)
+	skip_patterns: list[SkipPattern] = field(default_factory=list)
 	delta_passed: int = 0
 	delta_failed: int = 0
 
@@ -122,6 +131,7 @@ def _parse_results(data: dict) -> CoreTestResults:
 	summary = data.get("summary", {})
 	tests = data.get("tests", {})
 	deltas = data.get("deltas", {})
+	skip_analysis_raw = data.get("skip_analysis", {})
 
 	total = summary.get("total", 0)
 	passed = summary.get("passed", 0)
@@ -130,18 +140,30 @@ def _parse_results(data: dict) -> CoreTestResults:
 	for name, info in tests.items():
 		if info.get("status") == "FAIL":
 			error_msg = info.get("error_msg", "")
+			diagnostic = info.get("diagnostic", "")
 			if "timeout" in error_msg.lower():
 				error_type = "timeout"
 			elif "signal" in error_msg.lower() or "crash" in error_msg.lower():
 				error_type = "crash"
 			else:
 				error_type = "wrong_output"
+			# Use diagnostic for richer detail if available
+			detail = diagnostic if diagnostic else error_msg
 			failures.append(CoreTestFailure(
 				test_name=name,
 				category=info.get("category", "unknown"),
 				error_type=error_type,
-				detail=error_msg[:200],
+				detail=detail[:300],
 			))
+
+	# Parse skip analysis patterns (sorted by count descending)
+	skip_patterns = []
+	for pattern, info in sorted(skip_analysis_raw.items(), key=lambda x: -x[1].get("count", 0)):
+		skip_patterns.append(SkipPattern(
+			pattern=pattern,
+			count=info.get("count", 0),
+			examples=info.get("examples", [])[:5],
+		))
 
 	return CoreTestResults(
 		total=total,
@@ -153,19 +175,28 @@ def _parse_results(data: dict) -> CoreTestResults:
 		newly_failing=deltas.get("newly_failing", []),
 		newly_compiling=deltas.get("newly_compiling", []),
 		failures=failures,
+		skip_patterns=skip_patterns,
 		delta_passed=len(deltas.get("newly_passing", [])),
 		delta_failed=len(deltas.get("newly_failing", [])),
 	)
 
 
 def format_for_planner(results: CoreTestResults) -> str:
-	"""Format results as markdown for MISSION_STATE.md injection."""
+	"""Format results as markdown for MISSION_STATE.md injection.
+
+	Provides the planner with:
+	1. Score and deltas (what changed)
+	2. Full failure diagnostics (why each test fails)
+	3. Skip analysis (what missing features block the most tests)
+	4. Root-cause tracing instructions (how to investigate)
+	"""
 	lines = []
 	lines.append("## Core Test Results")
 	lines.append("")
 	lines.append(f"**Score: PASS: {results.passed}/{results.total} | FAIL: {results.failed}/{results.total} | SKIP: {results.skipped}/{results.total}** ({results.pass_rate}% pass rate)")
 	lines.append("")
 
+	# Delta section
 	if results.newly_passing or results.newly_failing or results.newly_compiling:
 		lines.append("### Delta vs Baseline")
 		if results.newly_passing:
@@ -176,23 +207,41 @@ def format_for_planner(results: CoreTestResults) -> str:
 			lines.append(f"- +{len(results.newly_compiling)} newly compiling: {', '.join(results.newly_compiling[:10])}")
 		lines.append("")
 
+	# Full failure diagnostics — the planner needs to understand WHY each test fails
 	if results.failures:
-		lines.append("### Failures by Category")
+		lines.append("### Failure Diagnostics")
+		lines.append("Each failing test is listed with its error type and diagnostic detail.")
+		lines.append("Use this to identify the root cause in the compiler/codebase.")
+		lines.append("")
 		by_cat: dict[str, list[CoreTestFailure]] = {}
 		for f in results.failures:
 			by_cat.setdefault(f.category, []).append(f)
 
 		for cat, fails in sorted(by_cat.items(), key=lambda x: -len(x[1])):
-			lines.append(f"\n**{cat}** ({len(fails)} failures)")
-			for f in fails[:10]:
-				lines.append(f"- `{f.test_name}`: {f.error_type} -- {f.detail[:100]}")
+			lines.append(f"**{cat}** ({len(fails)} failures)")
+			for f in fails:
+				lines.append(f"- `{f.test_name}` [{f.error_type}]: {f.detail}")
+			lines.append("")
+
+	# Skip analysis — shows what features would unlock the most tests
+	if results.skip_patterns:
+		lines.append("### Skip Analysis (Missing Features)")
+		lines.append("Tests that cannot compile yet, grouped by error pattern.")
+		lines.append("Fixing a common pattern unlocks many tests at once.")
+		lines.append("")
+		for sp in results.skip_patterns[:15]:
+			examples_str = ", ".join(sp.examples[:3])
+			lines.append(f"- **{sp.pattern}** ({sp.count} tests) e.g. {examples_str}")
 		lines.append("")
 
-	lines.append("### Priority Instruction")
-	lines.append("PRIORITIZE fixing tests in the FAIL categories over adding new features.")
-	lines.append("Tests in SKIP will naturally become testable as features are added.")
+	# Root-cause tracing instructions
+	lines.append("### How to Use These Results")
+	lines.append("1. **FAIL tests are the top priority.** Read each test's source file to understand what it exercises, then trace the failure back to the responsible component.")
+	lines.append("2. **Regressions are urgent.** If a previously-passing test now fails, the most recent changes likely caused it. Revert or fix immediately.")
+	lines.append("3. **Skip patterns show high-leverage features.** Implementing a missing feature that appears in many skip patterns unlocks those tests for validation.")
+	lines.append("4. **Do not add new features** that aren't related to fixing existing FAIL tests or unblocking high-count SKIP patterns.")
 	if results.newly_failing:
-		lines.append(f"**URGENT: {len(results.newly_failing)} regressions detected -- fix these first.**")
+		lines.append(f"**URGENT: {len(results.newly_failing)} regressions detected -- fix these before any other work.**")
 	lines.append("")
 
 	return "\n".join(lines)
@@ -214,6 +263,14 @@ def format_for_feedback_context(results: CoreTestResults) -> str:
 		top = sorted(by_cat.items(), key=lambda x: -x[1])[:3]
 		cats = ", ".join(f"{cat}({n})" for cat, n in top)
 		lines.append(f"  Top failure categories: {cats}")
+		# Include brief failure details so planner sees root causes
+		for f in results.failures[:5]:
+			lines.append(f"  FAIL {f.test_name}: {f.detail[:80]}")
+
+	if results.skip_patterns:
+		top_skips = results.skip_patterns[:3]
+		skip_summary = ", ".join(f"{sp.pattern}({sp.count})" for sp in top_skips)
+		lines.append(f"  Top skip reasons: {skip_summary}")
 
 	return "\n".join(lines)
 
