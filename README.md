@@ -6,81 +6,60 @@ Point it at a repo with an objective and a verification command. It plans, execu
 
 ## How it works
 
-```mermaid
-flowchart TD
-    subgraph Init["Mission Init"]
-        direction TB
-        Start([Mission Start]) --> Research
-        Research["Research Phase\n(3 parallel agents:\ncodebase, domain, prior art)"]
-        Research --> Synth["Synthesis Agent\n-> MISSION_STRATEGY.md"]
-        Synth --> Loop
-    end
-
-    subgraph Controller["Orchestration Loop"]
-        direction TB
-        Loop["Stop Check\n(wall time, stall,\nempty plan)"]
-        Loop --> Reflect
-        Reflect["Batch Analysis\n+ Strategic Reflection\n(skip first iteration)"]
-        Reflect --> Plan
-        Plan["Recursive Planner\n(reads MISSION_STATE.md\n+ MISSION_STRATEGY.md)"]
-        Plan --> Ambition{"Ambition\nGate"}
-        Ambition -- "score < threshold" --> Plan
-        Ambition -- "pass" --> Dispatch
-    end
-
-    subgraph Execution["Layered Execution"]
-        direction TB
-        Dispatch["Dispatch\ntopological layer"] --> W1["Worker 1"]
-        Dispatch --> W2["Worker 2"]
-        Dispatch --> W3["Worker N"]
-        W1 & W2 & W3 --> Barrier["Layer barrier\n(all complete)"]
-        Barrier --> NextLayer{"More\nlayers?"}
-        NextLayer -- "yes" --> Dispatch
-        NextLayer -- "no" --> Process
-    end
-
-    subgraph Merge["Green Branch Merge"]
-        direction TB
-        Process["Process completions"] --> GitMerge["Merge to mc/green"]
-        GitMerge --> PreMerge{"Pre-merge\nverification?"}
-        PreMerge -- "fail" --> Fixup["ZFC fixup\n(N candidates)"]
-        Fixup --> GitMerge
-        PreMerge -- "pass / skip" --> Ingest["Ingest handoff\n+ update state"]
-    end
-
-    subgraph Analysis["Reflection"]
-        direction TB
-        Ingest --> BA["Batch Analyzer\n(hotspots, failures,\nstalled areas)"]
-        BA --> SR["Strategic Reflection\n(LLM synthesis)"]
-        SR --> RevQ{"Strategy\nrevision?"}
-        RevQ -- "yes" --> Update["Update\nMISSION_STRATEGY.md"]
-        RevQ -- "no" --> State["Write fixed-size\nMISSION_STATE.md"]
-        Update --> State
-    end
-
-    State --> Loop
-
-    subgraph Completion["Mission Completion"]
-        direction TB
-        FinalVerify["Final Verification\n(pytest on mc/green)"]
-        FinalVerify --> Evaluator{"Evaluator Agent\n(runs app, checks\nendpoints, reads files)"}
-        Evaluator -- "gaps found" --> ObjFail["objective_met = false"]
-        Evaluator -- "pass" --> ObjMet["Objective Met"]
-        ObjMet --> Strategist["Strategist proposes\nnext objective"]
-        Strategist --> Chain{"--chain?"}
-        Chain -- "yes" --> Start
-        Chain -- "no" --> Done([Mission Complete])
-        ObjFail --> Plan
-    end
-
-    Loop -- "stop condition" --> FinalVerify
-
-    style Init fill:#1a1a2e,stroke:#e94560,color:#eee
-    style Controller fill:#1a1a2e,stroke:#0f3460,color:#eee
-    style Execution fill:#1a1a2e,stroke:#e94560,color:#eee
-    style Merge fill:#1a1a2e,stroke:#16213e,color:#eee
-    style Analysis fill:#1a1a2e,stroke:#0f3460,color:#eee
-    style Completion fill:#1a1a2e,stroke:#e94560,color:#eee
+```
+                        Mission Start
+                             |
+                     [Research Phase]
+                 3 parallel agents investigate
+                 codebase, domain, prior art
+                             |
+                   Synthesis -> MISSION_STRATEGY.md
+                             |
+              +--------------+--------------+
+              |                             |
+              v                             |
+    +-------------------+                   |
+    |  Orchestration    |                   |
+    |  Loop (per epoch) |                   |
+    |                   |                   |
+    |  1. Stop check    |                   |
+    |  2. Reflect       |--- stop -----> [Final Verify]
+    |  3. Plan          |                   |
+    |  4. Ambition gate |                [Evaluator]
+    |  5. Dispatch      |                   |
+    +--------+----------+             pass / fail
+             |                         /        \
+             v                   [Chain] --> [Done]
+    +-------------------+            \
+    |  Layered          |         [Replan]
+    |  Execution        |
+    |                   |
+    |  Layer 0: [W1] [W2] [W3]  (parallel)
+    |           barrier
+    |  Layer 1: [W4]             (sequential deps)
+    |           barrier
+    +--------+----------+
+             |
+             v
+    +-------------------+
+    |  Green Branch     |
+    |  Merge            |
+    |                   |
+    |  merge to mc/green
+    |  verify (pytest)  |
+    |  fail? -> fixup   |
+    +--------+----------+
+             |
+             v
+    +-------------------+
+    |  Reflection       |
+    |                   |
+    |  Batch analysis   |  (hotspots, failures, stalls)
+    |  Strategic review |  (LLM synthesis)
+    |  Update state     |  -> MISSION_STATE.md
+    +--------+----------+
+             |
+             +-----> back to Orchestration Loop
 ```
 
 Each mission:
