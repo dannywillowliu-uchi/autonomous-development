@@ -1041,7 +1041,7 @@ def cmd_swarm(args: argparse.Namespace) -> int:
 
 				# Core test runner if configured
 				core_test_runner = None
-				if config.target.core_tests:
+				if config.core_tests.enabled:
 					from autodev.core_tests import CoreTestRunner
 					runner = CoreTestRunner(config)
 					core_test_runner = runner.run_and_parse
