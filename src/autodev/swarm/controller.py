@@ -366,6 +366,7 @@ class SwarmController:
 		setting_sources = None if self._swarm_config.inherit_global_mcps else "project"
 		cmd = build_claude_cmd(
 			self._config,
+			model=self._config.scheduler.model,
 			prompt=prompt,
 			setting_sources=setting_sources,
 		)
