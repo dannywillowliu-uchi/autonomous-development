@@ -1042,9 +1042,42 @@ def cmd_swarm(args: argparse.Namespace) -> int:
 				# Core test runner if configured
 				core_test_runner = None
 				if config.core_tests.enabled:
-					from autodev.core_tests import CoreTestRunner
-					runner = CoreTestRunner(config)
-					core_test_runner = runner.run_and_parse
+					from autodev.core_tests import _parse_results
+
+					ct = config.core_tests
+					proj = config.target.resolved_path
+
+					def _core_test_runner():
+						import subprocess as _sp
+						try:
+							_sp.run(
+								ct.runner_command,
+								shell=True,
+								cwd=proj,
+								capture_output=True,
+								text=True,
+								timeout=ct.timeout,
+							)
+							# Find results.json
+							import json as _json
+							for candidate in [
+								Path(proj) / "results.json",
+								Path(proj) / "tests" / "torture" / "results.json",
+							]:
+								if candidate.exists():
+									data = _json.loads(candidate.read_text())
+									r = _parse_results(data)
+									return {
+										"pass": r.passed,
+										"fail": r.failed,
+										"skip": r.skipped,
+										"total": r.total,
+									}
+						except Exception:
+							pass
+						return None
+
+					core_test_runner = _core_test_runner
 
 				await planner.run(core_test_runner=core_test_runner)
 
