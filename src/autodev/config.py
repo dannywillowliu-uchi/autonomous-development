@@ -362,6 +362,20 @@ class A2AConfig:
 
 
 @dataclass
+class SwarmConfig:
+	"""Agent swarm mode settings."""
+
+	enabled: bool = False
+	planner_model: str = "opus"
+	planner_cooldown: int = 10
+	max_agents: int = 0  # 0 = unbounded
+	min_agents: int = 2
+	stagnation_threshold: int = 3
+	inherit_global_mcps: bool = True  # workers get ~/.claude.json MCP servers
+	allowed_mcps: list[str] = field(default_factory=list)  # empty = all
+
+
+@dataclass
 class PromptEvolutionConfig:
 	"""Prompt A/B testing with UCB1 multi-armed bandit."""
 
@@ -516,6 +530,7 @@ class MissionConfig:
 	zfc: ZFCConfig = field(default_factory=ZFCConfig)
 	degradation: DegradationConfig = field(default_factory=DegradationConfig)
 	a2a: A2AConfig = field(default_factory=A2AConfig)
+	swarm: SwarmConfig = field(default_factory=SwarmConfig)
 	mcp_registry: MCPRegistryConfig = field(default_factory=MCPRegistryConfig)
 	prompt_evolution: PromptEvolutionConfig = field(default_factory=PromptEvolutionConfig)
 	episodic_memory: EpisodicMemoryConfig = field(default_factory=EpisodicMemoryConfig)
@@ -933,6 +948,27 @@ def _build_a2a(data: dict[str, Any]) -> A2AConfig:
 	return ac
 
 
+def _build_swarm(data: dict[str, Any]) -> SwarmConfig:
+	sc = SwarmConfig()
+	if "enabled" in data:
+		sc.enabled = bool(data["enabled"])
+	if "planner_model" in data:
+		sc.planner_model = str(data["planner_model"])
+	if "planner_cooldown" in data:
+		sc.planner_cooldown = int(data["planner_cooldown"])
+	if "max_agents" in data:
+		sc.max_agents = int(data["max_agents"])
+	if "min_agents" in data:
+		sc.min_agents = int(data["min_agents"])
+	if "stagnation_threshold" in data:
+		sc.stagnation_threshold = int(data["stagnation_threshold"])
+	if "inherit_global_mcps" in data:
+		sc.inherit_global_mcps = bool(data["inherit_global_mcps"])
+	if "allowed_mcps" in data:
+		sc.allowed_mcps = [str(m) for m in data["allowed_mcps"]]
+	return sc
+
+
 def _build_mcp_registry(data: dict[str, Any]) -> MCPRegistryConfig:
 	mc = MCPRegistryConfig()
 	if "enabled" in data:
@@ -1282,6 +1318,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.degradation = _build_degradation(data["degradation"])
 	if "a2a" in data:
 		mc.a2a = _build_a2a(data["a2a"])
+	if "swarm" in data:
+		mc.swarm = _build_swarm(data["swarm"])
 	if "mcp_registry" in data:
 		mc.mcp_registry = _build_mcp_registry(data["mcp_registry"])
 	if "prompt_evolution" in data:

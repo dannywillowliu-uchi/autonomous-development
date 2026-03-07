@@ -66,6 +66,17 @@ def build_parser() -> argparse.ArgumentParser:
 		help="Port for the live dashboard (default: 8080)",
 	)
 
+	# autodev swarm
+	swarm = sub.add_parser("swarm", help="Run swarm mode with driving planner")
+	swarm.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	swarm.add_argument("--max-agents", type=int, default=None, help="Override max agents (0=unbounded)")
+	swarm.add_argument("--planner-model", default=None, help="Override planner model")
+	swarm.add_argument(
+		"--no-dashboard", action="store_true",
+		help="Disable the live dashboard",
+	)
+	swarm.add_argument("--dashboard-port", type=int, default=8080, help="Dashboard port")
+
 	# autodev init
 	init_cmd = sub.add_parser("init", help="Initialize a autodev config")
 	init_cmd.add_argument("path", nargs="?", default=".")
@@ -629,6 +640,15 @@ on_mission_end = true
 
 [backend]
 type = "local"
+
+[swarm]
+enabled = false
+planner_model = "opus"
+planner_cooldown = 10
+max_agents = 0
+min_agents = 2
+stagnation_threshold = 3
+inherit_global_mcps = true
 """
 
 
@@ -978,10 +998,72 @@ def cmd_intel(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_swarm(args: argparse.Namespace) -> int:
+	"""Run swarm mode with driving planner."""
+	config = load_config(args.config)
+	db_path = _get_db_path(args.config)
+
+	if not config.target.objective:
+		print("Error: target.objective must be set in config.")
+		return 1
+
+	# Enable swarm and apply overrides
+	config.swarm.enabled = True
+	if args.max_agents is not None:
+		config.swarm.max_agents = args.max_agents
+	if args.planner_model is not None:
+		config.swarm.planner_model = args.planner_model
+
+	print(f"Swarm mode: {config.target.name}")
+	print(f"Objective: {config.target.objective}")
+	print(f"Planner model: {config.swarm.planner_model}")
+	max_display = config.swarm.max_agents if config.swarm.max_agents > 0 else "unbounded"
+	print(f"Max agents: {max_display}")
+
+	# Start dashboard
+	dashboard_thread = None
+	dashboard_server = None
+	if not args.no_dashboard:
+		dashboard_thread, dashboard_server = _start_dashboard_background(
+			db_path, args.dashboard_port,
+		)
+
+	try:
+		with Database(db_path) as db:
+			from autodev.swarm.controller import SwarmController
+			from autodev.swarm.planner import DrivingPlanner
+
+			controller = SwarmController(config, config.swarm, db)
+			planner = DrivingPlanner(controller, config.swarm)
+
+			async def _run() -> None:
+				await controller.initialize()
+
+				# Core test runner if configured
+				core_test_runner = None
+				if config.target.core_tests:
+					from autodev.core_tests import CoreTestRunner
+					runner = CoreTestRunner(config)
+					core_test_runner = runner.run_and_parse
+
+				await planner.run(core_test_runner=core_test_runner)
+
+			asyncio.run(_run())
+	finally:
+		if dashboard_server is not None:
+			dashboard_server.should_exit = True
+		if dashboard_thread is not None:
+			dashboard_thread.join(timeout=5)
+
+	print("Swarm completed.")
+	return 0
+
+
 COMMANDS = {
 	"status": cmd_status,
 	"history": cmd_history,
 	"mission": cmd_mission,
+	"swarm": cmd_swarm,
 	"init": cmd_init,
 	"dashboard": cmd_dashboard,
 	"live": cmd_live,
