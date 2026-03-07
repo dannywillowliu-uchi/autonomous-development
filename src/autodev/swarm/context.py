@@ -56,7 +56,7 @@ class ContextSynthesizer:
 
 		recent_completions = self._get_recent_completions(tasks)
 		recent_failures = self._get_recent_failures(tasks)
-		discoveries = self._get_recent_discoveries()
+		discoveries = self._get_recent_discoveries(tasks)
 		skills = self._discover_skills()
 		tools = self._discover_tools()
 		stagnation = self._detect_stagnation(tasks, core_test_results)
@@ -189,20 +189,38 @@ class ContextSynthesizer:
 			if t.status == TaskStatus.FAILED
 		]
 
-	def _get_recent_discoveries(self) -> list[str]:
-		"""Read discoveries from inbox messages and knowledge items."""
+	def _get_recent_discoveries(self, tasks: list[SwarmTask] | None = None) -> list[str]:
+		"""Read discoveries from inbox messages, task results, and knowledge items."""
 		discoveries: list[str] = []
-		# Read from team inbox
-		inbox_path = Path.home() / ".claude" / "teams" / self._team_name / "inboxes" / "team-lead.json"
-		if inbox_path.exists():
-			try:
-				messages = json.loads(inbox_path.read_text())
-				for msg in messages[-20:]:  # last 20 messages
-					text = msg.get("text", "")
-					if "discovery:" in text.lower() or "found:" in text.lower():
-						discoveries.append(f"[{msg.get('from', '?')}] {text}")
-			except (json.JSONDecodeError, OSError):
-				pass
+
+		# Read from team inbox (all message types, not just keyword-filtered)
+		inbox_dir = Path.home() / ".claude" / "teams" / self._team_name / "inboxes"
+		if inbox_dir.exists():
+			for inbox_file in inbox_dir.glob("*.json"):
+				try:
+					messages = json.loads(inbox_file.read_text())
+					for msg in messages[-20:]:
+						msg_type = msg.get("type", "")
+						text = msg.get("text", "")
+						sender = msg.get("from", inbox_file.stem)
+						if msg_type in ("discovery", "blocked", "question"):
+							discoveries.append(f"[{sender}] ({msg_type}) {text}")
+						elif "discovery:" in text.lower() or "found:" in text.lower():
+							discoveries.append(f"[{sender}] {text}")
+				except (json.JSONDecodeError, OSError):
+					pass
+
+		# Extract discoveries from completed task results
+		if tasks:
+			for t in tasks:
+				if t.status == TaskStatus.COMPLETED and t.result_summary:
+					try:
+						result = json.loads(t.result_summary) if t.result_summary.startswith("{") else None
+						if result and result.get("discoveries"):
+							for d in result["discoveries"]:
+								discoveries.append(f"[task:{t.title[:30]}] {d}")
+					except (json.JSONDecodeError, ValueError):
+						pass
 
 		# Read from DB knowledge items
 		try:

@@ -309,60 +309,17 @@ class SwarmController:
 
 	def _build_worker_prompt(self, agent: SwarmAgent, task_prompt: str) -> str:
 		"""Build the full prompt for a worker agent with swarm context."""
-		in_flight = self._get_in_flight_files(agent)
-		skills = self._get_available_skills()
+		from autodev.swarm.worker_prompt import build_worker_prompt
 
-		swarm_section = f"""## Swarm Communication
-
-You are agent "{agent.name}" [{agent.role.value}] in the autodev swarm (team: {self._team_name}).
-
-### Reporting Results
-When done, emit your result as:
-AD_RESULT:{{"status":"completed|failed|blocked","commits":[],"summary":"...","files_changed":[],"discoveries":[],"concerns":[]}}
-
-### Discoveries
-If you find something other agents should know (root cause, architectural insight,
-a pattern that works), include it in your discoveries list.
-
-### Files to Avoid
-Other agents are working on these files. Do not modify them:
-{chr(10).join(f"- {f}" for f in in_flight) or "None currently."}
-
-### Available Skills
-{chr(10).join(f"- /{s}" for s in skills) or "None created yet."}
-
-### MCP Tools
-You have access to MCP tools from the global configuration. Use them when helpful:
-- **browser-use / claude-in-chrome**: Browser automation for web research or testing
-- **nanobanana**: Image generation via Gemini
-- **obsidian**: Read/write notes in the knowledge vault
-- **documentation-sync**: Fetch and search library documentation
-- **stitch**: AI-generated UI design comps
-Use tools appropriate to your role. Do NOT use Telegram, email, or calendar MCPs.
-
-### Creating Skills for Other Agents
-If you build a reusable workflow or tool, create a skill:
-1. Create `.claude/skills/<name>/SKILL.md` with frontmatter and instructions
-2. Include it in your discoveries so the planner knows about it
-"""
-		return task_prompt + "\n\n" + swarm_section
-
-	def _get_in_flight_files(self, exclude_agent: SwarmAgent) -> list[str]:
-		"""Get files being modified by other agents."""
-		files: list[str] = []
-		for agent in self._agents.values():
-			if agent.id == exclude_agent.id or agent.status != AgentStatus.WORKING:
-				continue
-			if agent.current_task_id and agent.current_task_id in self._tasks:
-				files.extend(self._tasks[agent.current_task_id].files_hint)
-		return sorted(set(files))
-
-	def _get_available_skills(self) -> list[str]:
-		"""List skills available in the project."""
-		skills_dir = Path(self._config.target.resolved_path) / ".claude" / "skills"
-		if not skills_dir.exists():
-			return []
-		return [d.name for d in skills_dir.iterdir() if d.is_dir() and (d / "SKILL.md").exists()]
+		return build_worker_prompt(
+			agent=agent,
+			task_prompt=task_prompt,
+			team_name=self._team_name,
+			agents=list(self._agents.values()),
+			tasks=list(self._tasks.values()),
+			config=self._config,
+			swarm_config=self._swarm_config,
+		)
 
 	# -- Inbox I/O --
 
