@@ -454,6 +454,41 @@ class SwarmController:
 			pass
 		return None
 
+	def requeue_failed_tasks(self) -> list[str]:
+		"""Re-queue failed tasks that haven't exhausted their retry budget."""
+		requeued = []
+		for task in self._tasks.values():
+			if task.status == TaskStatus.FAILED and task.attempt_count < task.max_attempts:
+				task.status = TaskStatus.PENDING
+				task.claimed_by = None
+				requeued.append(task.id)
+				logger.info(
+					"Re-queued task %s (%s), attempt %d/%d",
+					task.id, task.title, task.attempt_count, task.max_attempts,
+				)
+		return requeued
+
+	def get_idle_agents(self, idle_seconds: float = 120.0) -> list[SwarmAgent]:
+		"""Get agents that have been idle (no task) for too long."""
+		idle = []
+		for agent in self._agents.values():
+			if agent.status == AgentStatus.IDLE and not agent.current_task_id:
+				idle.append(agent)
+		return idle
+
+	def get_scaling_recommendation(self) -> dict[str, int]:
+		"""Get scaling recommendation based on current state."""
+		active = [a for a in self._agents.values() if a.status in (AgentStatus.WORKING, AgentStatus.SPAWNING)]
+		pending = [t for t in self._tasks.values() if t.status == TaskStatus.PENDING]
+		idle = [a for a in self._agents.values() if a.status == AgentStatus.IDLE]
+
+		rec: dict[str, int] = {"scale_up": 0, "scale_down": 0}
+		if len(pending) > 2 * max(len(active), 1):
+			rec["scale_up"] = min(len(pending) - len(active), 3)
+		if len(idle) >= 2:
+			rec["scale_down"] = len(idle)
+		return rec
+
 	async def cleanup(self) -> None:
 		"""Shut down all agents and clean up."""
 		self._running = False

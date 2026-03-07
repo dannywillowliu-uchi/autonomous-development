@@ -88,6 +88,46 @@ def analyze_stagnation(
 	return pivots
 
 
+def pivots_to_decisions(pivots: list[PivotRecommendation]) -> list[dict]:
+	"""Convert pivot recommendations into planner decision suggestions.
+
+	These are injected into the planner prompt as suggested decisions,
+	not executed directly. The planner decides whether to adopt them.
+	"""
+	decisions: list[dict] = []
+	for p in pivots:
+		if p.strategy == "research_before_implement":
+			decisions.append({
+				"type": "create_task",
+				"payload": {
+					"title": f"Research: {p.trigger}",
+					"description": p.details,
+					"priority": 3,
+				},
+				"reasoning": f"Pivot: {p.trigger}",
+				"priority": 10,
+			})
+		elif p.strategy == "reduce_and_focus":
+			decisions.append({
+				"type": "adjust",
+				"payload": {"max_agents": 2},
+				"reasoning": f"Pivot: {p.trigger}. Reducing parallelism.",
+				"priority": 8,
+			})
+		elif p.strategy == "diagnose_systemic":
+			decisions.append({
+				"type": "create_task",
+				"payload": {
+					"title": "Diagnose systemic failure pattern",
+					"description": p.details,
+					"priority": 3,
+				},
+				"reasoning": f"Pivot: {p.trigger}",
+				"priority": 10,
+			})
+	return decisions
+
+
 def format_pivots_for_planner(pivots: list[PivotRecommendation]) -> str:
 	"""Format pivot recommendations as text for the planner prompt."""
 	if not pivots:

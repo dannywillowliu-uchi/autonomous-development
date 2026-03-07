@@ -78,6 +78,14 @@ class DrivingPlanner:
 				# Monitor agents, collect events
 				events = await self._controller.monitor_agents()
 
+				# Re-queue failed tasks with retry budget
+				requeued = self._controller.requeue_failed_tasks()
+				if requeued:
+					events.append({
+						"type": "tasks_requeued",
+						"task_ids": requeued,
+					})
+
 				# Build fresh state
 				state = self._build_state(core_test_runner)
 				self._record_metrics(state)
@@ -211,6 +219,14 @@ class DrivingPlanner:
 		pivot_text = format_pivots_for_planner(pivots)
 		if pivot_text:
 			state_text += "\n\n" + pivot_text
+
+		# Add scaling recommendation
+		scaling = self._controller.get_scaling_recommendation()
+		if scaling.get("scale_up", 0) > 0:
+			up = scaling["scale_up"]
+			state_text += f"\n\n## Scaling Signal\nScale UP: {up} more agents recommended (pending >> active)"
+		if scaling.get("scale_down", 0) > 0:
+			state_text += f"\n\n## Scaling Signal\nScale DOWN: {scaling['scale_down']} idle agents could be killed"
 
 		prompt = CYCLE_PROMPT_TEMPLATE.format(state_text=state_text)
 		response = await self._call_llm(prompt)
