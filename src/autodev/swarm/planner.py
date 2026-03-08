@@ -59,6 +59,7 @@ class DrivingPlanner:
 		self._completion_history: list[int] = []
 		self._failure_history: list[int] = []
 		self._cost_history: list[float] = []
+		self._log_events: list[dict[str, Any]] = []
 
 	async def run(self, core_test_runner: Any = None) -> None:
 		"""Main planner loop. Runs until stopped or escalated."""
@@ -70,6 +71,8 @@ class DrivingPlanner:
 			state = self._build_state(core_test_runner)
 			decisions = await self._initial_plan(state)
 			await self._controller.execute_decisions(decisions)
+
+			self._write_state_file(state)
 
 			# Main loop
 			while self._running:
@@ -89,6 +92,7 @@ class DrivingPlanner:
 				# Build fresh state
 				state = self._build_state(core_test_runner)
 				self._record_metrics(state)
+				self._write_state_file(state)
 
 				# Check if we should plan
 				if self._should_plan(state, events):
@@ -314,6 +318,60 @@ class DrivingPlanner:
 		)
 		return decisions
 
+	def _write_state_file(self, state: SwarmState) -> None:
+		"""Write swarm state to a JSON file for the TUI dashboard."""
+		from pathlib import Path
+
+		state_path = Path(self._controller._config.target.resolved_path) / ".autodev-swarm-state.json"
+		try:
+			data = {
+				"cycle": self._cycle_count,
+				"mission": state.mission_objective[:100],
+				"agents": [
+					{
+						"id": a.id[:8],
+						"name": a.name,
+						"role": a.role.value,
+						"status": a.status.value,
+						"task_id": a.current_task_id[:8] if a.current_task_id else None,
+						"completed": a.tasks_completed,
+						"failed": a.tasks_failed,
+					}
+					for a in state.agents
+				],
+				"tasks": [
+					{
+						"id": t.id[:8],
+						"title": t.title[:60],
+						"status": t.status.value,
+						"claimed_by": t.claimed_by[:8] if t.claimed_by else None,
+						"attempts": t.attempt_count,
+						"max_attempts": t.max_attempts,
+						"priority": t.priority.name,
+					}
+					for t in state.tasks
+				],
+				"core_tests": state.core_test_results or {},
+				"stagnation": [
+					{
+						"metric": s.metric,
+						"cycles": s.cycles_stagnant,
+						"pivot": s.suggested_pivot[:80],
+					}
+					for s in state.stagnation_signals
+				],
+				"discoveries": state.recent_discoveries[:10],
+				"cost_usd": state.total_cost_usd,
+				"wall_minutes": state.wall_time_seconds / 60,
+				"test_history": self._test_history[-20:],
+				"completion_history": self._completion_history[-20:],
+				"failure_history": self._failure_history[-20:],
+				"log_events": self._log_events[-30:],
+			}
+			state_path.write_text(json.dumps(data, indent=2))
+		except Exception as e:
+			logger.debug("Failed to write state file: %s", e)
+
 	def _log_cycle(
 		self,
 		decisions: list[PlannerDecision],
@@ -323,6 +381,14 @@ class DrivingPlanner:
 		succeeded = sum(1 for r in results if r.get("success"))
 		failed = len(results) - succeeded
 		decision_types = [d.type.value for d in decisions]
+		entry = {
+			"cycle": self._cycle_count,
+			"decisions": decision_types,
+			"ok": succeeded,
+			"failed": failed,
+			"reasonings": [d.reasoning[:80] for d in decisions[:5]],
+		}
+		self._log_events.append(entry)
 		logger.info(
 			"Cycle %d: %d decisions (%s), %d ok, %d failed",
 			self._cycle_count,

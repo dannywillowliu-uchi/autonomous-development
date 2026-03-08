@@ -77,6 +77,10 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	swarm.add_argument("--dashboard-port", type=int, default=8080, help="Dashboard port")
 
+	# autodev swarm-tui
+	swarm_tui = sub.add_parser("swarm-tui", help="Live TUI dashboard for swarm monitoring")
+	swarm_tui.add_argument("path", nargs="?", default=".", help="Project path (default: cwd)")
+
 	# autodev init
 	init_cmd = sub.add_parser("init", help="Initialize a autodev config")
 	init_cmd.add_argument("path", nargs="?", default=".")
@@ -1092,11 +1096,19 @@ def cmd_swarm(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_swarm_tui(args: argparse.Namespace) -> int:
+	"""Launch the swarm TUI dashboard."""
+	from autodev.swarm.tui import main as tui_main
+	tui_main(project_path=args.path)
+	return 0
+
+
 COMMANDS = {
 	"status": cmd_status,
 	"history": cmd_history,
 	"mission": cmd_mission,
 	"swarm": cmd_swarm,
+	"swarm-tui": cmd_swarm_tui,
 	"init": cmd_init,
 	"dashboard": cmd_dashboard,
 	"live": cmd_live,
