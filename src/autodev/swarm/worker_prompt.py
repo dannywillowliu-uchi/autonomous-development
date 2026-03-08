@@ -97,7 +97,17 @@ Message types:
 - **report**: Status update on your work
 - **question**: Ask the planner for guidance
 - **discovery**: Share findings other agents should know
-- **blocked**: Signal you're stuck and need help"""
+- **blocked**: Signal you're stuck and need help
+
+**IMPORTANT: You MUST report progress to the planner.** The planner cannot see your \
+work until you finish. Send a "report" message to `team-lead.json` at these points:
+1. When you've diagnosed the root cause of the problem
+2. When you start implementing a fix
+3. If you hit a blocker or unexpected complexity
+4. When you've completed your task (before emitting AD_RESULT)
+
+Without these reports, the planner has no visibility into your progress and may \
+incorrectly assume you're stuck."""
 
 
 def _file_conflict_section(

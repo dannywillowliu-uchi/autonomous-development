@@ -203,7 +203,7 @@ class ContextSynthesizer:
 						msg_type = msg.get("type", "")
 						text = msg.get("text", "")
 						sender = msg.get("from", inbox_file.stem)
-						if msg_type in ("discovery", "blocked", "question"):
+						if msg_type in ("discovery", "blocked", "question", "report"):
 							discoveries.append(f"[{sender}] ({msg_type}) {text}")
 						elif "discovery:" in text.lower() or "found:" in text.lower():
 							discoveries.append(f"[{sender}] {text}")
