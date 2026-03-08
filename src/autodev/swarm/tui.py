@@ -43,6 +43,13 @@ PRIORITY_ICONS = {
 	"CRITICAL": "!!",
 }
 
+REPORT_TYPE_STYLES = {
+	"report": "cyan",
+	"discovery": "green",
+	"blocked": "red",
+	"question": "yellow",
+}
+
 
 def _load_state(state_path: Path) -> dict | None:
 	try:
@@ -53,18 +60,49 @@ def _load_state(state_path: Path) -> dict | None:
 	return None
 
 
+def _load_inbox_messages(team_name: str | None) -> list[dict]:
+	"""Read all messages from team inboxes, sorted by timestamp."""
+	if not team_name:
+		return []
+	inbox_dir = Path.home() / ".claude" / "teams" / team_name / "inboxes"
+	if not inbox_dir.exists():
+		return []
+
+	messages = []
+	for inbox_file in inbox_dir.glob("*.json"):
+		try:
+			items = json.loads(inbox_file.read_text())
+			for msg in items:
+				if not msg.get("from"):
+					msg["from"] = inbox_file.stem
+				messages.append(msg)
+		except (json.JSONDecodeError, OSError):
+			pass
+
+	messages.sort(key=lambda m: m.get("timestamp", ""), reverse=True)
+	return messages
+
+
 def _build_header(data: dict) -> Panel:
 	cycle = data.get("cycle", 0)
 	mission = data.get("mission", "?")
 	cost = data.get("cost_usd", 0)
 	wall = data.get("wall_minutes", 0)
 	ct = data.get("core_tests", {})
+	agents = data.get("agents", [])
+	tasks = data.get("tasks", [])
+
+	alive = sum(1 for a in agents if a["status"] not in ("dead",))
+	active_tasks = sum(1 for t in tasks if t["status"] not in ("completed", "cancelled"))
+	done_tasks = sum(1 for t in tasks if t["status"] == "completed")
 
 	header_text = Text()
 	header_text.append("AUTODEV SWARM", style="bold white")
 	header_text.append(f"  |  Cycle {cycle}", style="cyan")
 	header_text.append(f"  |  ${cost:.2f}", style="yellow")
 	header_text.append(f"  |  {wall:.1f}min", style="dim")
+	header_text.append(f"  |  {alive} agents", style="green")
+	header_text.append(f"  |  {done_tasks}/{active_tasks + done_tasks} tasks", style="cyan")
 
 	if ct:
 		p = ct.get("pass", "?")
@@ -145,29 +183,66 @@ def _build_tasks_table(tasks: list[dict]) -> Panel:
 	return Panel(table, title=title, border_style="yellow", padding=(0, 0))
 
 
-def _build_log_panel(log_events: list[dict]) -> Panel:
+def _build_activity_feed(inbox_messages: list[dict], log_events: list[dict]) -> Panel:
+	"""Combined activity feed: agent reports + planner decisions in reverse chronological order."""
 	lines = Text()
-	for ev in log_events[-10:]:
+
+	# Interleave planner log entries and inbox messages
+	# Show most recent first, limit to ~20 entries
+	entries: list[tuple[str, Text]] = []
+
+	# Add planner decisions
+	for ev in log_events:
 		cycle = ev.get("cycle", "?")
 		decisions = ev.get("decisions", [])
 		ok = ev.get("ok", 0)
 		failed = ev.get("failed", 0)
+		reasonings = ev.get("reasonings", [])
 
-		lines.append(f"C{cycle} ", style="cyan bold")
-		lines.append(", ".join(decisions[:6]), style="dim")
+		entry = Text()
+		entry.append("[planner] ", style="magenta bold")
+		entry.append(f"C{cycle} ", style="cyan")
+		entry.append(", ".join(decisions[:6]), style="dim")
 		if len(decisions) > 6:
-			lines.append(f" +{len(decisions)-6}", style="dim")
-		lines.append(f"  {ok}ok", style="green" if ok else "dim")
+			entry.append(f" +{len(decisions) - 6}", style="dim")
+		entry.append(f"  {ok}ok", style="green" if ok else "dim")
 		if failed:
-			lines.append(f" {failed}fail", style="red")
+			entry.append(f" {failed}fail", style="red")
+		if reasonings:
+			entry.append(f"\n         {reasonings[0][:100]}", style="dim italic")
+
+		sort_key = f"planner-{cycle:04d}"
+		entries.append((sort_key, entry))
+
+	# Add agent inbox messages
+	for msg in inbox_messages[:30]:
+		sender = msg.get("from", "?")
+		msg_type = msg.get("type", "?")
+		text = msg.get("text", "")
+		ts = msg.get("timestamp", "")
+
+		if msg_type == "shutdown_request":
+			continue
+
+		style = REPORT_TYPE_STYLES.get(msg_type, "white")
+		entry = Text()
+		entry.append(f"[{sender}] ", style=f"{style} bold")
+		entry.append(f"({msg_type}) ", style=style)
+		entry.append(text[:120], style="white")
+
+		sort_key = ts if ts else f"msg-{sender}"
+		entries.append((sort_key, entry))
+
+	# Sort reverse chronological, show last 15
+	entries.sort(key=lambda x: x[0], reverse=True)
+	for _, entry in entries[:15]:
+		lines.append_text(entry)
 		lines.append("\n")
 
-		# Show first reasoning
-		reasonings = ev.get("reasonings", [])
-		if reasonings:
-			lines.append(f"  {reasonings[0]}\n", style="dim italic")
+	if not entries:
+		lines.append("No activity yet...", style="dim")
 
-	return Panel(lines, title="Planner Log", border_style="magenta", padding=(0, 1))
+	return Panel(lines, title="Activity Feed", border_style="magenta", padding=(0, 1))
 
 
 def _build_sidebar(data: dict) -> Panel:
@@ -194,6 +269,17 @@ def _build_sidebar(data: dict) -> Panel:
 			text.append(sparkchars[idx], style="green")
 		text.append(f" ({test_hist[-1]})\n", style="green")
 
+	# Completion history sparkline
+	comp_hist = data.get("completion_history", [])
+	if comp_hist:
+		text.append("\nCompletions\n", style="bold")
+		mn, mx = min(comp_hist), max(comp_hist)
+		sparkchars = " _.-~*"
+		for v in comp_hist[-15:]:
+			idx = 0 if mx == mn else int((v - mn) / (mx - mn) * (len(sparkchars) - 1))
+			text.append(sparkchars[idx], style="cyan")
+		text.append(f" ({comp_hist[-1]})\n", style="cyan")
+
 	# Discoveries
 	discoveries = data.get("discoveries", [])
 	if discoveries:
@@ -204,13 +290,13 @@ def _build_sidebar(data: dict) -> Panel:
 	return Panel(text, title="Signals", border_style="cyan", padding=(0, 1))
 
 
-def _build_layout(data: dict) -> Layout:
+def _build_layout(data: dict, inbox_messages: list[dict]) -> Layout:
 	layout = Layout()
 
 	layout.split_column(
 		Layout(name="header", size=4),
 		Layout(name="body"),
-		Layout(name="log", size=14),
+		Layout(name="feed", size=20),
 	)
 
 	layout["body"].split_row(
@@ -226,7 +312,7 @@ def _build_layout(data: dict) -> Layout:
 	layout["header"].update(_build_header(data))
 	layout["agents"].update(_build_agents_table(data.get("agents", [])))
 	layout["tasks"].update(_build_tasks_table(data.get("tasks", [])))
-	layout["log"].update(_build_log_panel(data.get("log_events", [])))
+	layout["feed"].update(_build_activity_feed(inbox_messages, data.get("log_events", [])))
 	layout["sidebar"].update(_build_sidebar(data))
 
 	return layout
@@ -255,7 +341,9 @@ def main(project_path: str | None = None) -> None:
 			while True:
 				data = _load_state(state_path)
 				if data:
-					live.update(_build_layout(data))
+					team_name = data.get("team_name")
+					inbox_messages = _load_inbox_messages(team_name)
+					live.update(_build_layout(data, inbox_messages))
 				else:
 					live.update(_waiting_layout(state_path))
 				time.sleep(0.5)

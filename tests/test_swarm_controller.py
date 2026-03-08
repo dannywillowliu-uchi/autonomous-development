@@ -133,7 +133,7 @@ class TestKillAgent:
 
 		agent_id = ctrl.agents[0].id
 		await ctrl.execute_decisions([
-			PlannerDecision(type=DecisionType.KILL, payload={"agent_id": agent_id, "reason": "test"}),
+			PlannerDecision(type=DecisionType.KILL, payload={"agent_id": agent_id, "reason": "test", "force": True}),
 		])
 		assert ctrl.agents[0].status == AgentStatus.DEAD
 
@@ -156,7 +156,7 @@ class TestKillAgent:
 
 		agent_id = ctrl.agents[0].id
 		await ctrl.execute_decisions([
-			PlannerDecision(type=DecisionType.KILL, payload={"agent_id": agent_id}),
+			PlannerDecision(type=DecisionType.KILL, payload={"agent_id": agent_id, "force": True}),
 		])
 		assert ctrl.tasks[0].status == TaskStatus.PENDING
 		assert ctrl.tasks[0].claimed_by is None

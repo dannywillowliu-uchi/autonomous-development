@@ -327,6 +327,7 @@ class DrivingPlanner:
 			data = {
 				"cycle": self._cycle_count,
 				"mission": state.mission_objective[:100],
+				"team_name": self._controller.team_name,
 				"agents": [
 					{
 						"id": a.id[:8],
