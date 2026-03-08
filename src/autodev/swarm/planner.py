@@ -62,6 +62,13 @@ class DrivingPlanner:
 		self._log_events: list[dict[str, Any]] = []
 		self._last_plan_time: float = 0
 
+		from pathlib import Path
+
+		from autodev.swarm.learnings import SwarmLearnings
+		self._learnings = SwarmLearnings(
+			Path(controller._config.target.resolved_path)
+		)
+
 	async def run(self, core_test_runner: Any = None) -> None:
 		"""Main planner loop. Runs until stopped or escalated."""
 		self._running = True
@@ -81,6 +88,9 @@ class DrivingPlanner:
 
 				# Monitor agents, collect events
 				events = await self._controller.monitor_agents()
+
+				# Record learnings from completed/failed agents
+				self._record_learnings(events)
 
 				# Re-queue failed tasks with retry budget
 				requeued = self._controller.requeue_failed_tasks()
@@ -130,6 +140,28 @@ class DrivingPlanner:
 			except Exception as e:
 				logger.warning("Core test runner failed: %s", e)
 		return self._controller.build_state(core_test_results=core_results)
+
+	def _record_learnings(self, events: list[dict[str, Any]]) -> None:
+		"""Extract learnings from agent completion/failure events."""
+		for ev in events:
+			if ev.get("type") != "agent_completed":
+				continue
+			agent_name = ev.get("agent_name", "?")
+			status = ev.get("status", "failed")
+			result = ev.get("result") or {}
+
+			if status == "completed":
+				summary = result.get("summary", "")
+				if summary:
+					self._learnings.add_successful_approach(agent_name, summary)
+				for disc in result.get("discoveries", []):
+					self._learnings.add_discovery(agent_name, disc)
+			else:
+				error = result.get("error", result.get("summary", "unknown error"))
+				if error:
+					self._learnings.add_failed_approach(
+						agent_name, str(error), result.get("attempt", 1)
+					)
 
 	def _record_metrics(self, state: SwarmState) -> None:
 		"""Record metrics for stagnation detection."""
@@ -206,6 +238,12 @@ class DrivingPlanner:
 		state_text = self._controller.render_state(state)
 
 		max_hint = self._config.max_agents if self._config.max_agents > 0 else 8
+
+		# Add accumulated learnings from previous runs
+		learnings_text = self._learnings.get_for_planner()
+		if learnings_text:
+			state_text += "\n\n" + learnings_text
+
 		prompt = INITIAL_PLANNING_PROMPT.format(
 			objective=state.mission_objective,
 			state_text=state_text,
@@ -236,6 +274,8 @@ class DrivingPlanner:
 		pivot_text = format_pivots_for_planner(pivots)
 		if pivot_text:
 			state_text += "\n\n" + pivot_text
+		for p in pivots:
+			self._learnings.add_stagnation_insight(p.metric, p.suggested_pivot)
 
 		# Add scaling recommendation
 		scaling = self._controller.get_scaling_recommendation()
@@ -244,6 +284,11 @@ class DrivingPlanner:
 			state_text += f"\n\n## Scaling Signal\nScale UP: {up} more agents recommended (pending >> active)"
 		if scaling.get("scale_down", 0) > 0:
 			state_text += f"\n\n## Scaling Signal\nScale DOWN: {scaling['scale_down']} idle agents could be killed"
+
+		# Add accumulated learnings from previous runs
+		learnings_text = self._learnings.get_for_planner()
+		if learnings_text:
+			state_text += "\n\n" + learnings_text
 
 		prompt = CYCLE_PROMPT_TEMPLATE.format(state_text=state_text)
 		response = await self._call_llm(prompt)
