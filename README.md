@@ -1,14 +1,18 @@
-# autonomous-development
+# autodev
 
-Autonomous dev framework that continuously improves a codebase toward a defined objective. Two execution modes: **mission mode** (epoch-based orchestration with green branch merging) and **swarm mode** (real-time driving planner with parallel agents). Both spawn parallel Claude Code workers, manage state, and learn from outcomes.
+Autonomous development framework. Point it at a repo with an objective and a verification command. It plans, dispatches parallel Claude Code workers, verifies, and loops until the objective is met.
 
-Point it at a repo with an objective and a verification command. It plans, executes, verifies, and loops until the objective is met or it stalls.
+Two execution modes:
+- **Mission mode**: Epoch-based orchestration with deliberative planning, green branch merging, and batch analysis
+- **Swarm mode**: Real-time driving planner with continuous agent management, stagnation detection, and persistent learnings
 
 ## How it works
 
+### Mission mode
+
+Structured epoch-based execution. Each epoch: plan, dispatch workers in dependency layers, merge to a green branch, reflect, repeat.
+
 ```
-                        Mission Start
-                             |
                      [Research Phase]
                  3 parallel agents investigate
                  codebase, domain, prior art
@@ -73,9 +77,45 @@ Each epoch:
 8. **Core test feedback** (optional) -- Run a project-defined test suite and feed pass/fail/regression data back to the planner
 9. **Loop** -- Back to planning with updated state. Stops on wall time limit, stall detection, or empty plan
 
-## Installation
+### Swarm mode
 
-Install from source:
+Real-time driving planner that continuously observes, reasons, and dispatches agents. No epochs or green branches. The planner runs an async loop, cycling every 60s+, reacting to agent completions, failures, and stagnation.
+
+```
+    +-------------------+
+    |  Driving Planner  |  (async LLM loop)
+    |                   |
+    |  1. Monitor agents|
+    |  2. Record learnings
+    |  3. Detect stagnation
+    |  4. Build state   |
+    |  5. Call LLM      |  -> structured decisions
+    |  6. Execute       |  -> spawn/kill/create_task/adjust/wait/escalate
+    +--------+----------+
+             |
+    +--------+--------+--------+
+    |        |        |        |
+ [Agent]  [Agent]  [Agent]  [Agent]
+    |        |        |        |
+    +--- team inbox messages ---+
+    |                           |
+    +---> planner reads <-------+
+    |                           |
+    +-> .autodev-swarm-learnings.md (persists across runs)
+```
+
+Each cycle:
+1. **Monitor** -- Check agent processes for completion/failure, parse `AD_RESULT` handoffs
+2. **Learn** -- Record successful approaches, failed approaches, and discoveries to persistent learnings file
+3. **Re-queue** -- Failed tasks with retry budget get re-queued as pending
+4. **Stagnation check** -- Detect flat test counts, rising cost with flat progress, high failure rates. Suggest pivots
+5. **Plan** -- LLM receives full state snapshot (agents, tasks, test results, stagnation signals, learnings) and emits structured decisions
+6. **Execute** -- Controller spawns/kills agents, creates tasks, adjusts parameters
+7. **Loop** -- Stops when all tasks complete and no agents are active
+
+Agents communicate with the planner via file-based team inboxes (`~/.claude/teams/{team}/inboxes/`). The planner reads these each cycle for visibility into in-progress work.
+
+## Installation
 
 ```bash
 git clone git@github.com:dannywillowliu-uchi/autonomous-development.git
@@ -90,19 +130,6 @@ pip install autonomous-dev
 pip install autonomous-dev[mcp,dashboard,tracing]  # with extras
 ```
 
-## Quickstart
-
-```bash
-# Copy and edit the example config
-cp autodev.toml.example autodev.toml
-# Edit: target.path, target.objective, target.verification.command
-
-# Launch
-uv run autodev mission --config autodev.toml
-```
-
-That's it. It will plan, dispatch parallel workers, merge results, and loop until the objective is met or it stalls.
-
 ### Prerequisites
 
 - Python 3.11+
@@ -110,6 +137,20 @@ That's it. It will plan, dispatch parallel workers, merge results, and loop unti
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude` in PATH)
 - Claude Max subscription or API key
 - Git
+
+## Quickstart
+
+```bash
+# Copy and edit the example config
+cp autodev.toml.example autodev.toml
+# Edit: target.path, target.objective, target.verification.command
+
+# Mission mode (epoch-based, structured)
+uv run autodev mission --config autodev.toml
+
+# Swarm mode (real-time, faster iteration)
+uv run autodev swarm --config autodev.toml
+```
 
 ## Configuration
 
@@ -133,74 +174,63 @@ See [`autodev.toml.example`](autodev.toml.example) for the full annotated config
 | `[target]` | Repo path, branch, objective, verification command |
 | `[scheduler]` | Model choice, worker count, budget limits, session timeout |
 | `[planner]` | Decomposition depth, max units per round, deliberation with critic |
-| `[continuous]` | Wall time limit, ambition gate, pre-merge verification, reconcile interval |
+| `[continuous]` | Wall time limit, ambition gate, pre-merge verification |
 | `[green_branch]` | Working/green branch names, auto-push target, fixup retries |
-| `[rounds]` | Max planning rounds, stall detection threshold |
-| `[heartbeat]` | Progress monitoring interval, idle alerts |
-| `[discovery]` | Auto-discover next objective after completion |
-| `[backend]` | Execution backend (local or SSH) |
+| `[swarm]` | Max/min agents, planner model, cooldown, stagnation threshold |
 | `[core_tests]` | Per-epoch correctness test suite (opt-in, project-defined runner) |
+| `[backend]` | Execution backend (local, SSH, or container) |
+| `[heartbeat]` | Progress monitoring interval, idle alerts |
+| `[mcp]` | MCP server config passed to all Claude subprocesses |
 
 ## CLI
 
-> If installed via pip, use `mc` directly. If running from source, use `uv run mc`.
-
 ```bash
-# Run a mission (epoch-based orchestration)
-mc mission --config autodev.toml [--workers N] [--chain] [--approve-all]
+# Mission mode
+autodev mission --config autodev.toml [--workers N] [--chain] [--approve-all]
 
-# Run a swarm (real-time driving planner + parallel agents)
-mc swarm --config autodev.toml
-mc swarm-tui --config autodev.toml    # Launch swarm with live TUI dashboard
+# Swarm mode
+autodev swarm --config autodev.toml [--max-agents N]
+autodev swarm-tui --config autodev.toml    # with live TUI dashboard
 
 # Status and history
-mc status --config autodev.toml
-mc summary --config autodev.toml
-mc history --config autodev.toml
+autodev status --config autodev.toml
+autodev summary --config autodev.toml
+autodev history --config autodev.toml
 
 # Dashboards
-mc live --config autodev.toml [--port 8080]    # Web (FastAPI + HTMX)
-mc dashboard --config autodev.toml              # TUI (mission mode)
+autodev live --config autodev.toml [--port 8080]    # Web (FastAPI + HTMX)
+autodev dashboard --config autodev.toml              # TUI (mission mode)
 
 # Setup and diagnostics
-mc init --config autodev.toml
-mc validate-config --config autodev.toml
-mc diagnose --config autodev.toml
+autodev init --config autodev.toml
+autodev validate-config --config autodev.toml
+autodev diagnose --config autodev.toml
 
 # Multi-project registry
-mc register --config autodev.toml
-mc unregister --config autodev.toml
-mc projects
+autodev register --config autodev.toml
+autodev unregister --config autodev.toml
+autodev projects
 
 # External interfaces
-mc mcp --config autodev.toml     # MCP server (stdio)
-mc a2a --config autodev.toml     # Agent-to-Agent protocol
+autodev mcp --config autodev.toml     # MCP server (stdio)
+autodev a2a --config autodev.toml     # Agent-to-Agent protocol
 
-# Intelligence
-mc intel                                  # Scan external AI/agent ecosystem sources
-mc trace --file trace.jsonl               # Read trace file as human-readable timeline
+# Intelligence and tracing
+autodev intel                                  # Scan external AI/agent ecosystem sources
+autodev trace --file trace.jsonl               # Read trace file as human-readable timeline
 ```
 
-### Make targets
-
-| Target | Description |
-|--------|-------------|
-| `make setup` | Create venv, install all deps |
-| `make test` | Run pytest and ruff |
-| `make traces` | Start Jaeger (OTLP on :4317/:4318, UI on :16686) |
-| `make dashboard` | Start live web dashboard on :8080 |
-| `make run` | Run a mission with default config |
-| `make clean` | Stop Docker containers |
+> When running from source, prefix with `uv run`: `uv run autodev mission --config autodev.toml`
 
 ## Architecture
 
 ```
 src/autodev/
 +-- cli.py                    # CLI entry point (argparse subcommands)
-+-- config.py                 # TOML config loader + dataclasses
++-- config.py                 # TOML config loader + dataclasses (30+ sections)
 +-- models.py                 # Domain models (Mission, WorkUnit, Epoch, Experience, ...)
 +-- db.py                     # SQLite with WAL mode + schema migrations
-+-- # Core loop
++-- # Mission mode
 +-- continuous_controller.py  # Main orchestration loop: plan -> execute -> merge -> reflect
 +-- continuous_planner.py     # Adaptive planner wrapper around RecursivePlanner
 +-- recursive_planner.py      # LLM-based tree decomposition with PLAN_RESULT marker
@@ -217,30 +247,27 @@ src/autodev/
 +-- workspace.py              # Worker workspace management
 +-- # Merge pipeline
 +-- green_branch.py           # autodev/green branch lifecycle, merge, fixup agents
-+-- # Quality
++-- # Quality and safety
 +-- diff_reviewer.py          # Fire-and-forget LLM diff review
 +-- grading.py                # Deterministic decomposition grading
 +-- criteria_validator.py     # Acceptance criteria validation
++-- circuit_breaker.py        # Circuit breaker state machine
++-- degradation.py            # Graceful degradation strategies
++-- adaptive_concurrency.py   # Dynamic worker count adjustment
++-- path_security.py          # File path validation + sanitization
 +-- # Infrastructure
 +-- session.py                # Claude subprocess spawning + output parsing
 +-- launcher.py               # Mission launch orchestration
 +-- heartbeat.py              # Time-based progress monitor + alerts
 +-- notifier.py               # Telegram notifications
 +-- hitl.py                   # Human-in-the-loop approval gates
-+-- degradation.py            # Graceful degradation strategies
-+-- circuit_breaker.py        # Circuit breaker state machine
-+-- adaptive_concurrency.py   # Dynamic worker count adjustment
-+-- ema.py                    # Exponential moving average budget tracking
-+-- memory.py                 # Typed context store for workers
++-- memory.py                 # Episodic/semantic context store
 +-- state.py                  # Mission state management
 +-- snapshot.py               # State snapshots for recovery
 +-- checkpoint.py             # Checkpoint/restore support
 +-- causal.py                 # Causal analysis of failures
-+-- prompt_evolution.py       # Worker prompt adaptation over time
++-- prompt_evolution.py       # Prompt A/B testing with UCB1 bandit
 +-- tool_synthesis.py         # Dynamic tool creation for workers
-+-- token_parser.py           # Structured output parsing
-+-- path_security.py          # File path validation + sanitization
-+-- json_utils.py             # Safe JSON parsing utilities
 +-- # External interfaces
 +-- mcp_server.py             # MCP server for Claude Code integration
 +-- a2a.py                    # Agent-to-Agent protocol server
@@ -264,70 +291,52 @@ src/autodev/
 |   +-- ssh.py                # Remote SSH backend
 |   +-- container.py          # Container backend
 +-- swarm/
-|   +-- controller.py         # Swarm controller: agent lifecycle, task pool, team messaging
-|   +-- planner.py            # Driving planner: observe -> reason -> decide -> execute loop
+|   +-- controller.py         # Agent lifecycle, task pool, team messaging
+|   +-- planner.py            # Driving planner: observe -> reason -> decide loop
 |   +-- models.py             # Swarm data models (agents, tasks, decisions)
 |   +-- prompts.py            # Planner system/cycle prompts
-|   +-- worker_prompt.py      # Worker agent prompt builder with inbox instructions
-|   +-- context.py            # Context synthesizer: reads team inbox messages
+|   +-- worker_prompt.py      # Worker prompt builder with inbox instructions
+|   +-- context.py            # Context synthesizer: state rendering for planner
 |   +-- stagnation.py         # Stagnation detection and pivot suggestions
-|   +-- learnings.py          # Persistent cross-run learnings (.autodev-swarm-learnings.md)
+|   +-- learnings.py          # Persistent cross-run learnings
 |   +-- tui.py                # Swarm TUI dashboard with activity feed
 ```
 
 ## Key concepts
 
-**Recursive planner**: Decomposes objectives into a tree of work units with acceptance criteria and dependencies. File overlap detection automatically adds dependency edges between units that touch the same files. A critic agent reviews plans before execution.
+### Shared (both modes)
 
-**Green branch pattern**: Workers commit to isolated unit branches. Completed units merge to `autodev/green`. Pre-merge verification (pytest/ruff/etc.) gates the merge; failures trigger fixup agents that attempt automated repairs. Once green, auto-push to main.
+**Core test feedback loop**: Optional per-epoch/per-cycle correctness signal. The controller runs a project-defined test command and feeds pass/fail/regression diagnostics back to the planner. Results include failure details and skip analysis, so the planner can trace failures to root causes and prioritize high-leverage fixes.
 
-**Fixed-size MISSION_STATE.md**: Progress summary that stays constant size regardless of mission length. Contains progress counts, active issues, strategy summary, and files modified. The planner reads this from disk each epoch rather than receiving growing context.
+**AD_RESULT protocol**: Workers emit structured `AD_RESULT:{json}` handoffs on stdout with status, commits, files changed, discoveries, and concerns. The controller parses these on process exit.
 
-**Core test feedback loop**: Optional per-epoch correctness signal. When `[core_tests]` is enabled, the controller runs a project-defined test command after each epoch and feeds pass/fail/regression diagnostics back to the planner. Results include full failure details and skip analysis (what missing features block the most tests), so the planner can trace failures to root causes and prioritize high-leverage fixes. Results persist as experiences for cross-mission learning. Any project can plug in its own runner -- the framework is agnostic to what the tests do.
+**Worker prompt system**: Workers receive detailed prompts with identity, task context, file conflict zones, available skills/tools, and structured output requirements.
+
+### Mission mode
+
+**Recursive planner**: Decomposes objectives into a tree of work units with acceptance criteria and dependencies. File overlap detection adds dependency edges between units touching the same files. A critic agent reviews plans before execution.
+
+**Green branch pattern**: Workers commit to isolated unit branches. Completed units merge to `autodev/green`. Pre-merge verification gates the merge; failures trigger fixup agents. Once green, auto-push to main.
+
+**Fixed-size MISSION_STATE.md**: Progress summary that stays constant size regardless of mission length. The planner reads this from disk each epoch rather than receiving growing context.
 
 **Ambition gate**: Plans are scored on ambition (1-10). Below the threshold, the planner is forced to replan, preventing trivially scoped busywork.
 
-**Batch analysis**: After each epoch, heuristic pattern detection runs on the DB: file hotspots (files touched by 3+ units), failure clusters, stalled areas, effort distribution. This feeds back into the next planning round.
-
-**Graceful degradation**: Circuit breakers track failure rates per component. When tripped, the system falls back to simpler strategies instead of failing outright. Adaptive concurrency adjusts worker count based on success rates.
+**Batch analysis**: After each epoch, heuristic pattern detection runs on the DB: file hotspots (files touched by 3+ units), failure clusters, stalled areas, effort distribution. Feeds back into the next planning round.
 
 **Mission chaining**: With `--chain`, after a mission completes, a new objective is proposed and a new mission starts automatically.
 
-## Swarm mode
+### Swarm mode
 
-Swarm mode (`mc swarm`) is a lighter-weight alternative to mission mode. Instead of epoch-based planning with green branch merging, it uses a real-time driving planner that continuously observes, reasons, and dispatches agents.
+**Driving planner**: Stateless LLM loop. Each cycle: build state snapshot, call LLM, parse structured decisions (spawn, kill, create_task, adjust, wait, escalate), execute via controller. Intelligence comes from context, not persistent session state.
 
-```
-             Driving Planner
-                  |
-    observe state -> reason -> decide
-                  |
-    +-------------+-------------+
-    |             |             |
- [Agent 1]   [Agent 2]   [Agent 3]
-  (worker)    (researcher)  (worker)
-    |             |             |
-    +--- team inbox messages ---+
-    |                           |
-    +---> planner reads <-------+
-```
+**Team inbox messaging**: File-based JSON inboxes at `~/.claude/teams/{team}/inboxes/`. Agents report progress to the planner; planner sends directives to agents. Enables visibility into in-progress work without waiting for process exit.
 
-Key differences from mission mode:
-- **Real-time replanning**: Planner runs every 60s+ (not per-epoch), reacting to agent completions, failures, and stagnation signals
-- **Team messaging**: Agents report progress via file-based inboxes; planner reads these each cycle
-- **Stagnation detection**: Tracks test pass rates, completion counts, failure counts, and cost over time. Suggests pivots when metrics plateau
-- **Persistent learnings**: Accumulates discoveries, successful approaches, and failed approaches in `.autodev-swarm-learnings.md`. The planner reads this each cycle to avoid repeating mistakes across runs
-- **TUI dashboard**: `mc swarm-tui` shows agents, tasks, activity feed, and metrics in real time
+**Stagnation detection**: Tracks test pass rates, completion counts, failure counts, and cost over sliding windows. Three detection heuristics: flat test count (switch to research), rising cost with flat progress (reduce agents), high failure rate (spawn diagnostic agent).
 
-```toml
-# Swarm-specific config in autodev.toml
-[swarm]
-max_agents = 4
-min_agents = 1
-planner_cooldown = 30
-planner_model = "opus"
-stagnation_threshold = 5
-```
+**Persistent learnings**: Accumulates discoveries, successful approaches, failed approaches, and stagnation pivots in `.autodev-swarm-learnings.md`. The planner reads this each cycle. Entries are deduplicated and bounded to ~200 lines. Persists across runs.
+
+**Agent lifecycle guards**: Minimum 5-minute age before an agent can be killed. Task retry budgets (default 3 attempts). Scaling recommendations based on pending/active ratios.
 
 ## Setting up a new project
 
@@ -368,6 +377,8 @@ stagnation_threshold = 5
 4. **Launch**:
    ```bash
    uv run autodev mission --config my-project/autodev.toml
+   # or
+   uv run autodev swarm --config my-project/autodev.toml
    ```
 
 ### Tips for writing objectives
@@ -388,7 +399,7 @@ Add to your Claude Code MCP config (`~/.claude.json` or project `.mcp.json`):
   "mcpServers": {
     "autodev": {
       "command": "uv",
-      "args": ["run", "mc", "mcp", "--config", "/absolute/path/to/autodev.toml"]
+      "args": ["run", "autodev", "mcp", "--config", "/absolute/path/to/autodev.toml"]
     }
   }
 }
@@ -399,9 +410,9 @@ Available tools: `list_projects`, `get_project_status`, `launch_mission`, `stop_
 ## Tests
 
 ```bash
-uv run pytest -q                                          # 2,200+ tests
-uv run ruff check src/ tests/                             # Lint
-uv run mypy src/autodev --ignore-missing-imports  # Types
+uv run pytest -q                                  # 2,200+ tests
+uv run ruff check src/ tests/                     # Lint
+uv run mypy src/autodev --ignore-missing-imports   # Types
 ```
 
 ## Example: C compiler
@@ -421,3 +432,7 @@ We used autodev to build a [C compiler](https://github.com/dannywillowliu-uchi/C
 | Human-written compiler code | 0 lines |
 
 The final push from 216/221 to 221/221 was done using swarm mode, which autonomously diagnosed and fixed the remaining 5 torture test failures in a single run.
+
+## License
+
+MIT
