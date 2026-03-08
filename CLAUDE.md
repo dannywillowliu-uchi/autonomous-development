@@ -141,6 +141,8 @@ Before ANY commit, run:
 - Swarm kill guard: 5-minute minimum age prevents premature agent termination. Use `force: True` in tests
 - Swarm agents must report progress via inbox -- planner has no visibility into working agents otherwise
 - "report" message type must be in context.py filter list for planner to see agent progress reports
+- Planner parse failures need exponential backoff + hard stop -- without this, truncated LLM output causes infinite credit-burning loop (MAX_CONSECUTIVE_PARSE_FAILURES=5)
+- Use `autodev swarm-inject "message"` to send human directives to a running swarm -- planner sees them as highest-priority items via "directive" message type in team-lead inbox
 
 ## Conventions
 
