@@ -385,6 +385,8 @@ class SwarmController:
 			model=self._config.scheduler.model,
 			prompt=prompt,
 			setting_sources=setting_sources,
+			permission_mode="auto",
+			max_turns=200,
 		)
 		env = claude_subprocess_env(self._config)
 		env["AUTODEV_TEAM_NAME"] = self._team_name

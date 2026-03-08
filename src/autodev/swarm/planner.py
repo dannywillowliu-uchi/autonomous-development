@@ -60,6 +60,7 @@ class DrivingPlanner:
 		self._failure_history: list[int] = []
 		self._cost_history: list[float] = []
 		self._log_events: list[dict[str, Any]] = []
+		self._last_plan_time: float = 0
 
 	async def run(self, core_test_runner: Any = None) -> None:
 		"""Main planner loop. Runs until stopped or escalated."""
@@ -150,6 +151,14 @@ class DrivingPlanner:
 		self, state: SwarmState, events: list[dict[str, Any]]
 	) -> bool:
 		"""Decide whether to run a planning cycle."""
+		import time
+
+		# Enforce minimum 60s between planning cycles to avoid burning credits
+		elapsed = time.monotonic() - self._last_plan_time
+		min_interval = max(60, self._config.planner_cooldown)
+		if elapsed < min_interval:
+			return False
+
 		if events:
 			return True
 
@@ -191,6 +200,8 @@ class DrivingPlanner:
 		self, state: SwarmState
 	) -> list[PlannerDecision]:
 		"""Generate the initial task decomposition and agent spawns."""
+		import time
+		self._last_plan_time = time.monotonic()
 		self._cycle_count += 1
 		state_text = self._controller.render_state(state)
 
@@ -209,6 +220,8 @@ class DrivingPlanner:
 		self, state: SwarmState
 	) -> list[PlannerDecision]:
 		"""Run one planning cycle."""
+		import time
+		self._last_plan_time = time.monotonic()
 		self._cycle_count += 1
 		state_text = self._controller.render_state(state)
 
