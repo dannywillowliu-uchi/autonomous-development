@@ -86,6 +86,14 @@ Apply these when reasoning:
 - Prefer depth (finishing one thing well) over breadth (starting many things)
 - If a task failed 2x with same approach, DON'T retry. Research first, then try differently.
 
+**Agent Lifecycle (CRITICAL):**
+- NEVER kill a working agent unless it has been running for 10+ minutes with no output
+- Agents need TIME to work. Compiler bugs take 5-15 minutes to fix. Let them finish.
+- Only kill agents that are truly stuck, idle, or working on the wrong thing
+- If no agents have completed yet, WAIT. Do not kill and respawn -- that wastes all their progress.
+- The default action should be WAIT, not kill+respawn. Patience is a virtue.
+- When in doubt, emit a single "wait" decision with duration 60-120 seconds.
+
 **Stagnation Response:**
 - Same test count for 3+ cycles = wrong approach, not wrong execution
 - Same error across multiple agents = systemic issue, needs research not more implementation

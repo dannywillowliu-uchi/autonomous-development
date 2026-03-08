@@ -187,13 +187,29 @@ class SwarmController:
 		return {"agent_id": agent.id, "name": agent.name, "status": agent.status.value}
 
 	async def _handle_kill(self, payload: dict[str, Any]) -> dict[str, Any]:
-		"""Kill an agent gracefully."""
+		"""Kill an agent gracefully. Refuses to kill agents younger than 5 minutes."""
 		agent_id = payload["agent_id"]
 		reason = payload.get("reason", "planner decision")
+		force = payload.get("force", False)
 
 		agent = self._agents.get(agent_id)
 		if not agent:
 			return {"error": f"Agent {agent_id} not found"}
+
+		# Guard: don't kill agents that are still working and young
+		if not force and agent.status == AgentStatus.WORKING and reason != "swarm shutdown":
+			from datetime import datetime, timezone
+			try:
+				spawned = datetime.fromisoformat(agent.spawned_at)
+				age_seconds = (datetime.now(timezone.utc) - spawned).total_seconds()
+				if age_seconds < 300:  # 5 minutes minimum
+					logger.info(
+						"Refusing to kill agent %s (age %.0fs < 300s). Let it work.",
+						agent.name, age_seconds,
+					)
+					return {"agent_id": agent_id, "killed": False, "reason": "too young"}
+			except (ValueError, TypeError):
+				pass
 
 		self._write_to_inbox(agent.name, {
 			"type": "shutdown_request",
