@@ -72,16 +72,28 @@ Before ANY commit, run:
 - `heartbeat.py` -- Time-based progress monitor (checks merge activity, sends Telegram alerts)
 - `notifier.py` -- Telegram notifications (mission start/end, merge conflicts, heartbeat)
 
+### Swarm Mode
+- `swarm/controller.py` -- Agent lifecycle, task pool, team inbox messaging, subprocess spawning
+- `swarm/planner.py` -- Driving planner: async LLM loop (observe -> reason -> decide -> execute)
+- `swarm/models.py` -- Swarm data models (AgentRole, AgentStatus, TaskStatus, DecisionType, SwarmState)
+- `swarm/prompts.py` -- Planner system prompt, cycle prompt, initial planning prompt
+- `swarm/worker_prompt.py` -- Worker prompt builder with inbox reporting instructions
+- `swarm/context.py` -- Context synthesizer: builds SwarmState, renders for planner, reads team inboxes
+- `swarm/stagnation.py` -- Stagnation detection (flat tests, rising cost, high failure rate) and pivot suggestions
+- `swarm/learnings.py` -- Persistent cross-run learnings in `.autodev-swarm-learnings.md`
+- `swarm/tui.py` -- Rich-based TUI dashboard (agents, tasks, activity feed, sparklines)
+
 ### Infrastructure
 - `dashboard/` -- TUI (textual) and web (FastAPI+HTMX) dashboards
 - `launcher.py` -- Mission subprocess launcher
 - `registry.py` -- Multi-project registry
-- `cli.py` -- argparse CLI (`autodev mission`, `autodev parallel`, `autodev start`)
+- `cli.py` -- argparse CLI (`autodev mission`, `autodev swarm`, `autodev swarm-tui`, etc.)
 - `session.py` -- Claude Code subprocess spawning + AD_RESULT parsing
 - `snapshot.py` -- State snapshots for recovery
 
 ## Execution Flow
 
+### Mission mode
 1. Controller creates mission, initializes backend + green branch + deliberative planner
 2. Deliberation: planner proposes ambitious plan (with web search + project context) -> critic checks feasibility -> planner refines if needed (up to N rounds)
 3. batch_analyzer signals (hotspots, clusters) from the previous batch feed into the NEXT planning pass
@@ -94,6 +106,19 @@ Before ANY commit, run:
 10. Stopping: planner returns empty plan (objective met), heartbeat stall, wall time, or signal
 11. Final verification runs on autodev/green at mission end
 12. Chaining (--chain): critic proposes next objective, approval prompt, new mission starts
+
+### Swarm mode
+1. Controller initializes team directory (~/.claude/teams/{team_name}/), creates inboxes
+2. DrivingPlanner runs initial planning: decompose objective, create tasks, spawn agents
+3. Main loop: monitor_agents() -> record_learnings() -> requeue_failed() -> build_state() -> plan_cycle() -> execute_decisions()
+4. Agents are Claude Code subprocesses with `--permission-mode auto` and `--max-turns 200`
+5. Agents report progress via team inbox files (JSON messages to team-lead.json)
+6. Planner reads inboxes each cycle for visibility into working agents
+7. Stagnation detection: flat test count -> research pivot, rising cost -> reduce agents, high failure -> diagnostic agent
+8. Learnings accumulate in `.autodev-swarm-learnings.md` (persists across runs)
+9. State written to `.autodev-swarm-state.json` each cycle for TUI dashboard
+10. Stopping: all tasks completed/failed and no active agents
+11. Kill guard: agents must be 5+ minutes old before planner can kill them (unless force=True)
 
 ## Gotchas
 
@@ -111,6 +136,11 @@ Before ANY commit, run:
 - Workers MUST NOT run pip install -- .venv is symlinked and editable install corruption is the #1 support issue
 - batch_analyzer.py signals (hotspots, clusters) feed the NEXT planning pass -- they don't affect the current batch
 - token_parser.py streaming output can exceed memory limits -- use max_output_mb in LocalBackend
+- Swarm agents MUST have `--permission-mode auto` -- without it they hang on permission prompts (stdin is piped)
+- Swarm planner cycles need minimum 60s interval -- without this it burns credits on empty responses when pending tasks exist
+- Swarm kill guard: 5-minute minimum age prevents premature agent termination. Use `force: True` in tests
+- Swarm agents must report progress via inbox -- planner has no visibility into working agents otherwise
+- "report" message type must be in context.py filter list for planner to see agent progress reports
 
 ## Conventions
 
