@@ -3266,6 +3266,14 @@ class Database:
 			for r in rows
 		]
 
+	def count_proposals_applied_since(self, since_date: str) -> int:
+		"""Count proposals applied since the given date (ISO format)."""
+		row = self.conn.execute(
+			"SELECT COUNT(*) FROM applied_proposals WHERE applied_at >= ?",
+			(since_date,),
+		).fetchone()
+		return row[0] if row else 0
+
 	# -- Agent Traces --
 
 	def save_agent_trace(

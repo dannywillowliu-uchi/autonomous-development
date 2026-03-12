@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -60,6 +62,20 @@ def _make_finding(title: str = "MCP server improvement") -> Finding:
 		summary="New MCP server pattern for autonomous coding agents",
 		relevance_score=1.5,
 	)
+
+
+def _mock_ratchet():
+	"""Create a mock GitRatchet that returns a fake tag."""
+	mock = MagicMock()
+	mock.checkpoint = AsyncMock(return_value="autodev/pre-test")
+	mock.rollback = AsyncMock()
+	mock.verify_and_decide = AsyncMock(return_value=True)
+	return mock
+
+
+def _patch_ratchet():
+	"""Context manager to patch GitRatchet in auto_update."""
+	return patch("autodev.ratchet.GitRatchet", return_value=_mock_ratchet())
 
 
 def _mock_scan_response(request: httpx.Request) -> httpx.Response:
@@ -163,7 +179,10 @@ async def test_pipeline_low_risk_auto_launches(config: MissionConfig, db: Databa
 	transport = httpx.MockTransport(_mock_scan_response)
 	mock_client = httpx.AsyncClient(transport=transport)
 
-	with patch("autodev.intelligence.scanner.httpx.AsyncClient") as mock_cls:
+	with (
+		patch("autodev.intelligence.scanner.httpx.AsyncClient") as mock_cls,
+		_patch_ratchet(),
+	):
 		mock_cls.return_value = mock_client
 		results = await pipeline.run(threshold=0.0)
 
@@ -185,7 +204,10 @@ async def test_pipeline_skips_already_applied(config: MissionConfig, db: Databas
 
 	# First run: process proposals
 	mock_client = httpx.AsyncClient(transport=transport)
-	with patch("autodev.intelligence.scanner.httpx.AsyncClient") as mock_cls:
+	with (
+		patch("autodev.intelligence.scanner.httpx.AsyncClient") as mock_cls,
+		_patch_ratchet(),
+	):
 		mock_cls.return_value = mock_client
 		first_results = await pipeline.run(threshold=0.0)
 
@@ -193,7 +215,10 @@ async def test_pipeline_skips_already_applied(config: MissionConfig, db: Databas
 
 	# Second run: same proposals should be skipped
 	mock_client2 = httpx.AsyncClient(transport=transport)
-	with patch("autodev.intelligence.scanner.httpx.AsyncClient") as mock_cls:
+	with (
+		patch("autodev.intelligence.scanner.httpx.AsyncClient") as mock_cls,
+		_patch_ratchet(),
+	):
 		mock_cls.return_value = mock_client2
 		second_results = await pipeline.run(threshold=0.0)
 
@@ -342,3 +367,116 @@ def test_cmd_auto_update_dry_run(capsys: pytest.CaptureFixture[str], db: Databas
 	assert result == 0
 	captured = capsys.readouterr()
 	assert "dry_run" in captured.out or "No new proposals" in captured.out
+
+
+# -- Rate limiting tests --
+
+
+def test_rate_limit_under_limit(config: MissionConfig, db: Database) -> None:
+	"""_check_rate_limit returns True when under the daily limit."""
+	pipeline = AutoUpdatePipeline(config, db, max_daily_modifications=5)
+	assert pipeline._check_rate_limit() is True
+
+
+def test_rate_limit_at_limit(config: MissionConfig, db: Database) -> None:
+	"""_check_rate_limit returns False when at or over the daily limit."""
+	pipeline = AutoUpdatePipeline(config, db, max_daily_modifications=2)
+	# Record 2 proposals today
+	db.record_applied_proposal("p1", "Title 1", "m1", "launched", "obj1")
+	db.record_applied_proposal("p2", "Title 2", "m2", "launched", "obj2")
+	assert pipeline._check_rate_limit() is False
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_blocks_run(config: MissionConfig, db: Database) -> None:
+	"""run() returns empty list when rate limit is exceeded."""
+	pipeline = AutoUpdatePipeline(config, db, max_daily_modifications=1)
+	db.record_applied_proposal("p1", "Title 1", "m1", "launched", "obj1")
+
+	results = await pipeline.run()
+	assert results == []
+
+
+def test_count_proposals_applied_since(db: Database) -> None:
+	"""count_proposals_applied_since returns correct count."""
+	db.record_applied_proposal("p1", "T1", "m1", "launched", "o1")
+	db.record_applied_proposal("p2", "T2", "m2", "launched", "o2")
+
+	today = datetime.now(timezone.utc).date().isoformat()
+	assert db.count_proposals_applied_since(today) == 2
+	assert db.count_proposals_applied_since("2099-01-01") == 0
+
+
+# -- Diff review tests --
+
+
+@pytest.mark.asyncio
+async def test_review_modification_approved(config: MissionConfig, db: Database) -> None:
+	"""_review_modification returns approved when LLM approves."""
+	pipeline = AutoUpdatePipeline(config, db)
+
+	mock_diff_proc = AsyncMock()
+	mock_diff_proc.communicate = AsyncMock(return_value=(b"+ new line\n- old line\n", b""))
+
+	review_json = json.dumps({"approved": True, "concerns": [], "summary": "Looks good"})
+	mock_review_proc = AsyncMock()
+	mock_review_proc.communicate = AsyncMock(return_value=(review_json.encode(), b""))
+
+	call_count = 0
+
+	async def mock_create_subprocess(*args, **kwargs):
+		nonlocal call_count
+		call_count += 1
+		if call_count == 1:
+			return mock_diff_proc
+		return mock_review_proc
+
+	with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+		result = await pipeline._review_modification("autodev/pre-test")
+
+	assert result["approved"] is True
+	assert result["summary"] == "Looks good"
+
+
+@pytest.mark.asyncio
+async def test_review_modification_rejected(config: MissionConfig, db: Database) -> None:
+	"""_review_modification returns rejected when LLM flags concerns."""
+	pipeline = AutoUpdatePipeline(config, db)
+
+	mock_diff_proc = AsyncMock()
+	mock_diff_proc.communicate = AsyncMock(return_value=(b"+ dangerous code\n", b""))
+
+	review_json = json.dumps({
+		"approved": False,
+		"concerns": ["Security issue"],
+		"summary": "Rejected due to security concern",
+	})
+	mock_review_proc = AsyncMock()
+	mock_review_proc.communicate = AsyncMock(return_value=(review_json.encode(), b""))
+
+	call_count = 0
+
+	async def mock_create_subprocess(*args, **kwargs):
+		nonlocal call_count
+		call_count += 1
+		if call_count == 1:
+			return mock_diff_proc
+		return mock_review_proc
+
+	with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess):
+		result = await pipeline._review_modification("autodev/pre-test")
+
+	assert result["approved"] is False
+	assert "Security issue" in result["concerns"]
+
+
+@pytest.mark.asyncio
+async def test_review_modification_llm_failure(config: MissionConfig, db: Database) -> None:
+	"""_review_modification defaults to approved when LLM fails."""
+	pipeline = AutoUpdatePipeline(config, db)
+
+	with patch("asyncio.create_subprocess_exec", side_effect=Exception("LLM unavailable")):
+		result = await pipeline._review_modification("autodev/pre-test")
+
+	assert result["approved"] is True
+	assert result["summary"] == "Review unavailable"
