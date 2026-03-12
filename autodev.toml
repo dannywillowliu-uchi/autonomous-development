@@ -2,29 +2,27 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = """Implement capability awareness and auto-update pipeline for autonomous-development.
+objective = """Improve swarm observability and robustness for autonomous-development.
 
-Read the full spec at docs/superpowers/specs/2026-03-12-capability-awareness-auto-update-design.md before starting.
+Read the full spec at docs/superpowers/specs/2026-03-12-swarm-observability-robustness-design.md before starting.
 
 Implementation priorities (in order):
 
-1. CAPABILITY MANIFEST: Create src/autodev/swarm/capabilities.py with CapabilityManifest dataclass and scan_capabilities() function. Scans ~/.claude/skills/, .claude/skills/, ~/.claude/agents/, .claude/agents/, hooks from settings.json files, MCP servers from ~/.claude.json and .mcp.json. Call it in controller.initialize() and store as self._capabilities. Render as "## Available Capabilities" section in context.py render_for_planner(). Pass to build_worker_prompt() so workers know what skills they can invoke.
+1. FIX COST TRACKING: In controller.py, add _parse_agent_cost(output: str) -> float that extracts cost from Claude Code agent output via regex (look for "Total cost: $X.XX" or similar patterns). Accumulate in self._total_cost_usd when agents complete. Store per-agent cost. Render cost breakdown (total, per-agent avg, budget remaining) in context.py render_for_planner().
 
-2. NEW DECISION TYPES: Add create_hook, register_mcp, create_agent_def, use_skill to DecisionType enum in swarm/models.py. Implement handler methods in controller.py: _handle_create_hook (writes to .claude/settings.json), _handle_register_mcp (writes to .mcp.json), _handle_create_agent_def (writes .claude/agents/<name>.md), _handle_use_skill (sends directive to agent inbox).
+2. PLANNER READS DIFFS: After agent completion in controller.py, run git diff --stat and git diff --name-only. Store files_changed in the agent's completion record. Add "## Recent Changes" section in context.py render_for_planner() showing files modified by recently completed agents. This lets the planner detect conflicts and validate agent claims.
 
-3. PLANNER PROMPT UPDATES: Update SYSTEM_PROMPT in prompts.py with new decision types, payload schemas, and capability awareness guidance. Include instruction: "Use existing capabilities before creating new ones."
+3. COMMIT-PER-TASK: After successful task completion in controller.py, auto-commit changes with message "autodev: {task_title} (agent: {agent_name})". Store commit hash in task completion record. Skip if no files changed. Do NOT commit on agent failure.
 
-4. INTEL CLAUDE CODE SCANNER: Create src/autodev/intelligence/claude_code.py with ClaudeCodeScanner class. Fetches GitHub releases for anthropics/claude-code, diffs against installed version (claude --version), parses for automation-relevant features, scores relevance. Register in scanner.py alongside existing scanners.
+4. WORKER SELF-VERIFICATION: In worker_prompt.py build_worker_prompt(), add instruction telling workers to run the project verification command before reporting completion. Include the verification command from config.target.verification.command.
 
-5. EVALUATOR EXTENSION: Add claude_code_release category to evaluator.py with risk classification (low: new skill/docs/tests, high: architecture/spawn/config changes) and target module mapping for autodev files.
+5. COMPLETION REPORT: Add _generate_completion_report() to controller.py. When swarm stops, generate report with: tasks completed/failed, total cost + per-agent breakdown, files changed (git diff --stat vs starting commit), duration, cycle count, learnings recorded. Write to .autodev-swarm-report.md.
 
-6. AUTO-UPDATE PIPELINE: Create src/autodev/auto_update.py with AutoUpdatePipeline class. Bridges intel proposals to swarm missions. Low-risk auto-launches, high-risk sends to Telegram for approval. Tracks applied proposals in DB (new applied_proposals table in db.py). Add "autodev auto-update" CLI command in cli.py with --dry-run and --approve-all flags.
+6. LEARNING QUALITY FILTER: In learnings.py, add _score_learning(text) that scores by specificity (file paths, function names = +1), actionability (bug/fix/race/gotcha = +1), genericness (under 50 chars or "all pass"/"completed" = -0.5). Only persist score >= 0.5. Add dedup via text hashing.
 
-7. TELEGRAM FIX: Debug and fix src/autodev/notifier.py. Verify env vars (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID) are read correctly. Test async httpx client against Bot API. Add request_approval() method for high-risk proposal approval gate.
+7. STALE-TASK DETECTION: In controller.py before spawning an agent, if the task mentions a specific file, check git diff for that file. If recently modified by another agent, add a note to the spawned agent's prompt: "Note: {file} was recently modified by {agent}. Check if the issue is already resolved."
 
-8. SPAWN UPDATES: Ensure build_claude_cmd() in config.py does not block access to global skills/plugins. When inherit_global_mcps is true, workers should see all installed capabilities.
-
-9. TESTS: Unit tests for capability scanner, new decision handlers, claude_code scanner, auto-update pipeline, and Telegram notification delivery. All existing tests must continue to pass.
+8. TESTS: Unit tests for cost parsing, learning quality filter, completion report generation, commit-per-task. All existing tests must continue to pass.
 
 Use .venv/bin/python for all Python commands.
 Run .venv/bin/python -m pytest tests/ -q to verify changes.
