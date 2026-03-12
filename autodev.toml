@@ -2,27 +2,29 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = """Improve swarm observability and robustness for autonomous-development.
+objective = """Implement safety rails, shared compute protocol, and trace review for autonomous-development.
 
-Read the full spec at docs/superpowers/specs/2026-03-12-swarm-observability-robustness-design.md before starting.
+Read the full spec at docs/superpowers/specs/2026-03-12-safety-rails-shared-compute-trace-review-design.md before starting.
 
 Implementation priorities (in order):
 
-1. FIX COST TRACKING: In controller.py, add _parse_agent_cost(output: str) -> float that extracts cost from Claude Code agent output via regex (look for "Total cost: $X.XX" or similar patterns). Accumulate in self._total_cost_usd when agents complete. Store per-agent cost. Render cost breakdown (total, per-agent avg, budget remaining) in context.py render_for_planner().
+1. GIT RATCHET: Create src/autodev/ratchet.py with GitRatchet class. checkpoint(proposal_id) creates a git tag autodev/pre-{id}. verify_and_decide(tag, verification_cmd) runs verification and returns keep/rollback. rollback(tag) does git reset --hard to the tag. Append results to .autodev-experiments.tsv (commit, tests_before, tests_after, keep/discard/crash, title, duration, cost, timestamp).
 
-2. PLANNER READS DIFFS: After agent completion in controller.py, run git diff --stat and git diff --name-only. Store files_changed in the agent's completion record. Add "## Recent Changes" section in context.py render_for_planner() showing files modified by recently completed agents. This lets the planner detect conflicts and validate agent claims.
+2. IMMUTABLE ORACLE: Create src/autodev/oracle.py with PROTECTED_PATTERNS list (pyproject.toml, ruff.toml, .ruff.toml, setup.cfg, mypy.ini, conftest.py, autodev.toml) and check_oracle_violation(changed_files) function that returns protected files that were modified. Integrate into ratchet: if oracle files touched, auto-rollback regardless of test results.
 
-3. COMMIT-PER-TASK: After successful task completion in controller.py, auto-commit changes with message "autodev: {task_title} (agent: {agent_name})". Store commit hash in task completion record. Skip if no files changed. Do NOT commit on agent failure.
+3. RATE LIMITING: In auto_update.py, add _check_rate_limit() that queries applied_proposals table for today's count, returns False if >= 5 (configurable via max_daily_modifications). In db.py, add count_proposals_applied_since(since_date) method. Wire rate check into the run() pipeline before processing proposals.
 
-4. WORKER SELF-VERIFICATION: In worker_prompt.py build_worker_prompt(), add instruction telling workers to run the project verification command before reporting completion. Include the verification command from config.target.verification.command.
+4. DIFF REVIEW GATE: In auto_update.py, add _review_modification(tag) that runs git diff tag..HEAD, sends the diff to an LLM with a review prompt asking for {approved: bool, concerns: list, summary: str}. Call this after swarm completes but before the keep/rollback decision in the ratchet flow. Use the planner model for the review.
 
-5. COMPLETION REPORT: Add _generate_completion_report() to controller.py. When swarm stops, generate report with: tasks completed/failed, total cost + per-agent breakdown, files changed (git diff --stat vs starting commit), duration, cycle count, learnings recorded. Write to .autodev-swarm-report.md.
+5. TRACE ANALYZER: Create src/autodev/trace_review.py with TraceAnalyzer class. analyze_run(run_id) reads traces from DB, extracts error patterns, file hotspots, wasted agents, success rate. generate_report(analysis) produces structured markdown. llm_review_traces(run_id) sends trace summaries to LLM for deeper pattern recognition. Add RunAnalysis and HistoryAnalysis dataclasses.
 
-6. LEARNING QUALITY FILTER: In learnings.py, add _score_learning(text) that scores by specificity (file paths, function names = +1), actionability (bug/fix/race/gotcha = +1), genericness (under 50 chars or "all pass"/"completed" = -0.5). Only persist score >= 0.5. Add dedup via text hashing.
+6. TRACE REVIEW CLI: In cli.py, add autodev trace-review command with --last, --run-id, --history, --runs, and --deep flags. --last reviews most recent run, --deep enables LLM-assisted review.
 
-7. STALE-TASK DETECTION: In controller.py before spawning an agent, if the task mentions a specific file, check git diff for that file. If recently modified by another agent, add a note to the spawned agent's prompt: "Note: {file} was recently modified by {agent}. Check if the issue is already resolved."
+7. AUTO-REVIEW HOOK: In controller.py cleanup, after _generate_completion_report(), run TraceAnalyzer.analyze_run() and write findings to .autodev-traces/{run_id}/REVIEW.md. Append key recommendations to learnings file.
 
-8. TESTS: Unit tests for cost parsing, learning quality filter, completion report generation, commit-per-task. All existing tests must continue to pass.
+8. CONTRIBUTOR PROTOCOL: Create src/autodev/contrib.py with ContributorProtocol class. claim_proposal(proposal_id) uses git-based optimistic locking via .autodev-claims.json. publish_result() appends to shared experiment log. sync_learnings() pulls and merges shared learnings. Add autodev contrib CLI subcommands: register, proposals, claim, publish, sync.
+
+9. TESTS: Unit tests for ratchet (checkpoint/rollback/keep), oracle (violation detection), rate limiting, trace analyzer, contributor protocol (claim/publish/sync). All existing tests must continue to pass.
 
 Use .venv/bin/python for all Python commands.
 Run .venv/bin/python -m pytest tests/ -q to verify changes.
