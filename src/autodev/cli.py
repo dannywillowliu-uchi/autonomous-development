@@ -155,6 +155,37 @@ def build_parser() -> argparse.ArgumentParser:
 	auto_update.add_argument("--approve-all", action="store_true", help="Skip approval for high-risk")
 	auto_update.add_argument("--threshold", type=float, default=0.3, help="Relevance threshold (default: 0.3)")
 
+	# autodev trace-review
+	trace_review = sub.add_parser("trace-review", help="Review agent traces from swarm runs")
+	trace_review.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	trace_review.add_argument("--last", action="store_true", help="Review most recent run")
+	trace_review.add_argument("--run-id", default=None, help="Review a specific run by ID")
+	trace_review.add_argument("--history", action="store_true", help="Review across multiple runs")
+	trace_review.add_argument("--runs", type=int, default=5, help="Number of runs for history (default: 5)")
+	trace_review.add_argument("--deep", action="store_true", help="Enable LLM-assisted review")
+
+	# autodev contrib
+	contrib = sub.add_parser("contrib", help="Multi-contributor coordination")
+	contrib.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+	contrib.add_argument("--username", default=None, help="Contributor username (default: git user.name)")
+	contrib_sub = contrib.add_subparsers(dest="contrib_command")
+
+	contrib_sub.add_parser("register", help="Register as contributor")
+
+	contrib_sub.add_parser("proposals", help="List available proposals")
+
+	contrib_claim = contrib_sub.add_parser("claim", help="Claim a proposal")
+	contrib_claim.add_argument("proposal_id", help="Proposal ID to claim")
+
+	contrib_publish = contrib_sub.add_parser("publish", help="Publish results for a proposal")
+	contrib_publish.add_argument("proposal_id", help="Proposal ID")
+	contrib_publish.add_argument("--commit", default="", help="Commit hash")
+	contrib_publish.add_argument("--tests-before", type=int, default=0, help="Tests passing before")
+	contrib_publish.add_argument("--tests-after", type=int, default=0, help="Tests passing after")
+	contrib_publish.add_argument("--outcome", default="", help="Outcome: keep/discard/crash")
+
+	contrib_sub.add_parser("sync", help="Sync shared learnings")
+
 	return parser
 
 
@@ -1204,6 +1235,131 @@ def cmd_swarm_tui(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_trace_review(args: argparse.Namespace) -> int:
+	"""Review agent traces from swarm runs."""
+	config = load_config(args.config)
+	db_path = _get_db_path(args.config)
+
+	if not db_path.exists():
+		print("No database found. Run a swarm first.")
+		return 1
+
+	from autodev.trace_review import TraceAnalyzer
+
+	with Database(db_path) as db:
+		analyzer = TraceAnalyzer(db, config.target.resolved_path)
+
+		if args.history:
+			analysis = asyncio.run(analyzer.analyze_history(args.runs))
+			report = asyncio.run(analyzer.generate_report(analysis))
+			print(report)
+			return 0
+
+		run_id = args.run_id
+		if args.last:
+			traces = db.get_agent_traces(limit=1)
+			if not traces:
+				print("No traces found.")
+				return 1
+			run_id = traces[0]["run_id"]
+
+		if not run_id:
+			print("Specify --last, --run-id RUN_ID, or --history")
+			return 1
+
+		analysis = asyncio.run(analyzer.analyze_run(run_id))
+		report = asyncio.run(analyzer.generate_report(analysis))
+		print(report)
+
+		if args.deep:
+			prompt = asyncio.run(analyzer.llm_review_traces(run_id))
+			print("\n## LLM Review Prompt\n")
+			print(prompt)
+
+		return 0
+
+
+def _resolve_contrib_username(args: argparse.Namespace, repo_path: Path) -> str:
+	"""Resolve contributor username from args or git config."""
+	if args.username:
+		return args.username
+	result = subprocess.run(
+		["git", "config", "user.name"],
+		capture_output=True, text=True, cwd=str(repo_path),
+	)
+	name = result.stdout.strip()
+	if not name:
+		print("Error: no --username provided and git user.name is not set")
+		sys.exit(1)
+	return name
+
+
+def cmd_contrib(args: argparse.Namespace) -> int:
+	"""Multi-contributor coordination commands."""
+	if not args.contrib_command:
+		print("Usage: autodev contrib {register,proposals,claim,publish,sync}")
+		return 1
+
+	config = load_config(args.config)
+	repo_path = config.target.resolved_path
+
+	from autodev.contrib import ContributorProtocol
+
+	username = _resolve_contrib_username(args, repo_path)
+	protocol = ContributorProtocol(repo_path, username)
+
+	if args.contrib_command == "register":
+		info = asyncio.run(protocol.register())
+		print(f"Registered: {info.username} (joined: {info.joined_at})")
+		return 0
+
+	if args.contrib_command == "proposals":
+		proposals = asyncio.run(protocol.list_proposals())
+		if not proposals:
+			print("No available proposals.")
+			return 0
+		for p in proposals:
+			pid = p.get("proposal_id", "?")
+			status = p.get("status", "available")
+			print(f"  {pid}: {status}")
+		return 0
+
+	if args.contrib_command == "claim":
+		success = asyncio.run(protocol.claim_proposal(args.proposal_id))
+		if success:
+			print(f"Claimed: {args.proposal_id}")
+			return 0
+		print(f"Failed to claim: {args.proposal_id} (already claimed?)")
+		return 1
+
+	if args.contrib_command == "publish":
+		from datetime import datetime, timezone
+
+		result = {
+			"commit": args.commit,
+			"tests_before": args.tests_before,
+			"tests_after": args.tests_after,
+			"outcome": args.outcome,
+			"proposal_title": args.proposal_id,
+			"duration_s": "",
+			"cost_usd": "",
+			"timestamp": datetime.now(timezone.utc).isoformat(),
+		}
+		asyncio.run(protocol.publish_result(args.proposal_id, result))
+		print(f"Published result for: {args.proposal_id}")
+		return 0
+
+	if args.contrib_command == "sync":
+		learnings = asyncio.run(protocol.sync_learnings())
+		if learnings:
+			print(learnings)
+		else:
+			print("No shared learnings found.")
+		return 0
+
+	return 1
+
+
 COMMANDS = {
 	"status": cmd_status,
 	"history": cmd_history,
@@ -1219,6 +1375,8 @@ COMMANDS = {
 	"intel": cmd_intel,
 	"auto-update": cmd_auto_update,
 	"diagnose": cmd_diagnose,
+	"trace-review": cmd_trace_review,
+	"contrib": cmd_contrib,
 
 	"register": cmd_register,
 	"unregister": cmd_unregister,

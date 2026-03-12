@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from autodev.config import SwarmConfig
 from autodev.swarm.controller import SwarmController
 from autodev.swarm.models import (
@@ -1567,3 +1569,70 @@ class TestCostTracking:
 		assert ctrl._total_cost_usd == 3.75
 		assert ctrl._agent_costs["w1"] == 3.75
 		assert events[0]["cost_usd"] == 3.75
+
+
+class TestRunTraceReview:
+	@pytest.mark.asyncio
+	async def test_writes_review_and_learnings(self, tmp_path: Path) -> None:
+		"""Trace review writes REVIEW.md and appends recommendations to learnings."""
+		config = _make_config(tmp_path)
+		db = _make_db()
+		# Provide traces with a file hotspot so recommendations are generated
+		db.get_agent_traces = lambda run_id=None, limit=50: [
+			{
+				"id": "t1", "run_id": "test-run", "agent_name": "a1",
+				"agent_id": "aid-1", "task_id": "tid-1", "task_title": "task 1",
+				"started_at": "2026-01-01T00:00:00", "ended_at": "2026-01-01T00:02:00",
+				"duration_s": 120.0, "exit_code": 0, "cost_usd": 1.0,
+				"files_changed": ["src/shared.py"], "trace_path": "", "output_tail": "",
+			},
+			{
+				"id": "t2", "run_id": "test-run", "agent_name": "a2",
+				"agent_id": "aid-2", "task_id": "tid-2", "task_title": "task 2",
+				"started_at": "2026-01-01T00:00:00", "ended_at": "2026-01-01T00:03:00",
+				"duration_s": 180.0, "exit_code": 1, "cost_usd": 2.0,
+				"files_changed": ["src/shared.py"], "trace_path": "",
+				"output_tail": "Error: something broke",
+			},
+		] if run_id == "test-run" else []
+		ctrl = SwarmController(config, _make_swarm_config(), db)
+		ctrl._run_id = "test-run"
+
+		await ctrl._run_trace_review()
+
+		# Verify REVIEW.md was written
+		review_path = ctrl._trace_dir / "REVIEW.md"
+		assert review_path.exists()
+		content = review_path.read_text()
+		assert "# Trace Review: test-run" in content
+		assert "src/shared.py" in content
+
+		# Verify learnings file was updated
+		learnings_path = tmp_path / ".autodev-swarm-learnings.md"
+		assert learnings_path.exists()
+		learnings_content = learnings_path.read_text()
+		assert "src/shared.py" in learnings_content
+
+	@pytest.mark.asyncio
+	async def test_skips_when_no_traces(self, tmp_path: Path) -> None:
+		"""Trace review is a no-op when no traces exist."""
+		config = _make_config(tmp_path)
+		db = _make_db()
+		db.get_agent_traces = lambda run_id=None, limit=50: []
+		ctrl = SwarmController(config, _make_swarm_config(), db)
+
+		await ctrl._run_trace_review()
+
+		review_path = ctrl._trace_dir / "REVIEW.md"
+		assert not review_path.exists()
+
+	@pytest.mark.asyncio
+	async def test_does_not_crash_on_error(self, tmp_path: Path) -> None:
+		"""Trace review failure should not propagate."""
+		config = _make_config(tmp_path)
+		db = _make_db()
+		db.get_agent_traces = MagicMock(side_effect=RuntimeError("db error"))
+		ctrl = SwarmController(config, _make_swarm_config(), db)
+
+		# Should not raise
+		await ctrl._run_trace_review()

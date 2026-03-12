@@ -1249,4 +1249,38 @@ class SwarmController:
 		for agent_id in list(self._processes.keys()):
 			await self._handle_kill({"agent_id": agent_id, "reason": "swarm shutdown"})
 		await self._generate_completion_report()
+		await self._run_trace_review()
 		logger.info("Swarm controller cleaned up")
+
+	async def _run_trace_review(self) -> None:
+		"""Run trace analysis and write review report after swarm completion."""
+		try:
+			from autodev.swarm.learnings import SwarmLearnings
+			from autodev.trace_review import TraceAnalyzer
+
+			project_path = Path(self._config.target.resolved_path)
+			analyzer = TraceAnalyzer(self._db, project_path)
+			analysis = await analyzer.analyze_run(self._run_id)
+
+			if analysis.total_agents == 0:
+				logger.info("No agent traces found for run %s, skipping trace review", self._run_id)
+				return
+
+			report = await analyzer.generate_report(analysis)
+
+			# Write full report to .autodev-traces/{run_id}/REVIEW.md
+			review_dir = self._trace_dir
+			review_dir.mkdir(parents=True, exist_ok=True)
+			review_path = review_dir / "REVIEW.md"
+			review_path.write_text(report)
+			logger.info("Trace review written to %s", review_path)
+
+			# Append key recommendations to learnings file
+			if analysis.recommendations:
+				learnings = SwarmLearnings(project_path)
+				for rec in analysis.recommendations:
+					learnings.add_discovery(f"trace-review/{self._run_id}", rec)
+				logger.info("Appended %d trace recommendations to learnings", len(analysis.recommendations))
+
+		except Exception:
+			logger.warning("Trace review failed (non-fatal)", exc_info=True)
