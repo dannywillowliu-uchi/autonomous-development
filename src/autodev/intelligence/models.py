@@ -37,6 +37,7 @@ class Finding:
 	published_at: str = field(default_factory=_now_iso)
 	raw_data: dict[str, Any] = field(default_factory=dict)
 	relevance_score: float = 0.0
+	trust_level: str = "medium"
 
 
 @dataclass

@@ -1250,7 +1250,46 @@ class SwarmController:
 			await self._handle_kill({"agent_id": agent_id, "reason": "swarm shutdown"})
 		await self._generate_completion_report()
 		await self._run_trace_review()
+		await self._record_metrics()
 		logger.info("Swarm controller cleaned up")
+
+	async def _record_metrics(self) -> None:
+		"""Record swarm run metrics for trend analysis."""
+		try:
+			from autodev.metrics import MetricsTracker, SwarmMetrics
+
+			project_path = Path(self._config.target.resolved_path)
+			tracker = MetricsTracker(project_path)
+
+			completed = [t for t in self._tasks.values() if t.status == TaskStatus.COMPLETED]
+			failed = [t for t in self._tasks.values() if t.status == TaskStatus.FAILED]
+			total_tasks = len(completed) + len(failed)
+			duration = time.monotonic() - self._start_time
+
+			# Agent success rate: completed agents / total finished agents
+			finished_agents = [
+				a for a in list(self._agents.values()) + self._dead_agent_history
+				if a.status in (AgentStatus.COMPLETED, AgentStatus.FAILED)
+			]
+			completed_agents = [a for a in finished_agents if a.status == AgentStatus.COMPLETED]
+			agent_success_rate = len(completed_agents) / len(finished_agents) if finished_agents else 0.0
+
+			metrics = SwarmMetrics(
+				run_id=self._run_id,
+				timestamp=_now_iso(),
+				test_count=0,
+				test_pass_rate=0.0,
+				total_cost_usd=self._total_cost_usd,
+				cost_per_task=self._total_cost_usd / total_tasks if total_tasks > 0 else 0.0,
+				agent_success_rate=agent_success_rate,
+				total_duration_s=duration,
+				tasks_completed=len(completed),
+				tasks_failed=len(failed),
+			)
+			tracker.record_run(metrics)
+			logger.info("Recorded swarm metrics for run %s", self._run_id)
+		except Exception:
+			logger.warning("Failed to record metrics", exc_info=True)
 
 	async def _run_trace_review(self) -> None:
 		"""Run trace analysis and write review report after swarm completion."""

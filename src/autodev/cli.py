@@ -154,6 +154,8 @@ def build_parser() -> argparse.ArgumentParser:
 	auto_update.add_argument("--dry-run", action="store_true", help="Show proposals without launching")
 	auto_update.add_argument("--approve-all", action="store_true", help="Skip approval for high-risk")
 	auto_update.add_argument("--threshold", type=float, default=0.3, help="Relevance threshold (default: 0.3)")
+	auto_update.add_argument("--daemon", action="store_true", help="Run as daemon with recurring update cycles")
+	auto_update.add_argument("--interval", type=float, default=24.0, help="Hours between daemon cycles (default: 24.0)")
 
 	# autodev trace-review
 	trace_review = sub.add_parser("trace-review", help="Review agent traces from swarm runs")
@@ -1199,6 +1201,17 @@ def cmd_auto_update(args: argparse.Namespace) -> int:
 	"""Scan for improvements and auto-apply via swarm missions."""
 	config = load_config(args.config)
 	db_path = _get_db_path(args.config)
+
+	if args.daemon:
+		from autodev.scheduler import AutoUpdateScheduler
+
+		with Database(db_path) as db:
+			scheduler = AutoUpdateScheduler(config, db, interval_hours=args.interval)
+			try:
+				asyncio.run(scheduler.run_forever())
+			except KeyboardInterrupt:
+				scheduler.stop()
+		return 0
 
 	with Database(db_path) as db:
 		from autodev.auto_update import AutoUpdatePipeline

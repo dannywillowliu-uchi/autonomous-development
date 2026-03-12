@@ -11,6 +11,7 @@ import httpx
 from autodev.intelligence.evaluator import evaluate_findings, generate_proposals
 from autodev.intelligence.models import AdaptationProposal, Finding
 from autodev.intelligence.sources import scan_arxiv, scan_github, scan_hackernews
+from autodev.intelligence.web_sources import WebSourceScanner
 
 
 @dataclass
@@ -45,6 +46,16 @@ async def run_scan(threshold: float = 0.3) -> IntelReport:
 			continue
 		all_findings.extend(result)
 		sources.append(name)
+
+	# Web sources (blogs, trending, arxiv listings)
+	try:
+		web_scanner = WebSourceScanner()
+		async with httpx.AsyncClient(timeout=30.0) as web_client:
+			web_results = await web_scanner.scan(web_client)
+		all_findings.extend(web_results)
+		sources.append("web_sources")
+	except Exception:
+		pass  # Don't crash if web scanning fails
 
 	evaluated = evaluate_findings(all_findings)
 	proposals = generate_proposals(evaluated, threshold=threshold)

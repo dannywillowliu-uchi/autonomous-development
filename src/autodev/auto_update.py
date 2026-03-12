@@ -12,13 +12,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from autodev.config import MissionConfig
 from autodev.db import Database
-from autodev.intelligence.models import AdaptationProposal
+from autodev.intelligence.models import AdaptationProposal, Finding
 from autodev.intelligence.scanner import run_scan
 from autodev.notifier import TelegramNotifier
 
@@ -50,6 +51,7 @@ class AutoUpdatePipeline:
 		self._config = config
 		self._db = db
 		self._max_daily_modifications = max_daily_modifications
+		self._findings_by_id: dict[str, Finding] = {}
 
 	def _check_rate_limit(self) -> bool:
 		"""Return True if under the daily self-modification limit."""
@@ -88,6 +90,8 @@ class AutoUpdatePipeline:
 			"Intel scan complete: %d findings, %d proposals",
 			len(report.findings), len(report.proposals),
 		)
+
+		self._findings_by_id = {f.id: f for f in report.findings}
 
 		# Filter by title (IDs are regenerated each scan, but titles are stable)
 		proposals = [
@@ -144,7 +148,7 @@ class AutoUpdatePipeline:
 		ratchet = GitRatchet(repo_path)
 		tag = await ratchet.checkpoint(proposal.id)
 
-		objective = self._generate_objective(proposal)
+		objective = await self._generate_spec_or_objective(proposal)
 		mission_id = self._record_applied(proposal, objective)
 		logger.info("Launched mission %s for proposal: %s (tag=%s)", mission_id, proposal.title, tag)
 
@@ -312,7 +316,7 @@ class AutoUpdatePipeline:
 			await notifier.close()
 
 		if approved:
-			objective = self._generate_objective(proposal)
+			objective = await self._generate_spec_or_objective(proposal)
 			mission_id = self._record_applied(proposal, objective)
 			logger.info("Approved and launched mission %s: %s", mission_id, proposal.title)
 			return UpdateResult(
