@@ -2,19 +2,33 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = """Fix bugs and improve autonomous-development. Focus on the swarm module (src/autodev/swarm/).
+objective = """Implement capability awareness and auto-update pipeline for autonomous-development.
 
-Priorities:
-1. Find and fix any bugs in the swarm controller, planner, or worker prompt system
-2. Improve reliability of agent lifecycle management (spawning, monitoring, completion detection)
-3. Improve the driving planner's decision quality (better prompts, better state rendering)
-4. Improve stagnation detection and pivot strategies
-5. Security audit: review subprocess spawning, path validation, inbox I/O, and config parsing for injection, traversal, or privilege escalation risks. Run bandit on src/ and fix findings.
-6. Add missing test coverage for the swarm module
-7. Any other high-value improvements you discover
+Read the full spec at docs/superpowers/specs/2026-03-12-capability-awareness-auto-update-design.md before starting.
+
+Implementation priorities (in order):
+
+1. CAPABILITY MANIFEST: Create src/autodev/swarm/capabilities.py with CapabilityManifest dataclass and scan_capabilities() function. Scans ~/.claude/skills/, .claude/skills/, ~/.claude/agents/, .claude/agents/, hooks from settings.json files, MCP servers from ~/.claude.json and .mcp.json. Call it in controller.initialize() and store as self._capabilities. Render as "## Available Capabilities" section in context.py render_for_planner(). Pass to build_worker_prompt() so workers know what skills they can invoke.
+
+2. NEW DECISION TYPES: Add create_hook, register_mcp, create_agent_def, use_skill to DecisionType enum in swarm/models.py. Implement handler methods in controller.py: _handle_create_hook (writes to .claude/settings.json), _handle_register_mcp (writes to .mcp.json), _handle_create_agent_def (writes .claude/agents/<name>.md), _handle_use_skill (sends directive to agent inbox).
+
+3. PLANNER PROMPT UPDATES: Update SYSTEM_PROMPT in prompts.py with new decision types, payload schemas, and capability awareness guidance. Include instruction: "Use existing capabilities before creating new ones."
+
+4. INTEL CLAUDE CODE SCANNER: Create src/autodev/intelligence/claude_code.py with ClaudeCodeScanner class. Fetches GitHub releases for anthropics/claude-code, diffs against installed version (claude --version), parses for automation-relevant features, scores relevance. Register in scanner.py alongside existing scanners.
+
+5. EVALUATOR EXTENSION: Add claude_code_release category to evaluator.py with risk classification (low: new skill/docs/tests, high: architecture/spawn/config changes) and target module mapping for autodev files.
+
+6. AUTO-UPDATE PIPELINE: Create src/autodev/auto_update.py with AutoUpdatePipeline class. Bridges intel proposals to swarm missions. Low-risk auto-launches, high-risk sends to Telegram for approval. Tracks applied proposals in DB (new applied_proposals table in db.py). Add "autodev auto-update" CLI command in cli.py with --dry-run and --approve-all flags.
+
+7. TELEGRAM FIX: Debug and fix src/autodev/notifier.py. Verify env vars (TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID) are read correctly. Test async httpx client against Bot API. Add request_approval() method for high-risk proposal approval gate.
+
+8. SPAWN UPDATES: Ensure build_claude_cmd() in config.py does not block access to global skills/plugins. When inherit_global_mcps is true, workers should see all installed capabilities.
+
+9. TESTS: Unit tests for capability scanner, new decision handlers, claude_code scanner, auto-update pipeline, and Telegram notification delivery. All existing tests must continue to pass.
 
 Use .venv/bin/python for all Python commands.
 Run .venv/bin/python -m pytest tests/ -q to verify changes.
+Run .venv/bin/ruff check src/ tests/ to verify linting.
 """
 
 [target.verification]
