@@ -2,29 +2,31 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = """Implement safety rails, shared compute protocol, and trace review for autonomous-development.
+objective = """Implement the self-recursion loop for autonomous-development.
 
-Read the full spec at docs/superpowers/specs/2026-03-12-safety-rails-shared-compute-trace-review-design.md before starting.
+Read the full spec at docs/superpowers/specs/2026-03-12-self-recursion-loop-design.md before starting.
 
 Implementation priorities (in order):
 
-1. GIT RATCHET: Create src/autodev/ratchet.py with GitRatchet class. checkpoint(proposal_id) creates a git tag autodev/pre-{id}. verify_and_decide(tag, verification_cmd) runs verification and returns keep/rollback. rollback(tag) does git reset --hard to the tag. Append results to .autodev-experiments.tsv (commit, tests_before, tests_after, keep/discard/crash, title, duration, cost, timestamp).
+1. WEB SOURCE SCANNERS: Create src/autodev/intelligence/web_sources.py with WebSourceScanner class. Add scanners for Anthropic blog, OpenAI blog, DeepMind blog, GitHub trending, and ArXiv cs.AI. Each scanner fetches the page via httpx, parses entries, scores relevance using AUTOMATION_KEYWORDS from claude_code.py. Return list[Finding] with source and trust_level fields. Add trust_level field to Finding in intelligence/models.py.
 
-2. IMMUTABLE ORACLE: Create src/autodev/oracle.py with PROTECTED_PATTERNS list (pyproject.toml, ruff.toml, .ruff.toml, setup.cfg, mypy.ini, conftest.py, autodev.toml) and check_oracle_violation(changed_files) function that returns protected files that were modified. Integrate into ratchet: if oracle files touched, auto-rollback regardless of test results.
+2. SOURCE REGISTRATION: In intelligence/sources.py, register WebSourceScanner alongside existing ClaudeCodeScanner. Update run_scan() to call web_scanner.scan() and extend all_findings. Respect source trust levels (high/medium/low).
 
-3. RATE LIMITING: In auto_update.py, add _check_rate_limit() that queries applied_proposals table for today's count, returns False if >= 5 (configurable via max_daily_modifications). In db.py, add count_proposals_applied_since(since_date) method. Wire rate check into the run() pipeline before processing proposals.
+3. SPEC GENERATOR: Create src/autodev/intelligence/spec_generator.py with SpecGenerator class. generate_spec(proposal) fetches source material, reads relevant project modules, sends to LLM with structured prompt asking for problem statement, file changes, testing requirements, risk assessment. Returns markdown spec.
 
-4. DIFF REVIEW GATE: In auto_update.py, add _review_modification(tag) that runs git diff tag..HEAD, sends the diff to an LLM with a review prompt asking for {approved: bool, concerns: list, summary: str}. Call this after swarm completes but before the keep/rollback decision in the ratchet flow. Use the planner model for the review.
+4. SPEC INTEGRATION: In auto_update.py, replace _generate_objective() with _generate_spec() that uses SpecGenerator. Write generated specs to docs/superpowers/specs/auto-{date}-{slug}.md. Pass spec content as the swarm objective.
 
-5. TRACE ANALYZER: Create src/autodev/trace_review.py with TraceAnalyzer class. analyze_run(run_id) reads traces from DB, extracts error patterns, file hotspots, wasted agents, success rate. generate_report(analysis) produces structured markdown. llm_review_traces(run_id) sends trace summaries to LLM for deeper pattern recognition. Add RunAnalysis and HistoryAnalysis dataclasses.
+5. SCHEDULER: Create src/autodev/scheduler.py with AutoUpdateScheduler class. run_forever() loop: scan, evaluate, execute, sleep, repeat. Configurable interval (default 24h). Graceful shutdown via stop(). Exception handling per cycle.
 
-6. TRACE REVIEW CLI: In cli.py, add autodev trace-review command with --last, --run-id, --history, --runs, and --deep flags. --last reviews most recent run, --deep enables LLM-assisted review.
+6. SCHEDULER CLI: In cli.py, add --daemon and --interval flags to auto-update command. --daemon runs the scheduler loop, --interval sets hours between cycles (default 24).
 
-7. AUTO-REVIEW HOOK: In controller.py cleanup, after _generate_completion_report(), run TraceAnalyzer.analyze_run() and write findings to .autodev-traces/{run_id}/REVIEW.md. Append key recommendations to learnings file.
+7. METRICS TRACKER: Create src/autodev/metrics.py with SwarmMetrics dataclass and MetricsTracker class. record_run() appends to .autodev-metrics.tsv. get_trend(last_n) analyzes trends across recent runs. correlate_with_modifications() compares metrics before/after self-modifications using experiments.tsv.
 
-8. CONTRIBUTOR PROTOCOL: Create src/autodev/contrib.py with ContributorProtocol class. claim_proposal(proposal_id) uses git-based optimistic locking via .autodev-claims.json. publish_result() appends to shared experiment log. sync_learnings() pulls and merges shared learnings. Add autodev contrib CLI subcommands: register, proposals, claim, publish, sync.
+8. METRICS RECORDING HOOK: In controller.py cleanup (after _generate_completion_report), instantiate MetricsTracker and call record_run() with metrics parsed from the completion report.
 
-9. TESTS: Unit tests for ratchet (checkpoint/rollback/keep), oracle (violation detection), rate limiting, trace analyzer, contributor protocol (claim/publish/sync). All existing tests must continue to pass.
+9. METRICS CLI: In cli.py, add autodev metrics command with --trend and --correlate flags.
+
+10. TESTS: Unit tests for web scanners (mock httpx), spec generator (mock LLM), scheduler (mock pipeline), metrics tracker (TSV recording, trend calc, correlation). All existing tests must continue to pass.
 
 Use .venv/bin/python for all Python commands.
 Run .venv/bin/python -m pytest tests/ -q to verify changes.
