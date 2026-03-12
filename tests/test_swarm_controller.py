@@ -1368,3 +1368,202 @@ class TestHandleWait:
 		with patch("autodev.swarm.controller.asyncio.sleep", new=AsyncMock()):
 			result = await ctrl._handle_wait({})
 		assert result["waited"] == 10
+
+
+class TestParseAgentCost:
+	def test_standard_format(self, tmp_path: Path) -> None:
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		assert ctrl._parse_agent_cost("Some output\nTotal cost: $1.23\nDone") == 1.23
+
+	def test_with_tab(self, tmp_path: Path) -> None:
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		assert ctrl._parse_agent_cost("Total cost:\t$0.50") == 0.50
+
+	def test_not_found(self, tmp_path: Path) -> None:
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		assert ctrl._parse_agent_cost("random text with no cost info") == 0.0
+
+	def test_large_amount(self, tmp_path: Path) -> None:
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		assert ctrl._parse_agent_cost("Total cost: $123.45") == 123.45
+
+	def test_integer_amount(self, tmp_path: Path) -> None:
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		assert ctrl._parse_agent_cost("Total cost: $5") == 5.0
+
+
+class TestCompletionReport:
+	async def test_completion_report_generation(self, tmp_path: Path) -> None:
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		ctrl._start_commit = None
+		ctrl._total_cost_usd = 2.50
+		ctrl._agent_costs = {"worker-1": 1.50, "worker-2": 1.00}
+
+		# Add tasks
+		await ctrl.execute_decisions([
+			PlannerDecision(type=DecisionType.CREATE_TASK, payload={"title": "Task A"}),
+			PlannerDecision(type=DecisionType.CREATE_TASK, payload={"title": "Task B"}),
+		])
+		ctrl.tasks[0].status = TaskStatus.COMPLETED
+		ctrl.tasks[0].result_summary = "Done A"
+		ctrl.tasks[1].status = TaskStatus.FAILED
+		ctrl.tasks[1].result_summary = "Failed B"
+		ctrl.tasks[1].attempt_count = 2
+
+		report = await ctrl._generate_completion_report()
+
+		assert "# Swarm Completion Report" in report
+		assert "Tasks completed: 1" in report
+		assert "Tasks failed: 1" in report
+		assert "$2.50" in report
+		assert "worker-1: $1.50" in report
+		assert "Done A" in report
+		assert "Failed B" in report
+		# Report file written
+		report_path = tmp_path / ".autodev-swarm-report.md"
+		assert report_path.exists()
+		assert "Completion Report" in report_path.read_text()
+
+
+class TestCommitPerTask:
+	async def test_commit_on_success(self, tmp_path: Path) -> None:
+		"""Verify git commit is called after successful task completion."""
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		mock_proc = MagicMock(returncode=None)
+		with patch.object(ctrl, "_spawn_claude_session", new=AsyncMock(return_value=mock_proc)):
+			await ctrl.execute_decisions([
+				PlannerDecision(type=DecisionType.CREATE_TASK, payload={"title": "Fix bug"}, priority=10),
+				PlannerDecision(type=DecisionType.SPAWN, payload={"name": "w1", "prompt": "fix"}, priority=9),
+			])
+
+		# Simulate completion
+		mock_proc.returncode = 0
+		ad_result = '{"status":"completed","summary":"Fixed"}'
+		mock_proc.stdout = AsyncMock()
+		mock_proc.stdout.read = AsyncMock(return_value=f"AD_RESULT:{ad_result}".encode())
+
+		with (
+			patch.object(ctrl, "_get_git_changed_files", new=AsyncMock(return_value=["a.py"])),
+			patch.object(ctrl, "_auto_commit_task", new=AsyncMock(return_value="abc123")) as mock_commit,
+		):
+			events = await ctrl.monitor_agents()
+
+		mock_commit.assert_called_once_with("Fix bug", "w1")
+		assert events[0]["commit_hash"] == "abc123"
+
+	async def test_no_commit_on_failure(self, tmp_path: Path) -> None:
+		"""Verify git commit is NOT called after failed task completion."""
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		mock_proc = MagicMock(returncode=None)
+		with patch.object(ctrl, "_spawn_claude_session", new=AsyncMock(return_value=mock_proc)):
+			await ctrl.execute_decisions([
+				PlannerDecision(type=DecisionType.CREATE_TASK, payload={"title": "Fix bug"}, priority=10),
+				PlannerDecision(type=DecisionType.SPAWN, payload={"name": "w1", "prompt": "fix"}, priority=9),
+			])
+
+		# Simulate failure
+		mock_proc.returncode = 1
+		ad_result = '{"status":"failed","summary":"Crashed"}'
+		mock_proc.stdout = AsyncMock()
+		mock_proc.stdout.read = AsyncMock(return_value=f"AD_RESULT:{ad_result}".encode())
+
+		with (
+			patch.object(ctrl, "_get_git_changed_files", new=AsyncMock(return_value=[])),
+			patch.object(ctrl, "_auto_commit_task", new=AsyncMock()) as mock_commit,
+		):
+			await ctrl.monitor_agents()
+
+		mock_commit.assert_not_called()
+
+
+class TestStaleTaskDetection:
+	async def test_stale_task_hint_added(self, tmp_path: Path) -> None:
+		"""Verify prompt includes stale-task note when file was recently modified."""
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		# Simulate that worker-1 recently changed src/parser.py
+		ctrl._recent_changes = {"worker-1": ["src/parser.py"]}
+
+		# Create task with files_hint matching the recently changed file
+		await ctrl.execute_decisions([
+			PlannerDecision(
+				type=DecisionType.CREATE_TASK,
+				payload={"title": "Fix parser", "files_hint": ["src/parser.py"]},
+			),
+		])
+		task_id = ctrl.tasks[0].id
+
+		mock_proc = MagicMock(returncode=None)
+		captured_prompt = None
+
+		async def capture_spawn(agent, prompt):
+			nonlocal captured_prompt
+			captured_prompt = prompt
+			return mock_proc
+
+		with patch.object(ctrl, "_spawn_claude_session", side_effect=capture_spawn):
+			await ctrl.execute_decisions([
+				PlannerDecision(
+					type=DecisionType.SPAWN,
+					payload={"name": "w2", "prompt": "Fix the parser bug", "task_id": task_id},
+				),
+			])
+
+		assert captured_prompt is not None
+		assert "src/parser.py was recently modified by worker-1" in captured_prompt
+
+	async def test_no_stale_hint_when_no_overlap(self, tmp_path: Path) -> None:
+		"""No stale-task note when files don't overlap."""
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		ctrl._recent_changes = {"worker-1": ["src/other.py"]}
+
+		await ctrl.execute_decisions([
+			PlannerDecision(
+				type=DecisionType.CREATE_TASK,
+				payload={"title": "Fix parser", "files_hint": ["src/parser.py"]},
+			),
+		])
+		task_id = ctrl.tasks[0].id
+
+		captured_prompt = None
+
+		async def capture_spawn(agent, prompt):
+			nonlocal captured_prompt
+			captured_prompt = prompt
+			return MagicMock(returncode=None)
+
+		with patch.object(ctrl, "_spawn_claude_session", side_effect=capture_spawn):
+			await ctrl.execute_decisions([
+				PlannerDecision(
+					type=DecisionType.SPAWN,
+					payload={"name": "w2", "prompt": "Fix the parser bug", "task_id": task_id},
+				),
+			])
+
+		assert "recently modified" not in captured_prompt
+
+
+class TestCostTracking:
+	async def test_cost_accumulated_on_completion(self, tmp_path: Path) -> None:
+		"""Verify agent cost is accumulated in controller state."""
+		ctrl = SwarmController(_make_config(tmp_path), _make_swarm_config(), _make_db())
+		mock_proc = MagicMock(returncode=None)
+		with patch.object(ctrl, "_spawn_claude_session", new=AsyncMock(return_value=mock_proc)):
+			await ctrl.execute_decisions([
+				PlannerDecision(type=DecisionType.CREATE_TASK, payload={"title": "Task"}, priority=10),
+				PlannerDecision(type=DecisionType.SPAWN, payload={"name": "w1", "prompt": "do"}, priority=9),
+			])
+
+		mock_proc.returncode = 0
+		output = 'Some output\nTotal cost: $3.75\nAD_RESULT:{"status":"completed","summary":"Done"}'
+		mock_proc.stdout = AsyncMock()
+		mock_proc.stdout.read = AsyncMock(return_value=output.encode())
+
+		with (
+			patch.object(ctrl, "_get_git_changed_files", new=AsyncMock(return_value=[])),
+			patch.object(ctrl, "_auto_commit_task", new=AsyncMock(return_value=None)),
+		):
+			events = await ctrl.monitor_agents()
+
+		assert ctrl._total_cost_usd == 3.75
+		assert ctrl._agent_costs["w1"] == 3.75
+		assert events[0]["cost_usd"] == 3.75

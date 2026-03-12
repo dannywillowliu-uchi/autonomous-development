@@ -1154,3 +1154,70 @@ class TestDirectiveInDiscoveries:
 			discoveries = ctx._get_recent_discoveries()
 		assert any("Prioritize tests" in d for d in discoveries)
 		assert any("(directive)" in d for d in discoveries)
+
+
+class TestContextCostBreakdown:
+	def test_cost_breakdown_in_render(self) -> None:
+		ctx = ContextSynthesizer(_make_config(), _make_db(), "test-team")
+		state = ctx.build_state(
+			agents=[], tasks=[],
+			total_cost_usd=5.50,
+			agent_costs={"w1": 3.00, "w2": 2.50},
+		)
+		rendered = ctx.render_for_planner(state)
+		assert "$5.50" in rendered
+		assert "Avg cost/agent: $2.75" in rendered
+		assert "Top spender: w1 ($3.00)" in rendered
+
+	def test_no_cost_breakdown_when_zero(self) -> None:
+		ctx = ContextSynthesizer(_make_config(), _make_db(), "test-team")
+		state = ctx.build_state(agents=[], tasks=[], total_cost_usd=0.0)
+		rendered = ctx.render_for_planner(state)
+		assert "Avg cost/agent" not in rendered
+		assert "Top spender" not in rendered
+
+	def test_agent_costs_passed_through(self) -> None:
+		ctx = ContextSynthesizer(_make_config(), _make_db(), "test-team")
+		state = ctx.build_state(
+			agents=[], tasks=[],
+			agent_costs={"w1": 1.0, "w2": 2.0},
+		)
+		assert state.agent_costs == {"w1": 1.0, "w2": 2.0}
+
+
+class TestContextRecentChanges:
+	def test_recent_changes_in_render(self) -> None:
+		ctx = ContextSynthesizer(_make_config(), _make_db(), "test-team")
+		state = ctx.build_state(
+			agents=[], tasks=[],
+			recent_file_changes={"worker-1": ["src/parser.py", "src/lexer.py"]},
+		)
+		rendered = ctx.render_for_planner(state)
+		assert "Recent Changes" in rendered
+		assert "worker-1" in rendered
+		assert "src/parser.py" in rendered
+		assert "src/lexer.py" in rendered
+
+	def test_no_recent_changes_section_when_empty(self) -> None:
+		ctx = ContextSynthesizer(_make_config(), _make_db(), "test-team")
+		state = ctx.build_state(agents=[], tasks=[])
+		rendered = ctx.render_for_planner(state)
+		assert "Recent Changes" not in rendered
+
+	def test_recent_file_changes_passed_through(self) -> None:
+		ctx = ContextSynthesizer(_make_config(), _make_db(), "test-team")
+		state = ctx.build_state(
+			agents=[], tasks=[],
+			recent_file_changes={"w1": ["a.py"]},
+		)
+		assert state.recent_file_changes == {"w1": ["a.py"]}
+
+	def test_recent_changes_truncated_when_many_files(self) -> None:
+		ctx = ContextSynthesizer(_make_config(), _make_db(), "test-team")
+		many_files = [f"src/file_{i}.py" for i in range(15)]
+		state = ctx.build_state(
+			agents=[], tasks=[],
+			recent_file_changes={"worker-1": many_files},
+		)
+		rendered = ctx.render_for_planner(state)
+		assert "(+5 more)" in rendered

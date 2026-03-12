@@ -184,6 +184,8 @@ class ContextSynthesizer:
 		wall_time_seconds: float = 0.0,
 		dead_agent_history: list[SwarmAgent] | None = None,
 		capabilities: CapabilityManifest | None = None,
+		recent_file_changes: dict[str, list[str]] | None = None,
+		agent_costs: dict[str, float] | None = None,
 	) -> SwarmState:
 		"""Build a complete SwarmState snapshot for the planner."""
 		self._cycle_number += 1
@@ -213,6 +215,8 @@ class ContextSynthesizer:
 			files_in_flight=files_in_flight,
 			capabilities=capabilities,
 			dead_agent_history=dead_agent_history or [],
+			recent_file_changes=recent_file_changes or {},
+			agent_costs=agent_costs or {},
 		)
 
 	def get_agent_reports(self) -> dict[str, dict[str, Any]]:
@@ -427,6 +431,16 @@ class ContextSynthesizer:
 			if cap_lines:
 				sections.append("## Available Capabilities\n" + "\n".join(cap_lines))
 
+		# Recent changes (files modified by recently completed agents)
+		if state.recent_file_changes:
+			change_lines = []
+			for agent_name, files in state.recent_file_changes.items():
+				file_list = ", ".join(files[:10])
+				if len(files) > 10:
+					file_list += f" (+{len(files) - 10} more)"
+				change_lines.append(f"- **{agent_name}**: {file_list}")
+			sections.append("## Recent Changes\n" + "\n".join(change_lines))
+
 		# Files in flight
 		if state.files_in_flight:
 			sections.append("## Files Currently Being Modified\n" + "\n".join(f"- {f}" for f in state.files_in_flight))
@@ -454,11 +468,17 @@ class ContextSynthesizer:
 				sections.append("## Completed Work Summary\n" + "\n".join(work_lines))
 
 		# Meta
-		sections.append(
-			f"## Meta\n"
-			f"Cycle: {state.cycle_number} | Cost: ${state.total_cost_usd:.2f} | "
-			f"Wall time: {state.wall_time_seconds / 60:.1f}min"
-		)
+		meta_parts = [
+			f"Cycle: {state.cycle_number}",
+			f"Cost: ${state.total_cost_usd:.2f}",
+			f"Wall time: {state.wall_time_seconds / 60:.1f}min",
+		]
+		if state.total_cost_usd > 0 and state.agent_costs:
+			avg_cost = state.total_cost_usd / len(state.agent_costs)
+			meta_parts.append(f"Avg cost/agent: ${avg_cost:.2f}")
+			top_spender = max(state.agent_costs.items(), key=lambda x: x[1])
+			meta_parts.append(f"Top spender: {top_spender[0]} (${top_spender[1]:.2f})")
+		sections.append("## Meta\n" + " | ".join(meta_parts))
 
 		return "\n\n".join(sections)
 

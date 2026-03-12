@@ -172,3 +172,5 @@ class SwarmState:
 	files_in_flight: list[str] = field(default_factory=list)
 	capabilities: CapabilityManifest | None = None
 	dead_agent_history: list[SwarmAgent] = field(default_factory=list)
+	recent_file_changes: dict[str, list[str]] = field(default_factory=dict)
+	agent_costs: dict[str, float] = field(default_factory=dict)

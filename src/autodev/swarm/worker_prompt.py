@@ -34,6 +34,7 @@ def build_worker_prompt(
 	sections.append(_inbox_section(agent, team_name))
 	sections.append(_file_conflict_section(agent, agents, tasks))
 	sections.append(_skills_section(config))
+	sections.append(_verification_section(config))
 	sections.append(_capabilities_section(capabilities))
 	sections.append(_skill_creation_section())
 	sections.append(_mcp_section(swarm_config))
@@ -179,6 +180,27 @@ def _skills_section(config: MissionConfig) -> str:
 	for s in skills:
 		lines.append(f"- /{s}")
 	return "\n".join(lines)
+
+
+def _verification_section(config: MissionConfig) -> str:
+	"""Return a self-verification instruction section if a verification command is configured."""
+	verification = getattr(config.target, "verification", None)
+	if verification is None:
+		return ""
+	command = getattr(verification, "command", None)
+	if not command:
+		return ""
+	return f"""## Self-Verification
+
+Before reporting task completion, run the project verification command \
+to confirm your changes don't break existing tests or linting:
+
+```
+{command}
+```
+
+If any tests fail or linting errors appear, fix them before emitting \
+AD_RESULT. Do not report completion with failing tests."""
 
 
 def _capabilities_section(capabilities: CapabilityManifest | None) -> str:

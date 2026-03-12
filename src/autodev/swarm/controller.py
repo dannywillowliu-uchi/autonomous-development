@@ -13,6 +13,7 @@ import fcntl
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -69,6 +70,9 @@ class SwarmController:
 		self._context = ContextSynthesizer(config, db, self._team_name)
 		self._start_time = time.monotonic()
 		self._total_cost_usd = 0.0
+		self._agent_costs: dict[str, float] = {}
+		self._recent_changes: dict[str, list[str]] = {}
+		self._start_commit: str | None = None
 		self._running = False
 		self._dead_agent_history: list[SwarmAgent] = []
 		self._max_dead_history = 50
@@ -117,6 +121,20 @@ class SwarmController:
 		from autodev.swarm.capabilities import scan_capabilities
 		self._capabilities = scan_capabilities(Path(self._config.target.resolved_path))
 
+		# Capture starting commit for completion report diff
+		try:
+			proc = await asyncio.create_subprocess_exec(
+				"git", "rev-parse", "HEAD",
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				cwd=str(self._config.target.resolved_path),
+			)
+			stdout, _ = await proc.communicate()
+			if proc.returncode == 0:
+				self._start_commit = stdout.decode().strip()
+		except Exception:
+			pass
+
 		self._running = True
 		logger.info("Swarm controller initialized for team %s", self._team_name)
 
@@ -132,6 +150,8 @@ class SwarmController:
 			wall_time_seconds=wall_time,
 			dead_agent_history=self.dead_agent_history,
 			capabilities=capabilities,
+			recent_file_changes=dict(self._recent_changes),
+			agent_costs=dict(self._agent_costs),
 		)
 
 	def render_state(self, state: SwarmState) -> str:
@@ -263,6 +283,21 @@ class SwarmController:
 				name, task_id,
 			)
 			agent.current_task_id = None
+
+		# Stale-task detection: warn if files were recently modified by another agent
+		if task_id and task_id in self._tasks:
+			task = self._tasks[task_id]
+			if task.files_hint and self._recent_changes:
+				stale_notes = []
+				for hint_file in task.files_hint:
+					for prev_agent, changed_files in self._recent_changes.items():
+						if hint_file in changed_files and prev_agent != name:
+							stale_notes.append(
+								f"Note: {hint_file} was recently modified by {prev_agent}. "
+								f"Check if the issue is already resolved before making changes."
+							)
+				if stale_notes:
+					prompt = "\n".join(stale_notes) + "\n\n" + prompt
 
 		worker_prompt = self._build_worker_prompt(agent, prompt)
 		proc = await self._spawn_claude_session(agent, worker_prompt)
@@ -628,6 +663,12 @@ class SwarmController:
 						"files_changed": [],
 					}
 
+				# Parse cost from agent output
+				agent_cost = self._parse_agent_cost(output)
+				if agent_cost > 0:
+					self._total_cost_usd += agent_cost
+					self._agent_costs[agent.name] = self._agent_costs.get(agent.name, 0.0) + agent_cost
+
 				agent.status = AgentStatus.DEAD
 				agent.death_time = time.monotonic()
 				if status == "completed":
@@ -644,13 +685,28 @@ class SwarmController:
 					if task.status == TaskStatus.FAILED:
 						task.claimed_by = None
 
-				events.append({
+				# Collect diff info for planner visibility
+				files_changed = await self._get_git_changed_files()
+				if files_changed:
+					self._recent_changes[agent.name] = files_changed
+
+				# Commit-per-task on success
+				commit_hash = None
+				if status == "completed" and task:
+					commit_hash = await self._auto_commit_task(task.title, agent.name)
+
+				event: dict[str, Any] = {
 					"type": "agent_completed",
 					"agent_id": agent_id,
 					"agent_name": agent.name,
 					"status": status,
 					"result": result,
-				})
+					"cost_usd": agent_cost,
+					"files_changed": files_changed,
+				}
+				if commit_hash:
+					event["commit_hash"] = commit_hash
+				events.append(event)
 				del self._processes[agent_id]
 
 		self._recover_orphaned_tasks(events)
@@ -885,6 +941,160 @@ class SwarmController:
 		data.setdefault("summary", "")
 		return data
 
+	def _parse_agent_cost(self, output: str) -> float:
+		"""Extract cost from Claude Code agent output.
+
+		Claude Code prints lines like 'Total cost: $1.23' or 'Total cost:\t$0.50'.
+		Returns 0.0 if not found.
+		"""
+		match = re.search(r"Total cost:[\s\t]*\$([0-9]+(?:\.[0-9]+)?)", output)
+		if match:
+			try:
+				return float(match.group(1))
+			except ValueError:
+				return 0.0
+		return 0.0
+
+	async def _get_git_changed_files(self) -> list[str]:
+		"""Run git diff --name-only to get list of changed files."""
+		try:
+			proc = await asyncio.create_subprocess_exec(
+				"git", "diff", "--name-only", "HEAD~1",
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				cwd=str(self._config.target.resolved_path),
+			)
+			stdout, _ = await proc.communicate()
+			if proc.returncode == 0:
+				return [f for f in stdout.decode().strip().split("\n") if f]
+		except Exception:
+			pass
+		return []
+
+	async def _auto_commit_task(self, task_title: str, agent_name: str) -> str | None:
+		"""Auto-commit changes after successful task completion. Returns commit hash or None."""
+		cwd = str(self._config.target.resolved_path)
+		try:
+			# Stage all changes
+			proc = await asyncio.create_subprocess_exec(
+				"git", "add", "-A",
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				cwd=cwd,
+			)
+			await proc.communicate()
+
+			# Check if there are staged changes
+			proc = await asyncio.create_subprocess_exec(
+				"git", "diff", "--cached", "--quiet",
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				cwd=cwd,
+			)
+			await proc.communicate()
+			if proc.returncode == 0:
+				return None  # No staged changes
+
+			# Commit
+			msg = f"autodev: {task_title} (agent: {agent_name})"
+			proc = await asyncio.create_subprocess_exec(
+				"git", "commit", "-m", msg,
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				cwd=cwd,
+			)
+			await proc.communicate()
+			if proc.returncode != 0:
+				return None
+
+			# Get commit hash
+			proc = await asyncio.create_subprocess_exec(
+				"git", "rev-parse", "HEAD",
+				stdout=asyncio.subprocess.PIPE,
+				stderr=asyncio.subprocess.PIPE,
+				cwd=cwd,
+			)
+			stdout, _ = await proc.communicate()
+			if proc.returncode == 0:
+				commit_hash = stdout.decode().strip()
+				logger.info("Auto-committed task '%s': %s", task_title, commit_hash[:8])
+				return commit_hash
+		except Exception as e:
+			logger.warning("Auto-commit failed for task '%s': %s", task_title, e)
+		return None
+
+	async def _generate_completion_report(self) -> str:
+		"""Generate a swarm completion report."""
+		duration = time.monotonic() - self._start_time
+		completed = [t for t in self._tasks.values() if t.status == TaskStatus.COMPLETED]
+		failed = [t for t in self._tasks.values() if t.status == TaskStatus.FAILED]
+
+		lines = [
+			"# Swarm Completion Report",
+			"",
+			"## Summary",
+			f"- Duration: {duration / 60:.1f} minutes",
+			f"- Cycles: {self._context._cycle_number}",
+			f"- Tasks completed: {len(completed)}",
+			f"- Tasks failed: {len(failed)}",
+			f"- Total cost: ${self._total_cost_usd:.2f}",
+			"",
+		]
+
+		# Per-agent cost breakdown
+		if self._agent_costs:
+			lines.append("## Agent Cost Breakdown")
+			for agent_name, cost in sorted(self._agent_costs.items(), key=lambda x: x[1], reverse=True):
+				lines.append(f"- {agent_name}: ${cost:.2f}")
+			lines.append("")
+
+		# Completed tasks
+		if completed:
+			lines.append("## Completed Tasks")
+			for t in completed:
+				summary = t.result_summary[:120] if t.result_summary else "no summary"
+				lines.append(f"- {t.title}: {summary}")
+			lines.append("")
+
+		# Failed tasks
+		if failed:
+			lines.append("## Failed Tasks")
+			for t in failed:
+				summary = t.result_summary[:120] if t.result_summary else "no details"
+				lines.append(f"- {t.title} (attempts: {t.attempt_count}): {summary}")
+			lines.append("")
+
+		# Files changed (git diff --stat vs starting commit)
+		if self._start_commit:
+			try:
+				proc = await asyncio.create_subprocess_exec(
+					"git", "diff", "--stat", self._start_commit,
+					stdout=asyncio.subprocess.PIPE,
+					stderr=asyncio.subprocess.PIPE,
+					cwd=str(self._config.target.resolved_path),
+				)
+				stdout, _ = await proc.communicate()
+				if proc.returncode == 0 and stdout:
+					lines.append("## Files Changed")
+					lines.append("```")
+					lines.append(stdout.decode().strip())
+					lines.append("```")
+					lines.append("")
+			except Exception:
+				pass
+
+		report = "\n".join(lines)
+
+		# Write to project root
+		report_path = Path(self._config.target.resolved_path) / ".autodev-swarm-report.md"
+		try:
+			report_path.write_text(report)
+			logger.info("Completion report written to %s", report_path)
+		except OSError as e:
+			logger.warning("Failed to write completion report: %s", e)
+
+		return report
+
 	def requeue_failed_tasks(self) -> list[str]:
 		"""Re-queue failed tasks that haven't exhausted their retry budget."""
 		requeued = []
@@ -925,4 +1135,5 @@ class SwarmController:
 		self._running = False
 		for agent_id in list(self._processes.keys()):
 			await self._handle_kill({"agent_id": agent_id, "reason": "swarm shutdown"})
+		await self._generate_completion_report()
 		logger.info("Swarm controller cleaned up")

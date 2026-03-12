@@ -23,6 +23,7 @@ from autodev.swarm.worker_prompt import (
 	_result_protocol_section,
 	_skill_creation_section,
 	_task_pool_section,
+	_verification_section,
 	build_worker_prompt,
 )
 
@@ -156,6 +157,34 @@ class TestResultProtocol:
 		assert "discoveries" in text
 
 
+class TestVerificationSection:
+	def test_verification_section_content(self, tmp_path: Path) -> None:
+		config = _make_config(tmp_path)
+		config.target.verification.command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/"
+		text = _verification_section(config)
+		assert "## Self-Verification" in text
+		assert ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/" in text
+		assert "AD_RESULT" in text
+
+	def test_verification_section_missing_command(self, tmp_path: Path) -> None:
+		config = _make_config(tmp_path)
+		config.target.verification = None
+		text = _verification_section(config)
+		assert text == ""
+
+	def test_verification_section_empty_command(self, tmp_path: Path) -> None:
+		config = _make_config(tmp_path)
+		config.target.verification.command = ""
+		text = _verification_section(config)
+		assert text == ""
+
+	def test_verification_section_no_command_attr(self, tmp_path: Path) -> None:
+		config = _make_config(tmp_path)
+		config.target.verification = MagicMock(spec=[])
+		text = _verification_section(config)
+		assert text == ""
+
+
 class TestBuildWorkerPrompt:
 	def test_includes_task_and_identity(self, tmp_path: Path) -> None:
 		agent = _make_agent()
@@ -170,6 +199,38 @@ class TestBuildWorkerPrompt:
 		)
 		assert "Fix the compiler bug" in prompt
 		assert "worker-1" in prompt
+		assert "AD_RESULT" in prompt
+
+	def test_verification_section_included(self, tmp_path: Path) -> None:
+		agent = _make_agent()
+		config = _make_config(tmp_path)
+		config.target.verification.command = "make test"
+		prompt = build_worker_prompt(
+			agent=agent,
+			task_prompt="Implement feature",
+			team_name="autodev-test",
+			agents=[agent],
+			tasks=[],
+			config=config,
+			swarm_config=_make_swarm_config(),
+		)
+		assert "Self-Verification" in prompt
+		assert "make test" in prompt
+
+	def test_verification_section_missing_command(self, tmp_path: Path) -> None:
+		agent = _make_agent()
+		config = _make_config(tmp_path)
+		config.target.verification = None
+		prompt = build_worker_prompt(
+			agent=agent,
+			task_prompt="Implement feature",
+			team_name="autodev-test",
+			agents=[agent],
+			tasks=[],
+			config=config,
+			swarm_config=_make_swarm_config(),
+		)
+		assert "Self-Verification" not in prompt
 		assert "AD_RESULT" in prompt
 
 	def test_includes_peer_info(self, tmp_path: Path) -> None:
