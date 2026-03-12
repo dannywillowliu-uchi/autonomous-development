@@ -192,7 +192,10 @@ def build_parser() -> argparse.ArgumentParser:
 	metrics = sub.add_parser("metrics", help="Show swarm performance metrics and trends")
 	metrics.add_argument("--trend", action="store_true", help="Show trend analysis across recent runs")
 	metrics.add_argument("--correlate", action="store_true", help="Correlate metrics with self-modifications")
-	metrics.add_argument("--last-n", type=int, default=10, help="Number of recent runs for trend analysis (default: 10)")
+	metrics.add_argument(
+		"--last-n", type=int, default=10,
+		help="Number of recent runs for trend analysis (default: 10)",
+	)
 	metrics.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
 
 	return parser

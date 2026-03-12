@@ -19,7 +19,7 @@ from autodev.cli import (
 	main,
 )
 from autodev.db import Database
-from autodev.metrics import MetricsTracker, SwarmMetrics
+from autodev.metrics import SwarmMetrics
 from autodev.models import Epoch, Mission, Plan, WorkUnit
 
 
@@ -457,3 +457,126 @@ class TestCmdDiagnose:
 		args = parser.parse_args(["diagnose"])
 		assert args.command == "diagnose"
 		assert args.json_output is False
+
+
+class TestCmdMetrics:
+	def _write_metrics_tsv(self, project_dir: Path, rows: list[SwarmMetrics]) -> None:
+		"""Write metrics TSV file with given rows."""
+		import csv
+		from dataclasses import fields as dc_fields
+
+		tsv_path = project_dir / ".autodev-metrics.tsv"
+		field_names = [f.name for f in dc_fields(SwarmMetrics)]
+		with open(tsv_path, "w", newline="") as f:
+			writer = csv.writer(f, delimiter="\t")
+			writer.writerow(field_names)
+			for row in rows:
+				writer.writerow([getattr(row, name) for name in field_names])
+
+	def _make_config_mock(self, project_dir: Path) -> MagicMock:
+		config = MagicMock()
+		config.target.resolved_path = project_dir
+		return config
+
+	def _sample_metrics(self, n: int = 3) -> list[SwarmMetrics]:
+		return [
+			SwarmMetrics(
+				run_id=f"run-{i}",
+				timestamp=f"2026-03-{10 + i}T00:00:00",
+				test_count=50 + i * 5,
+				test_pass_rate=0.9 + i * 0.02,
+				total_cost_usd=10.0 + i,
+				cost_per_task=2.0 + i * 0.1,
+				agent_success_rate=0.8 + i * 0.05,
+				total_duration_s=300.0 + i * 10,
+				tasks_completed=5 + i,
+				tasks_failed=1,
+			)
+			for i in range(n)
+		]
+
+	@patch("autodev.cli.load_config")
+	def test_default_shows_latest(self, mock_load: MagicMock, tmp_path: Path, capsys: object) -> None:
+		"""Default (no flags) shows latest metrics summary."""
+		mock_load.return_value = self._make_config_mock(tmp_path)
+		rows = self._sample_metrics()
+		self._write_metrics_tsv(tmp_path, rows)
+
+		parser = build_parser()
+		args = parser.parse_args(["metrics", "--config", "fake.toml"])
+		result = cmd_metrics(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "run-2" in out
+		assert "Tests:" in out
+		assert "Cost:" in out
+
+	@patch("autodev.cli.load_config")
+	def test_no_data(self, mock_load: MagicMock, tmp_path: Path, capsys: object) -> None:
+		"""No metrics file shows appropriate message."""
+		mock_load.return_value = self._make_config_mock(tmp_path)
+
+		parser = build_parser()
+		args = parser.parse_args(["metrics", "--config", "fake.toml"])
+		result = cmd_metrics(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "No metrics recorded" in out
+
+	@patch("autodev.cli.load_config")
+	def test_trend_flag(self, mock_load: MagicMock, tmp_path: Path, capsys: object) -> None:
+		"""--trend prints trend analysis as JSON."""
+		mock_load.return_value = self._make_config_mock(tmp_path)
+		rows = self._sample_metrics(5)
+		self._write_metrics_tsv(tmp_path, rows)
+
+		parser = build_parser()
+		args = parser.parse_args(["metrics", "--trend", "--config", "fake.toml"])
+		result = cmd_metrics(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		data = json.loads(out)
+		assert "test_count_trend" in data
+		assert "cost_trend" in data
+		assert "total_runs" in data
+
+	@patch("autodev.cli.load_config")
+	def test_trend_insufficient_data(self, mock_load: MagicMock, tmp_path: Path, capsys: object) -> None:
+		"""--trend with <2 rows returns error."""
+		mock_load.return_value = self._make_config_mock(tmp_path)
+		self._write_metrics_tsv(tmp_path, self._sample_metrics(1))
+
+		parser = build_parser()
+		args = parser.parse_args(["metrics", "--trend", "--config", "fake.toml"])
+		result = cmd_metrics(args)
+		assert result == 1
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "Insufficient data" in out
+
+	@patch("autodev.cli.load_config")
+	def test_correlate_flag_no_data(self, mock_load: MagicMock, tmp_path: Path, capsys: object) -> None:
+		"""--correlate with no experiments file shows message."""
+		mock_load.return_value = self._make_config_mock(tmp_path)
+
+		parser = build_parser()
+		args = parser.parse_args(["metrics", "--correlate", "--config", "fake.toml"])
+		result = cmd_metrics(args)
+		assert result == 0
+		out = capsys.readouterr().out  # type: ignore[union-attr]
+		assert "No correlation data" in out
+
+	def test_metrics_arg_parsing(self) -> None:
+		"""Metrics subcommand parses correctly."""
+		parser = build_parser()
+		args = parser.parse_args(["metrics"])
+		assert args.command == "metrics"
+		assert args.trend is False
+		assert args.correlate is False
+		assert args.last_n == 10
+
+	def test_metrics_trend_with_last_n(self) -> None:
+		"""--trend with --last-n parses correctly."""
+		parser = build_parser()
+		args = parser.parse_args(["metrics", "--trend", "--last-n", "20"])
+		assert args.trend is True
+		assert args.last_n == 20
