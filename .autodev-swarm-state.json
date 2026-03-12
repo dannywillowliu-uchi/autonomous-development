@@ -16,9 +16,9 @@
       "id": "a7f0f743",
       "name": "cli-subcommands",
       "role": "implementer",
-      "status": "working",
+      "status": "dead",
       "task_id": "8c5eeec9",
-      "completed": 0,
+      "completed": 1,
       "failed": 0
     },
     {
@@ -71,9 +71,9 @@
     {
       "id": "8c5eeec9",
       "title": "Add trace-review and contrib CLI subcommands",
-      "status": "claimed",
+      "status": "completed",
       "claimed_by": "a7f0f743",
-      "attempts": 0,
+      "attempts": 1,
       "max_attempts": 3,
       "priority": "NORMAL"
     },
@@ -97,7 +97,7 @@
     "[trace-analyzer-impl] (report) Created TraceAnalyzer with analyze_run, analyze_history, generate_report, and llm_review_traces. All 13 tests pass, lint clean."
   ],
   "cost_usd": 0.0,
-  "wall_minutes": 15.152262806949633,
+  "wall_minutes": 15.653386110416614,
   "test_history": [],
   "completion_history": [
     0,
@@ -107,9 +107,11 @@
     4,
     4,
     4,
-    4
+    4,
+    5
   ],
   "failure_history": [
+    0,
     0,
     0,
     0,
