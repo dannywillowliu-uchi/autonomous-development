@@ -188,6 +188,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 	contrib_sub.add_parser("sync", help="Sync shared learnings")
 
+	# autodev metrics
+	metrics = sub.add_parser("metrics", help="Show swarm performance metrics and trends")
+	metrics.add_argument("--trend", action="store_true", help="Show trend analysis across recent runs")
+	metrics.add_argument("--correlate", action="store_true", help="Correlate metrics with self-modifications")
+	metrics.add_argument("--last-n", type=int, default=10, help="Number of recent runs for trend analysis (default: 10)")
+	metrics.add_argument("--config", default=DEFAULT_CONFIG, help="Config file path")
+
 	return parser
 
 
@@ -1373,6 +1380,52 @@ def cmd_contrib(args: argparse.Namespace) -> int:
 	return 1
 
 
+def cmd_metrics(args: argparse.Namespace) -> int:
+	"""Show swarm performance metrics and trends."""
+	import json as json_mod
+
+	from autodev.metrics import MetricsTracker
+
+	config = load_config(args.config)
+	tracker = MetricsTracker(config.target.resolved_path)
+
+	if args.trend:
+		result = tracker.get_trend(args.last_n)
+		if result.get("error") == "insufficient_data":
+			print(f"Insufficient data: only {result['rows']} run(s) recorded (need at least 2).")
+			return 1
+		# Format SwarmMetrics objects for JSON serialization
+		for key in ("best_run", "worst_run"):
+			if key in result and hasattr(result[key], "__dict__"):
+				from dataclasses import asdict
+				result[key] = asdict(result[key])
+		print(json_mod.dumps(result, indent=2))
+		return 0
+
+	if args.correlate:
+		results = tracker.correlate_with_modifications()
+		if not results:
+			print("No correlation data available.")
+			return 0
+		print(json_mod.dumps(results, indent=2))
+		return 0
+
+	# Default: print latest metrics from TSV
+	rows = tracker._read_rows()
+	if not rows:
+		print("No metrics recorded yet. Run a swarm first.")
+		return 0
+
+	latest = rows[-1]
+	print(f"Run: {latest.run_id} ({latest.timestamp})")
+	print(f"Tests: {latest.test_count} (pass rate: {latest.test_pass_rate:.1%})")
+	print(f"Cost: ${latest.total_cost_usd:.2f} (${latest.cost_per_task:.2f}/task)")
+	print(f"Agent success rate: {latest.agent_success_rate:.1%}")
+	print(f"Duration: {latest.total_duration_s:.0f}s")
+	print(f"Tasks: {latest.tasks_completed} completed, {latest.tasks_failed} failed")
+	return 0
+
+
 COMMANDS = {
 	"status": cmd_status,
 	"history": cmd_history,
@@ -1397,6 +1450,7 @@ COMMANDS = {
 	"mcp": cmd_mcp,
 	"a2a": cmd_a2a,
 	"validate-config": cmd_validate_config,
+	"metrics": cmd_metrics,
 }
 
 

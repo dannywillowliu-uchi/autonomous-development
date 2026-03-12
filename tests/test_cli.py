@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -11,12 +12,14 @@ from autodev.cli import (
 	cmd_diagnose,
 	cmd_init,
 	cmd_live,
+	cmd_metrics,
 	cmd_mission,
 	cmd_summary,
 	cmd_trace,
 	main,
 )
 from autodev.db import Database
+from autodev.metrics import MetricsTracker, SwarmMetrics
 from autodev.models import Epoch, Mission, Plan, WorkUnit
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,7 +12,6 @@ from autodev.config import MissionConfig, NotificationConfig, TelegramConfig
 from autodev.db import Database
 from autodev.intelligence.models import AdaptationProposal, Finding
 from autodev.intelligence.spec_generator import SpecGenerator, _strip_html
-
 
 # -- Fixtures --
 
@@ -68,7 +66,10 @@ async def test_generate_spec_returns_markdown(project_path: Path, proposal: Adap
 	"""generate_spec calls claude --print and returns the LLM output."""
 	generator = SpecGenerator(project_path)
 
-	spec_content = "# Spec\n\n## Problem Statement\nImprove MCP.\n\n## Changes Needed\nEdit config.py.\n\n## Testing Requirements\nAdd tests.\n\n## Risk Assessment\nLow risk."
+	spec_content = (
+		"# Spec\n\n## Problem Statement\nImprove MCP.\n\n## Changes Needed\n"
+		"Edit config.py.\n\n## Testing Requirements\nAdd tests.\n\n## Risk Assessment\nLow risk."
+	)
 	mock_proc = AsyncMock()
 	mock_proc.communicate = AsyncMock(return_value=(spec_content.encode(), b""))
 	mock_proc.returncode = 0
@@ -249,10 +250,10 @@ async def test_auto_update_generate_spec(config: MissionConfig, db: Database, tm
 
 	spec_content = "# Spec\n\n## Problem Statement\nTest."
 
-	with patch("autodev.intelligence.spec_generator.SpecGenerator") as MockGen:
+	with patch("autodev.intelligence.spec_generator.SpecGenerator") as mock_gen_cls:
 		mock_instance = AsyncMock()
 		mock_instance.generate_spec = AsyncMock(return_value=spec_content)
-		MockGen.return_value = mock_instance
+		mock_gen_cls.return_value = mock_instance
 
 		result = await pipeline._generate_spec(proposal)
 
@@ -281,10 +282,10 @@ async def test_auto_update_generate_spec_no_finding(config: MissionConfig, db: D
 		target_modules=[],
 	)
 
-	with patch("autodev.intelligence.spec_generator.SpecGenerator") as MockGen:
+	with patch("autodev.intelligence.spec_generator.SpecGenerator") as mock_gen_cls:
 		mock_instance = AsyncMock()
 		mock_instance.generate_spec = AsyncMock(return_value="# Spec")
-		MockGen.return_value = mock_instance
+		mock_gen_cls.return_value = mock_instance
 
 		await pipeline._generate_spec(proposal)
 
