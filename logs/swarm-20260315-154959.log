@@ -16,3 +16,4 @@
 15:54:50 INFO autodev.swarm.controller: Spawned agent validation-gate (implementer) for task bd068afe123c
 15:54:50 INFO autodev.swarm.controller: Planner waiting 90s: All 4 existing agents started 30 seconds ago. Let them work. Priority 3 (two-step planner) needs prompts.py which is currently being modified by prompts-engineer -- will create that task after prompts-engineer completes.
 15:56:20 INFO autodev.swarm.planner: Cycle 2: 3 decisions (create_task, spawn, wait), 3 ok, 0 failed
+15:56:50 INFO autodev.swarm.controller: Auto-committed task 'Add _validate_ad_result to SwarmController': 3a8bd280
