@@ -32,3 +32,4 @@
 16:00:13 INFO autodev.swarm.planner: Parsed 1 decisions from planner (cycle 4)
 16:00:13 INFO autodev.swarm.controller: Planner waiting 90s: All 3 working agents are on correct high-priority tasks with reasonable elapsed times (2-5 min). validation-gate on decision validation, evaluator-retry on CycleEvaluator (2nd attempt), test-writer on test suite. The pending integration task depends on these completing first. No stagnation signals.
 16:01:43 INFO autodev.swarm.planner: Cycle 4: 1 decisions (wait), 1 ok, 0 failed
+16:02:13 INFO autodev.swarm.controller: Auto-committed task 'Add _validate_decisions() to DrivingPlanner': 0c4af22b
