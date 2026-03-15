@@ -84,7 +84,7 @@ async def test_generate_spec_returns_markdown(project_path: Path, proposal: Adap
 
 	# Verify claude was called with --print
 	call_args = mock_exec.call_args
-	assert call_args[0][0] == "claude"
+	assert call_args[0][0].endswith("claude")
 	assert "--print" in call_args[0]
 
 
@@ -344,9 +344,15 @@ async def test_auto_launch_uses_spec(config: MissionConfig, db: Database) -> Non
 	mock_ratchet = MagicMock()
 	mock_ratchet.checkpoint = AsyncMock(return_value="autodev/pre-test")
 
+	mock_result = MagicMock(action="launched", mission_id="mock-mission")
 	with (
 		patch("autodev.ratchet.GitRatchet", return_value=mock_ratchet),
 		patch.object(pipeline, "_generate_spec_or_objective", return_value="# Spec Content") as mock_gen,
+		patch.object(pipeline, "_run_swarm", new_callable=AsyncMock, return_value=True),
+		patch.object(
+			pipeline, "_finalize_modification",
+			new_callable=AsyncMock, return_value=mock_result,
+		),
 	):
 		result = await pipeline._auto_launch(proposal)
 

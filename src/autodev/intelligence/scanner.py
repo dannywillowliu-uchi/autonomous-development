@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from autodev.intelligence.evaluator import evaluate_findings, generate_proposals
 from autodev.intelligence.models import AdaptationProposal, Finding
 from autodev.intelligence.sources import scan_arxiv, scan_github, scan_hackernews
 from autodev.intelligence.web_sources import WebSourceScanner
@@ -57,12 +56,9 @@ async def run_scan(threshold: float = 0.3) -> IntelReport:
 	except Exception:
 		pass  # Don't crash if web scanning fails
 
-	evaluated = evaluate_findings(all_findings)
-	proposals = generate_proposals(evaluated, threshold=threshold)
-
 	return IntelReport(
-		findings=evaluated,
-		proposals=proposals,
+		findings=all_findings,
+		proposals=[],
 		timestamp=datetime.now(timezone.utc).isoformat(),
 		sources_scanned=sources,
 		scan_duration_seconds=round(time.monotonic() - start, 2),

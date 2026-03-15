@@ -1,0 +1,36 @@
+=== Auto-update starting at Sat Mar 14 04:22:51 PDT 2026 ===
+04:22:52 INFO httpx: HTTP Request: GET https://hn.algolia.com/api/v1/search?query=AI+agent&tags=story&hitsPerPage=10 "HTTP/1.1 200 OK"
+04:22:52 INFO httpx: HTTP Request: GET https://hn.algolia.com/api/v1/search?query=MCP+server&tags=story&hitsPerPage=10 "HTTP/1.1 200 OK"
+04:22:52 INFO httpx: HTTP Request: GET https://hn.algolia.com/api/v1/search?query=Claude+Code&tags=story&hitsPerPage=10 "HTTP/1.1 200 OK"
+04:22:52 INFO httpx: HTTP Request: GET https://api.github.com/search/repositories?q=AI+agent+OR+MCP+server+OR+autonomous+coding+stars%3A%3E50+pushed%3A%3E2025-01-01&sort=updated&order=desc&per_page=30 "HTTP/1.1 200 OK"
+04:22:52 INFO httpx: HTTP Request: GET https://hn.algolia.com/api/v1/search?query=autonomous+coding&tags=story&hitsPerPage=10 "HTTP/1.1 200 OK"
+04:22:53 INFO httpx: HTTP Request: GET https://hn.algolia.com/api/v1/search?query=tool+use+LLM&tags=story&hitsPerPage=10 "HTTP/1.1 200 OK"
+04:22:53 INFO httpx: HTTP Request: GET https://export.arxiv.org/api/query?search_query=cat%3Acs.AI+AND+%28agent+OR+multi-agent+OR+autonomous%29&start=0&max_results=20&sortBy=submittedDate&sortOrder=descending "HTTP/1.1 200 OK"
+04:22:53 INFO httpx: HTTP Request: GET https://hn.algolia.com/api/v1/search?query=agentic+framework&tags=story&hitsPerPage=10 "HTTP/1.1 200 OK"
+04:22:54 INFO httpx: HTTP Request: GET https://openai.com/blog "HTTP/1.1 403 Forbidden"
+04:22:54 WARNING autodev.intelligence.web_sources: Blog scan failed for openai_blog: Client error '403 Forbidden' for url 'https://openai.com/blog'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403
+04:22:54 INFO httpx: HTTP Request: GET https://deepmind.google/discover/blog/ "HTTP/1.1 301 Moved Permanently"
+04:22:54 INFO httpx: HTTP Request: GET https://arxiv.org/list/cs.AI/recent "HTTP/1.1 200 OK"
+04:22:54 INFO httpx: HTTP Request: GET https://www.anthropic.com/news "HTTP/1.1 200 OK"
+04:22:54 INFO httpx: HTTP Request: GET https://deepmind.google/blog/ "HTTP/1.1 200 OK"
+04:22:55 INFO httpx: HTTP Request: GET https://github.com/trending?since=weekly&spoken_language_code=en "HTTP/1.1 200 OK"
+04:22:56 INFO autodev.auto_update: Intel scan complete: 113 findings, 52 proposals
+04:22:56 INFO autodev.auto_update: 19 new proposals to process
+04:22:56 INFO httpx: HTTP Request: GET https://github.com/Lexus2016/claude-code-studio "HTTP/1.1 200 OK"
+12:17:36 WARNING autodev.intelligence.spec_generator: claude --print failed (rc=1): 
+12:17:36 WARNING autodev.auto_update: Spec generation failed, falling back to simple objective
+Traceback (most recent call last):
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/autodev/auto_update.py", line 397, in _generate_spec_or_objective
+    return await self._generate_spec(proposal)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/autodev/auto_update.py", line 381, in _generate_spec
+    spec = await generator.generate_spec(proposal, source_url=source_url)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dannyliu/personal_projects/autonomous-development/src/autodev/intelligence/spec_generator.py", line 72, in generate_spec
+    raise RuntimeError(f"LLM spec generation failed: {stderr.decode()[:200]}")
+RuntimeError: LLM spec generation failed: 
+12:17:36 INFO autodev.auto_update: Launching swarm for mission 3dea56725c8d: Adapt: Lexus2016/claude-code-studio (tag=autodev/pre-5a00e2fca5ac)
+12:17:36 INFO autodev.swarm.controller: Swarm controller initialized for team autodev-autonomous-development
+12:17:36 INFO autodev.swarm.planner: Driving planner started
+12:29:09 WARNING autodev.swarm.planner: No JSON array found in planner response

@@ -51,6 +51,12 @@ dashboard = [
 mcp = [
 	"mcp[cli]>=1.0.0",
 ]
+auth = [
+	"playwright>=1.40.0",
+]
+browser = [
+	"playwright>=1.40.0",
+]
 tracing = [
 	"opentelemetry-api>=1.20.0",
 	"opentelemetry-sdk>=1.20.0",

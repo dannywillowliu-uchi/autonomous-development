@@ -33,6 +33,7 @@ def config() -> MissionConfig:
 			chat_id="456",
 		),
 	)
+	cfg.intelligence.evaluator_mode = "keyword"
 	return cfg
 
 
@@ -74,8 +75,57 @@ def _mock_ratchet():
 
 
 def _patch_ratchet():
-	"""Context manager to patch GitRatchet in auto_update."""
-	return patch("autodev.ratchet.GitRatchet", return_value=_mock_ratchet())
+	"""Context manager to patch GitRatchet, swarm execution, and spec generation in auto_update."""
+	from contextlib import contextmanager
+
+	@contextmanager
+	def _combined():
+		from autodev.auto_update import UpdateResult
+
+		async def _fake_finalize(self_inner, proposal, tag, verification_cmd=""):
+			return UpdateResult(
+				proposal_id=proposal.id,
+				title=proposal.title,
+				risk_level=proposal.risk_level,
+				action="launched",
+				mission_id="mock-mission",
+				ratchet_tag=tag,
+			)
+
+		mock_obj = "[AUTO-UPDATE] mock objective"
+		with (
+			patch("autodev.ratchet.GitRatchet", return_value=_mock_ratchet()),
+			patch.object(AutoUpdatePipeline, "_run_swarm", new_callable=AsyncMock, return_value=True),
+			patch.object(AutoUpdatePipeline, "_finalize_modification", new=_fake_finalize),
+			patch.object(
+				AutoUpdatePipeline, "_generate_spec_or_objective",
+				new_callable=AsyncMock, return_value=mock_obj,
+			),
+		):
+			yield
+
+	return _combined()
+
+
+def _patch_keyword_evaluator(proposals: list[AdaptationProposal]):
+	"""Patch the keyword evaluator to return specific proposals."""
+	from contextlib import contextmanager
+
+	@contextmanager
+	def _ctx():
+		with (
+			patch(
+				"autodev.intelligence.evaluator.evaluate_findings",
+				return_value=[],
+			),
+			patch(
+				"autodev.intelligence.evaluator.generate_proposals",
+				return_value=proposals,
+			),
+		):
+			yield
+
+	return _ctx()
 
 
 def _mock_scan_response(request: httpx.Request) -> httpx.Response:
@@ -230,15 +280,18 @@ async def test_pipeline_high_risk_no_telegram(db: Database) -> None:
 	"""High-risk proposals are skipped when Telegram is not configured."""
 	config = MissionConfig()
 	config.notifications = NotificationConfig(telegram=TelegramConfig())
+	config.intelligence.evaluator_mode = "keyword"
 	pipeline = AutoUpdatePipeline(config, db)
 
-	# Create a mock report with a high-risk proposal
+	# Create a mock report with raw findings (scanner no longer evaluates)
 	high_risk = _make_proposal(risk="high", proposal_id="hr_001")
 	mock_report = MagicMock()
 	mock_report.findings = [_make_finding()]
-	mock_report.proposals = [high_risk]
 
-	with patch("autodev.auto_update.run_scan", return_value=mock_report):
+	with (
+		patch("autodev.auto_update.run_scan", return_value=mock_report),
+		_patch_keyword_evaluator([high_risk]),
+	):
 		results = await pipeline.run()
 
 	assert len(results) == 1
@@ -254,10 +307,10 @@ async def test_pipeline_high_risk_approve_all(config: MissionConfig, db: Databas
 	high_risk = _make_proposal(risk="high", proposal_id="hr_002")
 	mock_report = MagicMock()
 	mock_report.findings = [_make_finding()]
-	mock_report.proposals = [high_risk]
 
 	with (
 		patch("autodev.auto_update.run_scan", return_value=mock_report),
+		_patch_keyword_evaluator([high_risk]),
 		_patch_ratchet(),
 	):
 		results = await pipeline.run(approve_all=True)
@@ -276,15 +329,20 @@ async def test_pipeline_high_risk_approved_via_telegram(config: MissionConfig, d
 	high_risk = _make_proposal(risk="high", proposal_id="hr_003")
 	mock_report = MagicMock()
 	mock_report.findings = [_make_finding()]
-	mock_report.proposals = [high_risk]
 
 	mock_notifier = AsyncMock()
 	mock_notifier.request_approval = AsyncMock(return_value=True)
 	mock_notifier.close = AsyncMock()
 
+	mock_obj = "[AUTO-UPDATE] mock objective"
 	with (
 		patch("autodev.auto_update.run_scan", return_value=mock_report),
+		_patch_keyword_evaluator([high_risk]),
 		patch("autodev.auto_update.TelegramNotifier", return_value=mock_notifier),
+		patch.object(
+			pipeline, "_generate_spec_or_objective",
+			new_callable=AsyncMock, return_value=mock_obj,
+		),
 	):
 		results = await pipeline.run()
 
@@ -305,7 +363,6 @@ async def test_pipeline_high_risk_rejected_via_telegram(config: MissionConfig, d
 	high_risk = _make_proposal(risk="high", proposal_id="hr_004")
 	mock_report = MagicMock()
 	mock_report.findings = [_make_finding()]
-	mock_report.proposals = [high_risk]
 
 	mock_notifier = AsyncMock()
 	mock_notifier.request_approval = AsyncMock(return_value=False)
@@ -313,6 +370,7 @@ async def test_pipeline_high_risk_rejected_via_telegram(config: MissionConfig, d
 
 	with (
 		patch("autodev.auto_update.run_scan", return_value=mock_report),
+		_patch_keyword_evaluator([high_risk]),
 		patch("autodev.auto_update.TelegramNotifier", return_value=mock_notifier),
 	):
 		results = await pipeline.run()
@@ -485,3 +543,78 @@ async def test_review_modification_llm_failure(config: MissionConfig, db: Databa
 
 	assert result["approved"] is True
 	assert result["summary"] == "Review unavailable"
+
+
+# -- Evaluator selection tests --
+
+
+@pytest.mark.asyncio
+async def test_keyword_evaluator_used_when_configured(config: MissionConfig, db: Database) -> None:
+	"""Pipeline uses keyword evaluator when evaluator_mode='keyword'."""
+	config.intelligence.evaluator_mode = "keyword"
+	pipeline = AutoUpdatePipeline(config, db)
+
+	proposal = _make_proposal(title="Keyword proposal")
+	mock_report = MagicMock()
+	mock_report.findings = [_make_finding()]
+
+	with (
+		patch("autodev.auto_update.run_scan", return_value=mock_report),
+		_patch_keyword_evaluator([proposal]),
+		_patch_ratchet(),
+	):
+		results = await pipeline.run()
+
+	assert len(results) == 1
+	assert results[0].title == "Keyword proposal"
+
+
+@pytest.mark.asyncio
+async def test_llm_evaluator_used_when_configured(config: MissionConfig, db: Database) -> None:
+	"""Pipeline uses LLM evaluator when evaluator_mode='llm'."""
+	config.intelligence.evaluator_mode = "llm"
+	pipeline = AutoUpdatePipeline(config, db)
+
+	proposal = _make_proposal(title="LLM proposal")
+	mock_report = MagicMock()
+	mock_report.findings = [_make_finding()]
+
+	with (
+		patch("autodev.auto_update.run_scan", return_value=mock_report),
+		patch(
+			"autodev.intelligence.llm_evaluator.evaluate_findings",
+			new_callable=AsyncMock,
+			return_value=[proposal],
+		),
+		_patch_ratchet(),
+	):
+		results = await pipeline.run()
+
+	assert len(results) == 1
+	assert results[0].title == "LLM proposal"
+
+
+@pytest.mark.asyncio
+async def test_llm_evaluator_fallback_to_keyword(config: MissionConfig, db: Database) -> None:
+	"""Pipeline falls back to keyword evaluator when LLM evaluator fails."""
+	config.intelligence.evaluator_mode = "llm"
+	pipeline = AutoUpdatePipeline(config, db)
+
+	proposal = _make_proposal(title="Fallback proposal")
+	mock_report = MagicMock()
+	mock_report.findings = [_make_finding()]
+
+	with (
+		patch("autodev.auto_update.run_scan", return_value=mock_report),
+		patch(
+			"autodev.intelligence.llm_evaluator.evaluate_findings",
+			new_callable=AsyncMock,
+			side_effect=RuntimeError("LLM failed"),
+		),
+		_patch_keyword_evaluator([proposal]),
+		_patch_ratchet(),
+	):
+		results = await pipeline.run()
+
+	assert len(results) == 1
+	assert results[0].title == "Fallback proposal"

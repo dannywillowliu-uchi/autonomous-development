@@ -352,6 +352,51 @@ class TelegramNotifier:
 		)
 		await self._send_message(f"{header}\n\n{table}")
 
+
+	async def send_auth_request(self, service: str, purpose: str, url: str) -> None:
+		"""Notify that first-time auth is needed for a service."""
+		await self.send(
+			f"*Auth Required*\n"
+			f"Service: {service}\n"
+			f"Purpose: {purpose}\n"
+			f"URL: {url}",
+			priority=NotificationPriority.HIGH,
+		)
+
+	async def send_auth_help(self, service: str, screenshot_path: str) -> None:
+		"""Send a screenshot when auth flow is stuck, using Telegram sendPhoto."""
+		try:
+			client = await self._ensure_client()
+			url = f"https://api.telegram.org/bot{self._bot_token}/sendPhoto"
+			with open(screenshot_path, "rb") as f:
+				resp = await client.post(
+					url,
+					data={
+						"chat_id": self._chat_id,
+						"caption": f"Auth help needed for {service}",
+					},
+					files={"photo": ("screenshot.png", f, "image/png")},
+				)
+				if resp.status_code != 200:
+					logger.error("Telegram sendPhoto failed: HTTP %d", resp.status_code)
+		except Exception as exc:
+			logger.error("Telegram sendPhoto failed: %s", exc)
+
+	async def send_signup_request(self, service: str, purpose: str) -> bool:
+		"""Request approval for new account signup. Returns True if approved."""
+		return await self.request_approval(
+			f"Autodev wants to create an account on *{service}*.\n"
+			f"Purpose: {purpose}\n\n"
+			f"This will sign up for a new service."
+		)
+
+	async def send_spend_request(self, service: str, amount: str, purpose: str) -> bool:
+		"""Request approval for spending. Returns True if approved."""
+		return await self.request_approval(
+			f"Autodev wants to spend *{amount}* on *{service}*.\n"
+			f"Purpose: {purpose}"
+		)
+
 	async def send_cost_alert(
 		self,
 		current_cost: float,

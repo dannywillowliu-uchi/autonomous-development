@@ -488,3 +488,93 @@ class TestRetryLogic:
 
 		await notifier.close()
 
+
+
+class TestAuthNotifications:
+	"""Tests for auth-related notification methods."""
+
+	@pytest.mark.asyncio
+	async def test_send_auth_request(self, notifier: TelegramNotifier) -> None:
+		"""send_auth_request sends a HIGH priority message."""
+		with patch.object(notifier, "send", new_callable=AsyncMock) as mock_send:
+			await notifier.send_auth_request("github", "CLI access", "https://github.com/login")
+			mock_send.assert_called_once()
+			msg = mock_send.call_args[0][0]
+			assert "Auth Required" in msg
+			assert "github" in msg
+			assert "CLI access" in msg
+			assert "https://github.com/login" in msg
+			assert mock_send.call_args[1]["priority"] == NotificationPriority.HIGH
+
+	@pytest.mark.asyncio
+	async def test_send_auth_help_uploads_photo(self, notifier: TelegramNotifier, tmp_path) -> None:
+		"""send_auth_help sends screenshot via sendPhoto."""
+		screenshot = tmp_path / "screenshot.png"
+		screenshot.write_bytes(b"fake-png-data")
+		mock_response = httpx.Response(200)
+		with patch("autodev.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+			mock_post.return_value = mock_response
+			await notifier.send_auth_help("google", str(screenshot))
+			mock_post.assert_called_once()
+			call_args = mock_post.call_args
+			assert "sendPhoto" in call_args[0][0]
+			assert call_args[1]["data"]["chat_id"] == "12345"
+			assert "google" in call_args[1]["data"]["caption"]
+			assert "photo" in call_args[1]["files"]
+		await notifier.close()
+
+	@pytest.mark.asyncio
+	async def test_send_auth_help_handles_error(self, notifier: TelegramNotifier, tmp_path) -> None:
+		"""send_auth_help handles errors gracefully."""
+		screenshot = tmp_path / "screenshot.png"
+		screenshot.write_bytes(b"fake-png-data")
+		with patch("autodev.notifier.httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+			mock_post.side_effect = httpx.HTTPError("network error")
+			await notifier.send_auth_help("google", str(screenshot))
+
+	@pytest.mark.asyncio
+	async def test_send_auth_help_missing_file(self, notifier: TelegramNotifier) -> None:
+		"""send_auth_help handles missing file gracefully."""
+		await notifier.send_auth_help("google", "/nonexistent/screenshot.png")
+
+	@pytest.mark.asyncio
+	async def test_send_signup_request_approved(self, notifier: TelegramNotifier) -> None:
+		"""send_signup_request returns True when approved."""
+		with patch.object(notifier, "request_approval", new_callable=AsyncMock) as mock_approval:
+			mock_approval.return_value = True
+			result = await notifier.send_signup_request("newservice", "API integration")
+			assert result is True
+			mock_approval.assert_called_once()
+			msg = mock_approval.call_args[0][0]
+			assert "newservice" in msg
+			assert "API integration" in msg
+			assert "create an account" in msg
+
+	@pytest.mark.asyncio
+	async def test_send_signup_request_rejected(self, notifier: TelegramNotifier) -> None:
+		"""send_signup_request returns False when rejected."""
+		with patch.object(notifier, "request_approval", new_callable=AsyncMock) as mock_approval:
+			mock_approval.return_value = False
+			result = await notifier.send_signup_request("newservice", "API integration")
+			assert result is False
+
+	@pytest.mark.asyncio
+	async def test_send_spend_request_approved(self, notifier: TelegramNotifier) -> None:
+		"""send_spend_request returns True when approved."""
+		with patch.object(notifier, "request_approval", new_callable=AsyncMock) as mock_approval:
+			mock_approval.return_value = True
+			result = await notifier.send_spend_request("openai", "$20/month", "GPT-4 API access")
+			assert result is True
+			mock_approval.assert_called_once()
+			msg = mock_approval.call_args[0][0]
+			assert "openai" in msg
+			assert "$20/month" in msg
+			assert "GPT-4 API access" in msg
+
+	@pytest.mark.asyncio
+	async def test_send_spend_request_rejected(self, notifier: TelegramNotifier) -> None:
+		"""send_spend_request returns False when rejected."""
+		with patch.object(notifier, "request_approval", new_callable=AsyncMock) as mock_approval:
+			mock_approval.return_value = False
+			result = await notifier.send_spend_request("openai", "$20/month", "GPT-4 API access")
+			assert result is False

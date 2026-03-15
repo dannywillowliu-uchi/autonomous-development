@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 
 from autodev.intelligence.models import AdaptationProposal
+from autodev.intelligence.utils import find_claude_binary
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,9 @@ class SpecGenerator:
 		project_ctx = await self._read_project_context(proposal.target_modules)
 		prompt = self._build_spec_prompt(proposal, source_ctx, project_ctx)
 
+		claude_bin = find_claude_binary()
 		proc = await asyncio.create_subprocess_exec(
-			"claude", "--print", "-p", prompt,
+			claude_bin, "--print", "-p", prompt,
 			cwd=str(self._project_path),
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.PIPE,

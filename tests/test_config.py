@@ -13,6 +13,7 @@ from autodev.config import (
 	ContainerConfig,
 	ContinuousConfig,
 	HITLConfig,
+	IntelligenceConfig,
 	MCPConfig,
 	MissionConfig,
 	ModelsConfig,
@@ -1123,3 +1124,53 @@ inherit_global_capabilities = false
 """)
 		cfg = load_config(toml)
 		assert cfg.swarm.inherit_global_capabilities is False
+
+
+# -- IntelligenceConfig tests --
+
+
+class TestIntelligenceConfig:
+	def test_intelligence_defaults(self) -> None:
+		ic = IntelligenceConfig()
+		assert ic.evaluator_mode == "llm"
+		assert ic.max_daily_modifications == 15
+
+	def test_intelligence_on_mission_config(self) -> None:
+		mc = MissionConfig()
+		assert isinstance(mc.intelligence, IntelligenceConfig)
+		assert mc.intelligence.evaluator_mode == "llm"
+		assert mc.intelligence.max_daily_modifications == 15
+
+	def test_intelligence_parsed_from_toml(self, tmp_path: Path) -> None:
+		toml = tmp_path / "autodev.toml"
+		toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[intelligence]
+evaluator_mode = "keyword"
+max_daily_modifications = 0
+""")
+		cfg = load_config(toml)
+		assert cfg.intelligence.evaluator_mode == "keyword"
+		assert cfg.intelligence.max_daily_modifications == 0
+
+	def test_intelligence_partial(self, tmp_path: Path) -> None:
+		toml = tmp_path / "autodev.toml"
+		toml.write_text("""\
+[target]
+name = "test"
+path = "/tmp/test"
+
+[intelligence]
+evaluator_mode = "keyword"
+""")
+		cfg = load_config(toml)
+		assert cfg.intelligence.evaluator_mode == "keyword"
+		assert cfg.intelligence.max_daily_modifications == 15
+
+	def test_intelligence_defaults_when_omitted(self, minimal_config: Path) -> None:
+		cfg = load_config(minimal_config)
+		assert cfg.intelligence.evaluator_mode == "llm"
+		assert cfg.intelligence.max_daily_modifications == 15

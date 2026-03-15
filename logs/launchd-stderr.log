@@ -1,0 +1,1 @@
+/Users/dannyliu/personal_projects/autonomous-development/scripts/run-auto-update.sh: line 22:  2351 Terminated: 15          "$PROJECT_DIR/.venv/bin/python" -m autodev auto-update >> "$LOG_FILE" 2>&1

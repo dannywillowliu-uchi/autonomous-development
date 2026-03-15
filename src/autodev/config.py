@@ -494,6 +494,14 @@ class DeliberationConfig:
 
 
 @dataclass
+class IntelligenceConfig:
+	"""Intelligence subsystem settings."""
+
+	evaluator_mode: str = "llm"  # "llm" or "keyword"
+	max_daily_modifications: int = 15  # 0 to disable safety cap
+
+
+@dataclass
 class SecurityConfig:
 	"""Security settings for worker subprocess isolation."""
 
@@ -537,6 +545,7 @@ class MissionConfig:
 	episodic_memory: EpisodicMemoryConfig = field(default_factory=EpisodicMemoryConfig)
 	speculation: SpeculationConfig = field(default_factory=SpeculationConfig)
 	core_tests: CoreTestsConfig = field(default_factory=CoreTestsConfig)
+	intelligence: IntelligenceConfig = field(default_factory=IntelligenceConfig)
 
 
 def _build_dashboard(data: dict[str, Any]) -> DashboardConfig:
@@ -1024,6 +1033,15 @@ def _build_core_tests(data: dict[str, Any]) -> CoreTestsConfig:
 	return ct
 
 
+def _build_intelligence(data: dict[str, Any]) -> IntelligenceConfig:
+	ic = IntelligenceConfig()
+	if "evaluator_mode" in data:
+		ic.evaluator_mode = str(data["evaluator_mode"])
+	if "max_daily_modifications" in data:
+		ic.max_daily_modifications = int(data["max_daily_modifications"])
+	return ic
+
+
 def _build_episodic_memory(data: dict[str, Any]) -> EpisodicMemoryConfig:
 	ec = EpisodicMemoryConfig()
 	if "enabled" in data:
@@ -1186,7 +1204,9 @@ def build_claude_cmd(
 		cmd.extend(["--max-budget-usd", str(budget)])
 	if max_turns is not None:
 		cmd.extend(["--max-turns", str(max_turns)])
-	if permission_mode:
+	if permission_mode == "auto":
+		cmd.append("--dangerously-skip-permissions")
+	elif permission_mode:
 		cmd.extend(["--permission-mode", permission_mode])
 	if session_id:
 		cmd.extend(["--session-id", session_id])
@@ -1337,6 +1357,8 @@ def load_config(path: str | Path) -> MissionConfig:
 		mc.speculation = _build_speculation(data["speculation"])
 	if "core_tests" in data:
 		mc.core_tests = _build_core_tests(data["core_tests"])
+	if "intelligence" in data:
+		mc.intelligence = _build_intelligence(data["intelligence"])
 	# Compute resolved extra env keys on this config instance
 	mc._resolved_extra_env_keys = set(mc.security.extra_env_keys) - _ENV_DENYLIST
 	# Allow env vars as fallback for Telegram credentials

@@ -245,7 +245,7 @@ async def scan_arxiv(client: httpx.AsyncClient | None = None) -> list[Finding]:
 	try:
 		await asyncio.sleep(1)  # Rate limit courtesy for arXiv
 		resp = await client.get(
-			"http://export.arxiv.org/api/query",
+			"https://export.arxiv.org/api/query",
 			params={
 				"search_query": ARXIV_QUERY,
 				"start": 0,

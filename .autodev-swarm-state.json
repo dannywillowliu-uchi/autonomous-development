@@ -1,81 +1,108 @@
 {
-  "cycle": 7,
-  "mission": "Implement the self-recursion loop for autonomous-development.\n\nRead the full spec at docs/superpower",
+  "cycle": 2,
+  "mission": "Implement the LLM evaluator and auth gateway for autonomous-development.\n\nRead the full spec at docs",
   "team_name": "autodev-autonomous-development",
   "agents": [
     {
-      "id": "a3e6caab",
-      "name": "metrics-cli-retry",
+      "id": "9e5862b9",
+      "name": "llm-evaluator-impl",
       "role": "implementer",
-      "status": "dead",
-      "task_id": "8f098efb",
-      "completed": 1,
+      "status": "working",
+      "task_id": "7f28350d",
+      "completed": 0,
       "failed": 0
     },
     {
-      "id": "3f73be0c",
-      "name": "final-verify",
-      "role": "tester",
+      "id": "c4c768ac",
+      "name": "config-pipeline-impl",
+      "role": "implementer",
       "status": "working",
-      "task_id": "f930c4ca",
+      "task_id": "3680ab96",
+      "completed": 0,
+      "failed": 0
+    },
+    {
+      "id": "c669efb7",
+      "name": "auth-vault-impl",
+      "role": "implementer",
+      "status": "working",
+      "task_id": "1515f82c",
+      "completed": 0,
+      "failed": 0
+    },
+    {
+      "id": "aec2eda4",
+      "name": "auth-browser-impl",
+      "role": "implementer",
+      "status": "working",
+      "task_id": "1a0e7d69",
       "completed": 0,
       "failed": 0
     }
   ],
   "tasks": [
     {
-      "id": "b59e8b32",
-      "title": "Web source scanners + registration",
-      "status": "completed",
-      "claimed_by": "60b6992e",
-      "attempts": 1,
-      "max_attempts": 3,
-      "priority": "CRITICAL"
-    },
-    {
-      "id": "0857aa7f",
-      "title": "Spec generator + auto-update integration",
-      "status": "completed",
-      "claimed_by": "1eb483fc",
-      "attempts": 1,
-      "max_attempts": 3,
-      "priority": "CRITICAL"
-    },
-    {
-      "id": "85b9b728",
-      "title": "Scheduler + daemon CLI",
-      "status": "completed",
-      "claimed_by": "d6071f44",
-      "attempts": 1,
-      "max_attempts": 3,
-      "priority": "HIGH"
-    },
-    {
-      "id": "435b147d",
-      "title": "Metrics tracker + recording hook + CLI",
-      "status": "completed",
-      "claimed_by": "2e4500e2",
-      "attempts": 1,
-      "max_attempts": 3,
-      "priority": "HIGH"
-    },
-    {
-      "id": "f930c4ca",
-      "title": "Final integration verification + cross-module consistency",
+      "id": "7f28350d",
+      "title": "Create program.md + LLM evaluator + tests",
       "status": "claimed",
-      "claimed_by": "3f73be0c",
+      "claimed_by": "9e5862b9",
+      "attempts": 0,
+      "max_attempts": 3,
+      "priority": "CRITICAL"
+    },
+    {
+      "id": "3680ab96",
+      "title": "Add IntelligenceConfig + pipeline wiring + tests",
+      "status": "claimed",
+      "claimed_by": "c4c768ac",
       "attempts": 0,
       "max_attempts": 3,
       "priority": "HIGH"
     },
     {
-      "id": "8f098efb",
-      "title": "Add metrics CLI subcommand to cli.py",
-      "status": "completed",
-      "claimed_by": "a3e6caab",
-      "attempts": 2,
+      "id": "1515f82c",
+      "title": "Create Keychain vault + tests",
+      "status": "claimed",
+      "claimed_by": "c669efb7",
+      "attempts": 0,
       "max_attempts": 3,
       "priority": "HIGH"
+    },
+    {
+      "id": "1a0e7d69",
+      "title": "Create headless auth browser + tests",
+      "status": "claimed",
+      "claimed_by": "aec2eda4",
+      "attempts": 0,
+      "max_attempts": 3,
+      "priority": "HIGH"
+    },
+    {
+      "id": "76f94196",
+      "title": "Create auth gateway + tests",
+      "status": "pending",
+      "claimed_by": null,
+      "attempts": 0,
+      "max_attempts": 3,
+      "priority": "HIGH"
+    },
+    {
+      "id": "f1aa1a3e",
+      "title": "Add inbox auth protocol to controller + worker_prompt",
+      "status": "pending",
+      "claimed_by": null,
+      "attempts": 0,
+      "max_attempts": 3,
+      "priority": "HIGH"
+    },
+    {
+      "id": "07971cb1",
+      "title": "Final integration verification",
+      "status": "pending",
+      "claimed_by": null,
+      "attempts": 0,
+      "max_attempts": 3,
+      "priority": "CRITICAL"
     }
   ],
   "core_tests": {},
@@ -93,31 +120,13 @@
     "[metrics-cli-retry] (report) Completed: metrics subcommand already existed in cli.py from previous agent (metrics-impl skipped it, scheduler-impl/spec-generator-impl added it). Added 7 tests for cmd_metrics covering: default output, no-data, --trend, --trend with insufficient data, --correlate with no data, arg parsing, --last-n flag. Fixed 2 lint issues: E501 line too long in cli.py metrics subparser, F401 unused MetricsTracker import in tests. All 36 CLI tests pass, full suite 2861 pass, ruff clean."
   ],
   "cost_usd": 0.0,
-  "wall_minutes": 22.064972031249876,
+  "wall_minutes": 7.36636748611636,
   "test_history": [],
   "completion_history": [
     0,
-    1,
-    3,
-    3,
-    4,
-    4,
-    5,
-    5,
-    5,
-    5,
-    5
+    0
   ],
   "failure_history": [
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
     0,
     0
   ],
@@ -125,75 +134,12 @@
     {
       "cycle": 2,
       "decisions": [
-        "wait",
-        "create_task"
-      ],
-      "ok": 2,
-      "failed": 0,
-      "reasonings": [
-        "web-sources-impl, spec-generator-impl, and metrics-impl are all actively working",
-        "All 3 remaining implementation tasks will complete soon. Need an integration ver"
-      ]
-    },
-    {
-      "cycle": 3,
-      "decisions": [
-        "wait",
-        "create_task",
-        "spawn"
-      ],
-      "ok": 3,
-      "failed": 0,
-      "reasonings": [
-        "Only active agent is spec-generator-impl at 5m37s with no signs of stagnation. A",
-        "Spec item 9 (Metrics CLI) was explicitly skipped by metrics-impl. scheduler-impl",
-        "cli.py is no longer claimed by any active agent. This is independent work that c"
-      ]
-    },
-    {
-      "cycle": 4,
-      "decisions": [
         "wait"
       ],
       "ok": 1,
       "failed": 0,
       "reasonings": [
-        "Both working agents are on high-impact tasks with reasonable elapsed times. No s"
-      ]
-    },
-    {
-      "cycle": 5,
-      "decisions": [
-        "spawn",
-        "wait"
-      ],
-      "ok": 2,
-      "failed": 0,
-      "reasonings": [
-        "metrics-cli-impl failed (completed=0, failed=1). This is the last implementation",
-        "Final integration (f930c4ca0725) should run after metrics CLI is done so it can "
-      ]
-    },
-    {
-      "cycle": 6,
-      "decisions": [
-        "wait"
-      ],
-      "ok": 1,
-      "failed": 0,
-      "reasonings": [
-        "Only 1 task remains in progress (metrics CLI) and 1 blocked task (final integrat"
-      ]
-    },
-    {
-      "cycle": 7,
-      "decisions": [
-        "spawn"
-      ],
-      "ok": 1,
-      "failed": 0,
-      "reasonings": [
-        "All 5 implementation tasks are complete. The only remaining task is final integr"
+        "Cycle 2 with 4 fresh agents all working on well-scoped, independent tasks (LLM e"
       ]
     }
   ]

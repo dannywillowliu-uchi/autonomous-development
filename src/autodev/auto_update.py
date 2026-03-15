@@ -76,26 +76,37 @@ class AutoUpdatePipeline:
 			List of UpdateResult for each processed proposal.
 		"""
 		if not dry_run and not self._check_rate_limit():
-			logger.warning(
-				"Rate limit reached: %d modifications today (max %d)",
-				self._db.count_proposals_applied_since(
-					datetime.now(timezone.utc).date().isoformat()
-				),
-				self._max_daily_modifications,
-			)
+			logger.warning("Rate limit reached, skipping entire run")
 			return []
 
 		report = await run_scan(threshold=threshold)
 		logger.info(
-			"Intel scan complete: %d findings, %d proposals",
-			len(report.findings), len(report.proposals),
+			"Intel scan complete: %d findings",
+			len(report.findings),
 		)
 
 		self._findings_by_id = {f.id: f for f in report.findings}
 
+		# Choose evaluator based on config
+		if self._config.intelligence.evaluator_mode == "llm":
+			try:
+				from autodev.intelligence.llm_evaluator import evaluate_findings as llm_evaluate
+				all_proposals = await llm_evaluate(report.findings, Path(self._config.target.resolved_path))
+			except Exception:
+				logger.warning("LLM evaluator failed, falling back to keyword", exc_info=True)
+				from autodev.intelligence.evaluator import evaluate_findings, generate_proposals
+				scored = evaluate_findings(report.findings)
+				all_proposals = generate_proposals(scored, threshold)
+		else:
+			from autodev.intelligence.evaluator import evaluate_findings, generate_proposals
+			scored = evaluate_findings(report.findings)
+			all_proposals = generate_proposals(scored, threshold)
+
+		logger.info("%d proposals from evaluator", len(all_proposals))
+
 		# Filter by title (IDs are regenerated each scan, but titles are stable)
 		proposals = [
-			p for p in report.proposals
+			p for p in all_proposals
 			if not self._is_already_applied(p.title)
 		]
 		if not proposals:
@@ -141,7 +152,10 @@ class AutoUpdatePipeline:
 		return await self._request_approval(proposal)
 
 	async def _auto_launch(self, proposal: AdaptationProposal) -> UpdateResult:
-		"""Auto-launch a proposal as a swarm mission with ratchet checkpoint."""
+		"""Auto-launch a proposal as a swarm mission with ratchet checkpoint.
+
+		Runs the full cycle: checkpoint -> generate spec -> run swarm -> verify -> keep/rollback.
+		"""
 		from autodev.ratchet import GitRatchet
 
 		repo_path = Path(self._config.target.resolved_path)
@@ -150,16 +164,43 @@ class AutoUpdatePipeline:
 
 		objective = await self._generate_spec_or_objective(proposal)
 		mission_id = self._record_applied(proposal, objective)
-		logger.info("Launched mission %s for proposal: %s (tag=%s)", mission_id, proposal.title, tag)
+		logger.info("Launching swarm for mission %s: %s (tag=%s)", mission_id, proposal.title, tag)
 
-		return UpdateResult(
-			proposal_id=proposal.id,
-			title=proposal.title,
-			risk_level=proposal.risk_level,
-			action="launched",
-			mission_id=mission_id,
-			ratchet_tag=tag,
-		)
+		# Actually run the swarm
+		swarm_success = await self._run_swarm(objective)
+
+		# Finalize: verify and keep/rollback
+		result = await self._finalize_modification(proposal, tag)
+		result.mission_id = mission_id
+
+		if not swarm_success:
+			logger.warning("Swarm failed for %s, rolling back", proposal.title)
+			await ratchet.rollback(tag)
+			result.action = "rollback"
+
+		return result
+
+	async def _run_swarm(self, objective: str) -> bool:
+		"""Run the swarm controller with the given objective and return success."""
+		from autodev.swarm.controller import SwarmController
+		from autodev.swarm.planner import DrivingPlanner
+
+		# Create a temporary config with the new objective
+		config = self._config
+		original_objective = config.target.objective
+		config.target.objective = objective
+
+		try:
+			controller = SwarmController(config, config.swarm, self._db)
+			planner = DrivingPlanner(controller, config.swarm)
+			await controller.initialize()
+			await planner.run()
+			return True
+		except Exception:
+			logger.exception("Swarm execution failed")
+			return False
+		finally:
+			config.target.objective = original_objective
 
 	async def _finalize_modification(
 		self,
