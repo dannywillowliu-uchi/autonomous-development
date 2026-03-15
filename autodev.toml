@@ -2,33 +2,25 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = """Implement the LLM evaluator and auth gateway for autonomous-development.
+objective = """Adopt Anthropic agent patterns in the swarm planner/controller.
 
-Read the full spec at docs/superpowers/specs/2026-03-14-llm-evaluator-auth-gateway-design.md before starting.
+Read the full spec at docs/superpowers/specs/auto-2026-03-15-review-for-architectural-patterns-autodev-s-planner-controll.md before starting.
 
 Implementation priorities (in order):
 
-1. SHARED UTILITY: Factor _find_claude_binary() from src/autodev/intelligence/spec_generator.py into a new src/autodev/intelligence/utils.py. Update spec_generator.py to import from utils.py. Verify spec_generator tests still pass.
+1. DECISION VALIDATION GATE: Add _validate_decisions() to DrivingPlanner in swarm/planner.py. Rule-based checks: file overlap (use overlap.py), duplicate tasks (>80% title similarity), spawn budget enforcement, empty prompt rejection, circular dependency detection. Call before execute_decisions(). All algorithmic, no LLM.
 
-2. PROGRAM.MD: Create docs/program.md with the steering document content from the spec. This is the human-edited file that guides the LLM evaluator.
+2. CYCLE EVALUATOR: Create src/autodev/swarm/evaluator.py with CycleEvaluator and CycleGrade dataclass. Grade cycles on task_quality_score, agent_utilization_score, convergence_score. Inject feedback into planner prompt. All algorithmic scoring.
 
-3. LLM EVALUATOR: Create src/autodev/intelligence/llm_evaluator.py with evaluate_findings(findings, project_path, program_path) function. Reads program.md, enriches with CLAUDE.md Architecture section and git log in-memory (never writes back). Sends all findings in a single claude --print call using _find_claude_binary() from utils.py. Parses JSON response with robust extraction (strip markdown fences, extract first [...] block). Falls back to keyword evaluator on failure. Returns list[AdaptationProposal].
+3. TWO-STEP PLANNER CHAIN: Split single planner LLM call into analysis step + decision step with gate between. Add ANALYSIS_PROMPT_TEMPLATE and DECISION_FROM_ANALYSIS_PROMPT to prompts.py. Add two_step_planning config flag to SwarmConfig. Fallback to single-call on parse failure.
 
-4. INTELLIGENCE CONFIG: Add IntelligenceConfig dataclass to config.py with evaluator_mode field (default "llm"). Add intelligence field to MissionConfig. Load from [intelligence] TOML section.
+4. WORKER OUTPUT VALIDATION: Add _validate_ad_result() to SwarmController. Validate status, summary, files_changed, discoveries, commits fields. Coerce malformed data. Log warnings. Integrate in _handle_agent_death().
 
-5. PIPELINE WIRING: Restructure call chain: scanner.py run_scan() returns raw findings only (no evaluation). auto_update.py chooses evaluator based on config.intelligence.evaluator_mode. Keep safety cap max_daily_modifications=15 (configurable, 0 to disable). Remove per-launch rate check from _auto_launch().
+5. PROMPT ENGINEERING: Add step-by-step reasoning block, negative examples (common mistakes), and 2-3 few-shot examples to prompts.py. Keep total growth under 500 tokens.
 
-6. KEYCHAIN VAULT: Create src/autodev/auth/__init__.py and src/autodev/auth/vault.py with KeychainVault class. store() passes secret via stdin (not CLI args). get() returns None if not found. delete() and list_services() (using find-generic-password, not dump-keychain). All use asyncio.create_subprocess_exec with security CLI.
+6. FAILURE REFLECTION: Add add_reflection() to SwarmLearnings. When same task fails 2+ times, construct structured reflection (was description clear? right role? deps satisfied?). Surface in planner prompt.
 
-7. HEADLESS AUTH BROWSER: Create src/autodev/auth/browser.py with HeadlessAuthHandler class. Lazy Playwright initialization (only on first use). run_auth_flow(url, service, flow_type, timeout_s=300). Detects OAuth, CLI login, API key pages. _handle_stuck sends screenshot to Telegram. Add playwright as optional dependency in pyproject.toml.
-
-8. AUTH GATEWAY: Create src/autodev/auth/gateway.py with AuthGateway class. Per-service asyncio.Lock for concurrency control. authenticate(service, purpose, url, signup_ok, force_refresh). Checks vault first, runs browser flow if needed, stores result. Telegram approval for signups and spend.
-
-9. INBOX AUTH PROTOCOL: In swarm/controller.py add handle_auth_request() that processes auth_request messages from workers via team inbox. Writes auth_response to worker inbox. In swarm/worker_prompt.py add auth request instructions. Planner recognizes auth_request message type.
-
-10. NOTIFIER UPDATES: In notifier.py add send_auth_request(), send_auth_help() (with screenshot), send_signup_request(), send_spend_request() methods.
-
-11. TESTS: Unit tests for llm_evaluator (mock subprocess, JSON extraction, fallback), vault (mock security CLI, stdin secret passing), browser (mock Playwright, flow detection, Telegram fallback), gateway (vault hit, vault miss, locking, signup/spend approval), controller auth (inbox protocol). All existing tests must continue to pass.
+7. TESTS: test_decision_validation.py (overlap, duplicates, budget, empty prompt, circular deps), test_cycle_evaluator.py (high/low quality cycles, convergence, history), test_ad_result_validation.py (coercion, defaults), test_two_step_planner.py (analysis+decision flow, fallback), test_learnings.py (reflection). All existing tests must pass.
 
 Use .venv/bin/python for all Python commands.
 Run .venv/bin/python -m pytest tests/ -q to verify changes.
@@ -36,7 +28,7 @@ Run .venv/bin/ruff check src/ tests/ to verify linting.
 """
 
 [target.verification]
-command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/"
+command = ".venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/ && .venv/bin/bandit -r src/ -lll -q"
 timeout = 300
 setup_command = "uv sync --extra dev"
 setup_timeout = 120

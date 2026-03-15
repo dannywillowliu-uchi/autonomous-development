@@ -1111,7 +1111,7 @@ def cmd_swarm(args: argparse.Namespace) -> int:
 						try:
 							_sp.run(
 								ct.runner_command,
-								shell=True,
+								shell=True,  # nosec B602
 								cwd=proj,
 								capture_output=True,
 								text=True,
