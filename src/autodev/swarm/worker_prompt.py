@@ -36,6 +36,7 @@ def build_worker_prompt(
 	sections.append(_skills_section(config))
 	sections.append(_verification_section(config))
 	sections.append(_capabilities_section(capabilities))
+	sections.append(_auth_request_section(agent, team_name))
 	sections.append(_skill_creation_section())
 	sections.append(_mcp_section(swarm_config))
 	sections.append(_result_protocol_section())
@@ -230,6 +231,24 @@ def _capabilities_section(capabilities: CapabilityManifest | None) -> str:
 			lines.append(f"- {m.name} [{m.server_type}]")
 
 	return "\n".join(lines) if lines else ""
+
+
+def _auth_request_section(agent: SwarmAgent, team_name: str) -> str:
+	return f"""## Authentication
+
+If you encounter an auth wall (OAuth screen, API key required, CLI login needed), \
+send an auth request to the planner via the team inbox:
+
+1. Write to `~/.claude/teams/{team_name}/inboxes/team-lead.json`:
+   ```json
+   {{"from": "{agent.name}", "type": "auth_request", \
+"service": "service-name", "url": "https://auth-url", \
+"purpose": "why you need access"}}
+   ```
+2. Poll your inbox (`~/.claude/teams/{team_name}/inboxes/{agent.name}.json`) \
+for a response with `"type": "auth_response"`
+3. The gateway will handle OAuth flows, credential storage, and ask Danny for help if stuck
+4. Credentials are stored in macOS Keychain for future use"""
 
 
 def _skill_creation_section() -> str:

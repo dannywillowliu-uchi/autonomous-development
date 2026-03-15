@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from autodev.intelligence.llm_evaluator import (
 	_build_enriched_program,
+	_decisions_to_proposals,
 	_extract_json_array,
-	evaluate_findings_llm,
+	evaluate_findings,
 )
 from autodev.intelligence.models import Finding
 
@@ -60,32 +61,53 @@ class TestExtractJsonArray:
 
 
 class TestBuildEnrichedProgram:
-	def test_includes_architecture_section(self, tmp_path):
+	@pytest.mark.asyncio
+	async def test_includes_architecture_section(self, tmp_path):
+		program = tmp_path / "program.md"
+		program.write_text("Base content")
 		claude_md = tmp_path / "CLAUDE.md"
 		claude_md.write_text(
-			"# Project\n\n## Architecture\n\n### Core\n- config.py\n- models.py\n\n## Gotchas\n- Don't do X\n"
+			"## Architecture\n\n### Core\n- config.py\n- models.py\n\n## Gotchas\n- stuff\n"
 		)
-		result = _build_enriched_program("# Program\nBase content", tmp_path)
-		assert "## Current Architecture (from CLAUDE.md)" in result
+		git_proc = AsyncMock()
+		git_proc.communicate.return_value = (b"", b"")
+		git_proc.returncode = 1
+		with patch("asyncio.create_subprocess_exec", return_value=git_proc):
+			result = await _build_enriched_program(tmp_path, program)
+		assert "Current Architecture" in result
 		assert "config.py" in result
 		assert "Gotchas" not in result
 
-	def test_no_claude_md(self, tmp_path):
-		result = _build_enriched_program("# Program", tmp_path)
-		assert result.startswith("# Program")
+	@pytest.mark.asyncio
+	async def test_no_claude_md(self, tmp_path):
+		program = tmp_path / "program.md"
+		program.write_text("Base content")
+		git_proc = AsyncMock()
+		git_proc.communicate.return_value = (b"", b"")
+		git_proc.returncode = 1
+		with patch("asyncio.create_subprocess_exec", return_value=git_proc):
+			result = await _build_enriched_program(tmp_path, program)
+		assert "Base content" in result
 
-	@patch("autodev.intelligence.llm_evaluator._subprocess.run")
-	def test_includes_git_log(self, mock_run, tmp_path):
-		mock_run.return_value = MagicMock(returncode=0, stdout="abc1234 feat: something\ndef5678 fix: bug")
-		result = _build_enriched_program("# Program", tmp_path)
-		assert "## Recent Commits" in result
+	@pytest.mark.asyncio
+	async def test_includes_git_log(self, tmp_path):
+		program = tmp_path / "program.md"
+		program.write_text("Base")
+		git_proc = AsyncMock()
+		git_proc.communicate.return_value = (b"abc1234 feat: something", b"")
+		git_proc.returncode = 0
+		with patch("asyncio.create_subprocess_exec", return_value=git_proc):
+			result = await _build_enriched_program(tmp_path, program)
+		assert "Recent Activity" in result
 		assert "abc1234" in result
 
-	@patch("autodev.intelligence.llm_evaluator._subprocess.run", side_effect=OSError("git not found"))
-	def test_git_log_failure_ignored(self, mock_run, tmp_path):
-		result = _build_enriched_program("# Program", tmp_path)
-		assert "Recent Commits" not in result
-
+	@pytest.mark.asyncio
+	async def test_git_log_failure_ignored(self, tmp_path):
+		program = tmp_path / "program.md"
+		program.write_text("Base")
+		with patch("asyncio.create_subprocess_exec", side_effect=OSError("git not found")):
+			result = await _build_enriched_program(tmp_path, program)
+		assert "Recent Activity" not in result
 
 class TestEvaluateFindingsLlm:
 	@pytest.mark.asyncio
@@ -108,13 +130,12 @@ class TestEvaluateFindingsLlm:
 		mock_proc.communicate.return_value = (llm_output.encode(), b"")
 		mock_proc.returncode = 0
 
-		with patch("autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec", return_value=mock_proc), \
-			patch("autodev.intelligence.llm_evaluator._subprocess.run", return_value=MagicMock(returncode=1)):
-			proposals = await evaluate_findings_llm(findings, tmp_path)
+		with patch("autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec", return_value=mock_proc):
+			proposals = await evaluate_findings(findings, tmp_path)
 
 		assert len(proposals) == 1
 		assert proposals[0].finding_id == "abc123"
-		assert proposals[0].title == "Adapt: New MCP server for databases"
+		assert proposals[0].title == "Add database MCP integration"
 		assert proposals[0].target_modules == ["mcp_server.py", "config.py"]
 		assert proposals[0].proposal_type == "integration"
 
@@ -143,9 +164,8 @@ class TestEvaluateFindingsLlm:
 		mock_proc.communicate.return_value = (f"```json\n{llm_output}\n```".encode(), b"")
 		mock_proc.returncode = 0
 
-		with patch("autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec", return_value=mock_proc), \
-			patch("autodev.intelligence.llm_evaluator._subprocess.run", return_value=MagicMock(returncode=1)):
-			proposals = await evaluate_findings_llm(findings, tmp_path)
+		with patch("autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec", return_value=mock_proc):
+			proposals = await evaluate_findings(findings, tmp_path)
 
 		assert len(proposals) == 1
 		assert proposals[0].finding_id == "f1"
@@ -162,9 +182,8 @@ class TestEvaluateFindingsLlm:
 		mock_proc.communicate.return_value = (b"", b"error")
 		mock_proc.returncode = 1
 
-		with patch("autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec", return_value=mock_proc), \
-			patch("autodev.intelligence.llm_evaluator._subprocess.run", return_value=MagicMock(returncode=1)):
-			proposals = await evaluate_findings_llm(findings, tmp_path)
+		with patch("autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec", return_value=mock_proc):
+			proposals = await evaluate_findings(findings, tmp_path)
 
 		# Should fall back to keyword evaluator -- MCP keyword should produce proposals
 		assert isinstance(proposals, list)
@@ -181,9 +200,8 @@ class TestEvaluateFindingsLlm:
 		mock_proc.communicate.return_value = (b"This is not JSON at all", b"")
 		mock_proc.returncode = 0
 
-		with patch("autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec", return_value=mock_proc), \
-			patch("autodev.intelligence.llm_evaluator._subprocess.run", return_value=MagicMock(returncode=1)):
-			proposals = await evaluate_findings_llm(findings, tmp_path)
+		with patch("autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec", return_value=mock_proc):
+			proposals = await evaluate_findings(findings, tmp_path)
 
 		assert isinstance(proposals, list)
 
@@ -205,16 +223,12 @@ class TestEvaluateFindingsLlm:
 		mock_proc.communicate.return_value = (llm_output.encode(), b"")
 		mock_proc.returncode = 0
 
-		mock_sub = patch(
-			"autodev.intelligence.llm_evaluator._subprocess.run",
-			return_value=MagicMock(returncode=1),
-		)
 		mock_claude = patch(
 			"autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		)
-		with mock_claude as mock_exec, mock_sub:
-			await evaluate_findings_llm(findings, tmp_path)
+		with mock_claude as mock_exec:
+			await evaluate_findings(findings, tmp_path)
 
 		# Verify the prompt passed to claude contains program content
 		call_args = mock_exec.call_args
@@ -237,31 +251,26 @@ class TestEvaluateFindingsLlm:
 		mock_proc.communicate.return_value = (llm_output.encode(), b"")
 		mock_proc.returncode = 0
 
-		git_result = MagicMock(returncode=0, stdout="abc1234 feat: add thing\ndef5678 fix: bug")
-
 		mock_claude = patch(
 			"autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		)
-		mock_sub = patch(
-			"autodev.intelligence.llm_evaluator._subprocess.run",
-			return_value=git_result,
-		)
-		with mock_claude as mock_exec, mock_sub:
-			await evaluate_findings_llm(findings, tmp_path)
+		with mock_claude as mock_exec:
+			await evaluate_findings(findings, tmp_path)
 
 		prompt_arg = mock_exec.call_args[0][3]
 		assert "Current Architecture" in prompt_arg
 		assert "db.py" in prompt_arg
-		assert "abc1234" in prompt_arg
-		assert "Recent Commits" in prompt_arg
 
 	@pytest.mark.asyncio
 	async def test_fallback_when_program_missing(self, tmp_path):
 		findings = [_make_finding(title="MCP server tool")]
+		mock_proc = AsyncMock()
+		mock_proc.communicate.return_value = (b"not json", b"")
+		mock_proc.returncode = 0
 
-		with patch("autodev.intelligence.llm_evaluator._subprocess.run", return_value=MagicMock(returncode=1)):
-			proposals = await evaluate_findings_llm(findings, tmp_path)
+		with patch("autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec", return_value=mock_proc):
+			proposals = await evaluate_findings(findings, tmp_path)
 
 		assert isinstance(proposals, list)
 
@@ -281,14 +290,80 @@ class TestEvaluateFindingsLlm:
 			"autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec",
 			return_value=mock_proc,
 		)
-		mock_sub = patch(
-			"autodev.intelligence.llm_evaluator._subprocess.run",
-			return_value=MagicMock(returncode=1),
-		)
-		with mock_claude as mock_exec, mock_sub:
-			await evaluate_findings_llm(
+		with mock_claude as mock_exec:
+			await evaluate_findings(
 				findings, tmp_path, program_path=custom_program,
 			)
 
 		prompt_arg = mock_exec.call_args[0][3]
 		assert "Custom Program" in prompt_arg
+
+	@pytest.mark.asyncio
+	async def test_empty_findings_returns_empty(self, tmp_path):
+		result = await evaluate_findings([], tmp_path)
+		assert result == []
+
+	@pytest.mark.asyncio
+	async def test_large_finding_set_no_batching(self, tmp_path):
+		program_path = tmp_path / "docs" / "program.md"
+		program_path.parent.mkdir(parents=True)
+		program_path.write_text("# Program")
+
+		findings = [_make_finding(id=f"f{i}") for i in range(50)]
+		decisions = [{"finding_id": f"f{i}", "decision": "skip", "reasoning": "No", "proposed_action": "", "target_modules": []} for i in range(50)]
+		llm_output = json.dumps(decisions)
+
+		mock_proc = AsyncMock()
+		mock_proc.communicate.return_value = (f"```json\n{llm_output}\n```".encode(), b"")
+		mock_proc.returncode = 0
+
+		with patch("autodev.intelligence.llm_evaluator.asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+			await evaluate_findings(findings, tmp_path)
+
+		# Should be called once for git log in _build_enriched_program, once for claude
+		# Verify only ONE claude call (no batching)
+		claude_calls = [c for c in mock_exec.call_args_list if "--print" in str(c)]
+		assert len(claude_calls) == 1
+
+
+class TestDecisionsToProposals:
+	def test_integrate_decisions(self):
+		findings = {"f1": _make_finding(id="f1")}
+		decisions = [{
+			"finding_id": "f1",
+			"decision": "integrate",
+			"reasoning": "Useful tool",
+			"proposed_action": "Add integration",
+			"target_modules": ["config.py"],
+		}]
+		result = _decisions_to_proposals(decisions, findings)
+		assert len(result) == 1
+		assert result[0].finding_id == "f1"
+		assert result[0].title == "Add integration"
+		assert result[0].effort_estimate == "medium"
+		assert result[0].risk_level == "low"
+
+	def test_skip_decisions_filtered(self):
+		findings = {"f1": _make_finding(id="f1")}
+		decisions = [{
+			"finding_id": "f1",
+			"decision": "skip",
+			"reasoning": "Not useful",
+			"proposed_action": "",
+			"target_modules": [],
+		}]
+		result = _decisions_to_proposals(decisions, findings)
+		assert len(result) == 0
+
+	def test_fallback_title_from_finding(self):
+		findings = {"f1": _make_finding(id="f1", title="Cool Tool")}
+		decisions = [{
+			"finding_id": "f1",
+			"decision": "integrate",
+			"reasoning": "Yes",
+			"proposed_action": "",
+			"target_modules": [],
+		}]
+		result = _decisions_to_proposals(decisions, findings)
+		assert result[0].title == "Adapt: Cool Tool"
+

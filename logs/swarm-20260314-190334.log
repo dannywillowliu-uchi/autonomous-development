@@ -30,3 +30,27 @@
 19:14:21 INFO autodev.swarm.controller: Planner waiting 90s: auth-vault-impl and auth-browser-impl are 6 minutes in -- reasonable time for implementation tasks. Let them work.
 19:15:51 INFO autodev.swarm.planner: Cycle 4: 2 decisions (spawn, wait), 2 ok, 0 failed
 19:16:21 INFO autodev.swarm.controller: Auto-committed task 'Create Keychain vault + tests': 49d529d6
+19:16:21 INFO autodev.swarm.controller: Auto-committed task 'Create auth gateway + tests': b19494c7
+19:16:21 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+19:16:21 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+19:16:21 INFO autodev.swarm.controller: Re-queued task 1a0e7d696531 (Create headless auth browser + tests), attempt 1/3
+20:41:28 INFO autodev.swarm.planner: Parsed 2 decisions from planner (cycle 5)
+20:41:28 INFO autodev.swarm.controller: Spawned agent auth-browser-retry (implementer) for task 1a0e7d696531
+20:41:28 INFO autodev.swarm.controller: Spawned agent inbox-auth-notifier (implementer) for task f1aa1a3e31bb
+20:41:28 INFO autodev.swarm.planner: Cycle 5: 2 decisions (spawn, spawn), 2 ok, 0 failed
+21:37:24 WARNING autodev.swarm.controller: Task 1a0e7d696531 (Create headless auth browser + tests) claim timed out after 3356s
+21:37:24 WARNING autodev.swarm.controller: Task f1aa1a3e31bb (Add inbox auth protocol to controller + worker_prompt) claim timed out after 3356s
+21:37:24 INFO autodev.swarm.controller: Re-queued task 1a0e7d696531 (Create headless auth browser + tests), attempt 2/3
+21:37:24 INFO autodev.swarm.controller: Re-queued task f1aa1a3e31bb (Add inbox auth protocol to controller + worker_prompt), attempt 1/3
+23:43:25 ERROR autodev.swarm.planner: Planner LLM call timed out
+23:43:25 INFO autodev.swarm.planner: Parsed 0 decisions from planner (cycle 6)
+23:43:25 INFO autodev.swarm.planner: Cycle 6: 0 decisions (), 0 ok, 0 failed
+23:43:55 INFO autodev.swarm.controller: Re-queued task f1aa1a3e31bb (Add inbox auth protocol to controller + worker_prompt), attempt 2/3
+23:45:18 INFO autodev.swarm.planner: Parsed 3 decisions from planner (cycle 7)
+23:45:18 INFO autodev.swarm.controller: Created task 5b0de1851964: Fix headless auth browser + tests (simplified)
+23:45:18 INFO autodev.swarm.controller: Spawned agent browser-fix (implementer) for task 5b0de1851964
+23:45:18 INFO autodev.swarm.controller: Spawned agent inbox-auth-impl (implementer) for task f1aa1a3e31bb
+23:45:18 INFO autodev.swarm.planner: Cycle 7: 3 decisions (create_task, spawn, spawn), 3 ok, 0 failed
+23:46:11 INFO autodev.swarm.planner: Parsed 1 decisions from planner (cycle 8)
+23:46:11 INFO autodev.swarm.controller: Planner waiting 120s: Both browser-fix and inbox-auth-impl just spawned 30s ago. They need time to work.
+23:48:11 INFO autodev.swarm.planner: Cycle 8: 1 decisions (wait), 1 ok, 0 failed

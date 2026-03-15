@@ -531,6 +531,106 @@ class SwarmController:
 		})
 		return {"agent_name": agent_name, "skill": skill_name, "directed": True}
 
+	# -- Auth Protocol --
+
+	async def handle_auth_request(
+		self,
+		service: str,
+		url: str,
+		purpose: str,
+		requesting_agent: str,
+		signup_ok: bool = False,
+	) -> dict[str, Any]:
+		"""Process an auth_request message from a worker's inbox.
+
+		Delegates to AuthGateway, then writes an auth_response back to the
+		requesting worker's inbox so it can continue.
+		"""
+		logger.info(
+			"Auth request from %s: service=%s url=%s purpose=%s",
+			requesting_agent, service, url, purpose,
+		)
+
+		# Notify via Telegram
+		try:
+			from autodev.notifier import TelegramNotifier
+			tg = self._config.notifications.telegram
+			if tg.bot_token and tg.chat_id:
+				notifier = TelegramNotifier(tg.bot_token, tg.chat_id)
+				await notifier.send_auth_request(service, purpose, url)
+		except Exception:
+			pass
+
+		# Delegate to AuthGateway
+		result: dict[str, Any] = {"service": service, "success": False}
+		try:
+			from autodev.auth.vault import KeychainVault
+			from autodev.auth.gateway import AuthGateway
+			from autodev.auth.browser import HeadlessAuthHandler
+
+			vault = KeychainVault()
+			notifier_inst = None
+			try:
+				from autodev.notifier import TelegramNotifier as TN
+				tg = self._config.notifications.telegram
+				if tg.bot_token and tg.chat_id:
+					notifier_inst = TN(tg.bot_token, tg.chat_id)
+			except Exception:
+				pass
+
+			browser = HeadlessAuthHandler(vault, notifier_inst)
+			gateway = AuthGateway(vault, browser, notifier_inst)
+			auth_result = await gateway.authenticate(
+				service=service,
+				purpose=purpose,
+				url=url,
+				signup_ok=signup_ok,
+			)
+			result = {
+				"service": service,
+				"success": auth_result.success,
+				"credential_type": auth_result.credential_type,
+				"error": auth_result.error,
+			}
+			await browser.close()
+		except ImportError:
+			logger.warning("Auth gateway modules not available, returning failure")
+			result = {
+				"service": service,
+				"success": False,
+				"error": "Auth gateway not installed",
+			}
+		except Exception as e:
+			logger.error("Auth gateway error for %s: %s", service, e)
+			result = {
+				"service": service,
+				"success": False,
+				"error": str(e),
+			}
+
+		# Write auth_response to the requesting worker's inbox
+		instructions = ""
+		if result["success"]:
+			cred_type = result.get("credential_type", "")
+			instructions = (
+				f"Token stored in Keychain as autodev/{service}. "
+				f"Credential type: {cred_type}."
+			)
+		else:
+			instructions = f"Auth failed: {result.get('error', 'unknown error')}"
+
+		self._write_to_inbox(requesting_agent, {
+			"type": "auth_response",
+			"from": "planner",
+			"service": service,
+			"success": result["success"],
+			"credential_type": result.get("credential_type", ""),
+			"instructions": instructions,
+			"text": f"Auth response for {service}: {'success' if result['success'] else 'failed'}",
+		})
+
+		return result
+
 	# -- Worker Prompt --
 
 	def _build_worker_prompt(self, agent: SwarmAgent, task_prompt: str) -> str:
