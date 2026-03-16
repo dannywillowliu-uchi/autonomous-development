@@ -2,25 +2,30 @@
 name = "autonomous-development"
 path = "/Users/dannyliu/personal_projects/autonomous-development"
 branch = "main"
-objective = """Adopt Anthropic agent patterns in the swarm planner/controller.
+objective = """Implement tool call tracking for swarm agents.
 
-Read the full spec at docs/superpowers/specs/auto-2026-03-15-review-for-architectural-patterns-autodev-s-planner-controll.md before starting.
+Read the full spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md before starting.
 
 Implementation priorities (in order):
 
-1. DECISION VALIDATION GATE: Add _validate_decisions() to DrivingPlanner in swarm/planner.py. Rule-based checks: file overlap (use overlap.py), duplicate tasks (>80% title similarity), spawn budget enforcement, empty prompt rejection, circular dependency detection. Call before execute_decisions(). All algorithmic, no LLM.
+1. DB TABLES: In db.py, add tool_calls and mcp_status tables with CREATE TABLE IF NOT EXISTS migrations. Add methods: record_tool_call(), get_tool_usage(), get_tool_failure_summary(), record_mcp_status(), get_mcp_status(). All use existing conn pattern.
 
-2. CYCLE EVALUATOR: Create src/autodev/swarm/evaluator.py with CycleEvaluator and CycleGrade dataclass. Grade cycles on task_quality_score, agent_utilization_score, convergence_score. Inject feedback into planner prompt. All algorithmic scoring.
+2. STREAM-JSON PARSING: In swarm/controller.py, add _parse_stream_event() method that handles init (MCP status), assistant (tool_use start), user (tool_result completion), and result (final text) events. Track pending tool uses with timestamps for duration calculation. Extract MCP server name from tool names (mcp__server__tool -> server).
 
-3. TWO-STEP PLANNER CHAIN: Split single planner LLM call into analysis step + decision step with gate between. Add ANALYSIS_PROMPT_TEMPLATE and DECISION_FROM_ANALYSIS_PROMPT to prompts.py. Add two_step_planning config flag to SwarmConfig. Fallback to single-call on parse failure.
+3. REWRITE _stream_agent_output: Switch from text line parsing to JSON line parsing. Each stdout line is a JSON object. Parse with _parse_stream_event(). Still write raw lines to trace files. Store tool calls in self._agent_tool_calls dict. Add self._agent_final_results dict for stream-json result text.
 
-4. WORKER OUTPUT VALIDATION: Add _validate_ad_result() to SwarmController. Validate status, summary, files_changed, discoveries, commits fields. Coerce malformed data. Log warnings. Integrate in _handle_agent_death().
+4. SWITCH OUTPUT FORMAT: Change build_claude_cmd call in _spawn_agent() to pass output_format="stream-json". Update monitor_agents() to extract AD_RESULT from self._agent_final_results first, falling back to self._agent_outputs.
 
-5. PROMPT ENGINEERING: Add step-by-step reasoning block, negative examples (common mistakes), and 2-3 few-shot examples to prompts.py. Keep total growth under 500 tokens.
+5. PLANNER VISIBILITY: In swarm/context.py, add _render_tool_failures() and _render_mcp_status() methods. Include in build_state() so the planner sees tool failures and broken MCP servers in its state text.
 
-6. FAILURE REFLECTION: Add add_reflection() to SwarmLearnings. When same task fails 2+ times, construct structured reflection (was description clear? right role? deps satisfied?). Surface in planner prompt.
+6. CLI COMMAND: In cli.py, add autodev tool-usage command with --run-id, --failures-only, --top flags. Shows tool usage summary from DB.
 
-7. TESTS: test_decision_validation.py (overlap, duplicates, budget, empty prompt, circular deps), test_cycle_evaluator.py (high/low quality cycles, convergence, history), test_ad_result_validation.py (coercion, defaults), test_two_step_planner.py (analysis+decision flow, fallback), test_learnings.py (reflection). All existing tests must pass.
+7. TESTS: test_tool_tracking.py covering stream event parsing (init, tool_use, tool_result, result, invalid JSON), DB methods (record, query, summary), MCP status capture, AD_RESULT extraction from stream-json. All existing tests must pass.
+
+Use .venv/bin/python for all Python commands.
+Run .venv/bin/python -m pytest tests/ -q to verify changes.
+Run .venv/bin/ruff check src/ tests/ to verify linting.
+Run .venv/bin/bandit -r src/ -lll -q to verify security.
 
 Use .venv/bin/python for all Python commands.
 Run .venv/bin/python -m pytest tests/ -q to verify changes.
