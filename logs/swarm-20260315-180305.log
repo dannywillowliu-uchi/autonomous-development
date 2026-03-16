@@ -16,3 +16,27 @@
 18:10:22 INFO autodev.swarm.controller: Planner waiting 90s: All 3 agents are early in execution (3 min). db-impl reported completion via inbox, controller-impl and context-cli-impl are tackling complex multi-file work. Too early to intervene -- let them finish before assessing.
 18:11:52 INFO autodev.swarm.planner: Cycle 2: 1 decisions (wait), 1 ok, 0 failed
 18:12:22 INFO autodev.swarm.controller: Auto-committed task 'Add tool_calls and mcp_status tables to db.py': 56e7f39c
+18:12:22 INFO autodev.swarm.controller: Auto-committed task 'Add stream-json parsing and tool tracking to controller.py': 9ce227c6
+18:12:22 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+18:12:22 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+18:12:22 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+18:12:22 INFO autodev.swarm.controller: Re-queued task d3889dc035ec (Add tool failure visibility to context.py and tool-usage CLI command), attempt 1/3
+18:14:11 INFO autodev.swarm.planner: Parsed 4 decisions from planner (cycle 3)
+18:14:11 INFO autodev.swarm.controller: Spawned agent context-impl (implementer) for task d3889dc035ec
+18:14:11 INFO autodev.swarm.controller: Spawned agent cli-impl (implementer) for task None
+18:14:11 INFO autodev.swarm.controller: Created task 3422567ae053: Final full-suite verification after context + CLI implementation
+18:14:11 INFO autodev.swarm.controller: Planner waiting 90s: Let both implementers start up, read the spec and tests, check for partial changes, and begin implementation. They're working on independent files (context.py vs cli.py) so no conflicts expected. Check back after 90s for initial progress.
+18:15:41 INFO autodev.swarm.planner: Cycle 3: 4 decisions (spawn, spawn, create_task, wait), 4 ok, 0 failed
+18:17:00 INFO autodev.swarm.planner: Parsed 1 decisions from planner (cycle 4)
+18:17:00 INFO autodev.swarm.controller: Planner waiting 90s: context-impl and cli-impl are only 2 minutes in. Both need time to complete their focused tasks. Previous combined attempt failed, so this split-agent strategy is the right pivot. Wait for progress before intervening.
+18:18:30 INFO autodev.swarm.planner: Cycle 4: 1 decisions (wait), 1 ok, 0 failed
+18:19:00 INFO autodev.swarm.controller: Re-queued task d3889dc035ec (Add tool failure visibility to context.py and tool-usage CLI command), attempt 2/3
+18:20:20 INFO autodev.swarm.planner: Parsed 3 decisions from planner (cycle 5)
+18:20:20 INFO autodev.swarm.controller: Auto-assigned spawn 'context-cli-careful' to unclaimed task d3889dc035ec (Add tool failure visibility to context.py and tool-usage CLI command)
+18:20:20 INFO autodev.swarm.controller: Spawned agent context-cli-careful (debugger) for task d3889dc035ec
+18:20:20 INFO autodev.swarm.controller: Created task 1cc001112043: Final full-suite verification after items 5+6
+18:20:20 INFO autodev.swarm.controller: Planner waiting 120s: Give the context-cli-careful agent time to read files, diagnose why previous agents failed, and begin implementation. Do not interrupt -- previous agents were likely killed too early.
+18:22:20 INFO autodev.swarm.planner: Cycle 5: 3 decisions (spawn, create_task, wait), 3 ok, 0 failed
+18:23:53 INFO autodev.swarm.planner: Parsed 1 decisions from planner (cycle 6)
+18:23:53 INFO autodev.swarm.controller: Planner waiting 90s: context-cli-careful is only 2.5 minutes into attempt 3 on items 5+6. Two prior agents failed on this task, so this debugger-role agent was spawned specifically to handle it more carefully. Interrupting now would waste its progress and repeat the kill-respawn pattern that already failed twice. Let it work.
+18:25:23 INFO autodev.swarm.planner: Cycle 6: 1 decisions (wait), 1 ok, 0 failed
