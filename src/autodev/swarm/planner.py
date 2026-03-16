@@ -460,6 +460,9 @@ class DrivingPlanner:
 			)
 		]
 		if not active and not pending and state.tasks:
+			if self._config.daemon_mode:
+				logger.info("Daemon mode: all tasks complete, idling for new directives")
+				return False
 			return True
 		return False
 

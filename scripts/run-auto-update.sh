@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Self-recursion loop: scan intel sources, generate specs, apply improvements
-# Launched by LaunchAgent every 24 hours
+# Intel scan: scan sources, evaluate findings, inject proposals into running swarm.
+# Launched by LaunchAgent every 24 hours at 6 AM.
 
 set -euo pipefail
 
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+export TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 
 PROJECT_DIR="/Users/dannyliu/personal_projects/autonomous-development"
 LOG_DIR="$PROJECT_DIR/logs"
@@ -17,7 +19,7 @@ cd "$PROJECT_DIR"
 
 echo "=== Auto-update starting at $(date) ===" >> "$LOG_FILE"
 
-# Run the auto-update pipeline (single cycle, not daemon mode)
+# Run the auto-update pipeline
 "$PROJECT_DIR/.venv/bin/python" -m autodev auto-update \
 	>> "$LOG_FILE" 2>&1
 

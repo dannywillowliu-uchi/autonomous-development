@@ -106,6 +106,7 @@ planner_cooldown = 30
 max_agents = 0
 min_agents = 2
 stagnation_threshold = 5
+daemon_mode = true
 
 [backend]
 type = "local"

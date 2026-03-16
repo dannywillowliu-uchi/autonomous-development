@@ -390,6 +390,7 @@ class SwarmConfig:
 	inherit_global_capabilities: bool = True  # workers see global skills, agents, hooks, plugins
 	allowed_mcps: list[str] = field(default_factory=list)  # empty = all
 	two_step_planning: bool = True
+	daemon_mode: bool = False  # if True, idle when tasks complete instead of exiting
 
 
 @dataclass
@@ -1021,6 +1022,8 @@ def _build_swarm(data: dict[str, Any]) -> SwarmConfig:
 		sc.allowed_mcps = [str(m) for m in data["allowed_mcps"]]
 	if "two_step_planning" in data:
 		sc.two_step_planning = bool(data["two_step_planning"])
+	if "daemon_mode" in data:
+		sc.daemon_mode = bool(data["daemon_mode"])
 	return sc
 
 
