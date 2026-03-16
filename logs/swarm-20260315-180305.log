@@ -9,3 +9,9 @@
 18:06:21 INFO autodev.swarm.controller: Spawned agent context-cli-impl (implementer) for task d3889dc035ec
 18:06:21 INFO autodev.swarm.controller: Created task efa5047347f1: Write test_tool_tracking.py with comprehensive tests
 18:06:21 INFO autodev.swarm.controller: Spawned agent test-writer (tester) for task efa5047347f1
+18:09:21 INFO autodev.swarm.controller: Auto-committed task 'Write test_tool_tracking.py with comprehensive tests': d303ce41
+18:09:21 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+18:09:21 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+18:10:22 INFO autodev.swarm.planner: Parsed 1 decisions from planner (cycle 2)
+18:10:22 INFO autodev.swarm.controller: Planner waiting 90s: All 3 agents are early in execution (3 min). db-impl reported completion via inbox, controller-impl and context-cli-impl are tackling complex multi-file work. Too early to intervene -- let them finish before assessing.
+18:11:52 INFO autodev.swarm.planner: Cycle 2: 1 decisions (wait), 1 ok, 0 failed
