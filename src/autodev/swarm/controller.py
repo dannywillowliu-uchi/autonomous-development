@@ -1414,6 +1414,21 @@ class SwarmController:
 			if proc.returncode == 0:
 				commit_hash = stdout.decode().strip()
 				logger.info("Auto-committed task '%s': %s", task_title, commit_hash[:8])
+				# Auto-push if configured
+				if self._config.green_branch.auto_push:
+					try:
+						push_branch = self._config.green_branch.push_branch or "main"
+						push_proc = await asyncio.create_subprocess_exec(
+							"git", "push", "origin", push_branch,
+							cwd=cwd,
+							stdout=asyncio.subprocess.PIPE,
+							stderr=asyncio.subprocess.PIPE,
+						)
+						await push_proc.communicate()
+						if push_proc.returncode == 0:
+							logger.info("Auto-pushed to origin/%s", push_branch)
+					except Exception as push_err:
+						logger.warning("Auto-push failed: %s", push_err)
 				return commit_hash
 		except Exception as e:
 			logger.warning("Auto-commit failed for task '%s': %s", task_title, e)
