@@ -230,11 +230,11 @@ def _build_activity_feed(inbox_messages: list[dict], log_events: list[dict]) -> 
 		entry.append(f"({msg_type}) ", style=style)
 		entry.append(text[:120], style="white")
 
-		sort_key = ts if ts else f"msg-{sender}"
+		sort_key = str(ts) if ts else f"msg-{sender}"
 		entries.append((sort_key, entry))
 
 	# Sort reverse chronological, show last 15
-	entries.sort(key=lambda x: x[0], reverse=True)
+	entries.sort(key=lambda x: str(x[0]), reverse=True)
 	for _, entry in entries[:15]:
 		lines.append_text(entry)
 		lines.append("\n")
