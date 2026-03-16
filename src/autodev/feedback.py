@@ -9,7 +9,7 @@ import re
 from autodev.db import Database
 from autodev.models import WorkUnit
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _extract_keywords(text: str) -> list[str]:

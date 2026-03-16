@@ -23,7 +23,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -91,16 +91,16 @@ async def run_core_tests(
 		stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
 
 		if proc.returncode != 0:
-			log.warning("Core test runner exited with code %d: %s", proc.returncode, stderr.decode()[:500])
+			logger.warning("Core test runner exited with code %d: %s", proc.returncode, stderr.decode()[:500])
 
 		if stdout:
-			log.info("Core tests: %s", stdout.decode().strip())
+			logger.info("Core tests: %s", stdout.decode().strip())
 
 	except asyncio.TimeoutError:
-		log.warning("Core test runner timed out after %ds", timeout)
+		logger.warning("Core test runner timed out after %ds", timeout)
 		return None
 	except Exception as exc:
-		log.warning("Core test runner failed: %s", exc)
+		logger.warning("Core test runner failed: %s", exc)
 		return None
 
 	# Find results.json: look next to baseline first, then project root
@@ -115,13 +115,13 @@ async def run_core_tests(
 			results_path = candidate
 
 	if results_path is None:
-		log.warning("Core test results.json not found in %s", project_path)
+		logger.warning("Core test results.json not found in %s", project_path)
 		return None
 
 	try:
 		data = json.loads(results_path.read_text())
 	except (json.JSONDecodeError, OSError) as exc:
-		log.warning("Failed to parse core test results: %s", exc)
+		logger.warning("Failed to parse core test results: %s", exc)
 		return None
 
 	return _parse_results(data)
@@ -337,9 +337,9 @@ def store_core_test_experience(db, results: CoreTestResults, epoch_id: str, unit
 		)
 		try:
 			db.insert_experience(exp)
-			log.info("Stored positive core test experience: +%d tests", results.delta_passed)
+			logger.info("Stored positive core test experience: +%d tests", results.delta_passed)
 		except Exception as exc:
-			log.warning("Failed to store core test experience: %s", exc)
+			logger.warning("Failed to store core test experience: %s", exc)
 
 	if results.delta_failed > 0:
 		from autodev.models import Experience
@@ -360,6 +360,6 @@ def store_core_test_experience(db, results: CoreTestResults, epoch_id: str, unit
 		)
 		try:
 			db.insert_experience(exp)
-			log.info("Stored negative core test experience: -%d regressions", results.delta_failed)
+			logger.info("Stored negative core test experience: -%d regressions", results.delta_failed)
 		except Exception as exc:
-			log.warning("Failed to store core test regression experience: %s", exc)
+			logger.warning("Failed to store core test regression experience: %s", exc)

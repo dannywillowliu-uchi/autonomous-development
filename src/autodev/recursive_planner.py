@@ -15,7 +15,7 @@ from autodev.json_utils import extract_json_from_text
 from autodev.models import Plan, WorkUnit
 from autodev.overlap import resolve_file_overlaps
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -139,7 +139,7 @@ def _parse_planner_output(output: str) -> PlannerResult:
 			try:
 				data = json.loads(cleaned)
 			except (json.JSONDecodeError, ValueError):
-				log.warning(
+				logger.warning(
 					"Malformed JSON inside <!-- PLAN --> block, falling through to PLAN_RESULT. "
 					"Content (first 300 chars): %s",
 					block_content[:300],
@@ -159,7 +159,7 @@ def _parse_planner_output(output: str) -> PlannerResult:
 		data = extract_json_from_text(output)
 
 	if not isinstance(data, dict):
-		log.warning("Failed to parse planner output, falling back to single leaf")
+		logger.warning("Failed to parse planner output, falling back to single leaf")
 		fallback = {"title": "Execute scope", "description": output[:500], "files_hint": "", "priority": 1}
 		return PlannerResult(type="leaves", units=[fallback])
 
@@ -344,12 +344,12 @@ IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must cont
 		is_retryable = _is_parse_fallback(result) and not getattr(result, "_infra_fallback", False)
 		if is_retryable and not getattr(self, "_planner_retried", False):
 			self._planner_retried = True
-			log.warning("Planner parse fallback, retrying with simplified prompt")
+			logger.warning("Planner parse fallback, retrying with simplified prompt")
 			retry_prompt = self._build_retry_prompt(objective, objective)
 			result = await self._run_planner_subprocess(retry_prompt)
 			accumulated_cost += result.cost_usd
 			if _is_parse_fallback(result):
-				log.warning("Planner retry also returned fallback")
+				logger.warning("Planner retry also returned fallback")
 		# Reset retry flag for next invocation
 		self._planner_retried = False
 
@@ -369,7 +369,7 @@ IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must cont
 		cwd = self.config.target.resolved_path
 		assert cwd.is_absolute(), f"Planner cwd must be absolute, got: {cwd}"
 
-		log.info("Invoking planner LLM for objective: %s", prompt[:80])
+		logger.info("Invoking planner LLM for objective: %s", prompt[:80])
 
 		allowed_tools = self.config.planner.allowed_tools or None
 		cmd = build_claude_cmd(self.config, model=model, budget=budget, allowed_tools=allowed_tools)
@@ -384,7 +384,7 @@ IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must cont
 		try:
 			stdout, stderr = await proc.communicate(input=prompt.encode())
 		except (asyncio.TimeoutError, TimeoutError):
-			log.warning("Planner LLM subprocess timed out, killing process")
+			logger.warning("Planner LLM subprocess timed out, killing process")
 			proc.kill()
 			await proc.wait()
 			fallback = {"title": "Execute scope", "description": prompt[:500], "files_hint": "", "priority": 1}
@@ -395,11 +395,11 @@ IMPORTANT: Put all reasoning BEFORE the <!-- PLAN --> block. The block must cont
 		output = stdout.decode() if stdout else ""
 		stderr_text = stderr.decode() if stderr else ""
 		if stderr_text:
-			log.debug("Planner stderr: %s", stderr_text[:500])
-		log.info("Planner LLM output (%d chars): %s", len(output), output[:1000])
+			logger.debug("Planner stderr: %s", stderr_text[:500])
+		logger.info("Planner LLM output (%d chars): %s", len(output), output[:1000])
 
 		if proc.returncode != 0:
-			log.warning("Planner LLM failed (rc=%d): %s", proc.returncode, stderr.decode()[:200])
+			logger.warning("Planner LLM failed (rc=%d): %s", proc.returncode, stderr.decode()[:200])
 			fallback = {"title": "Execute scope", "description": prompt[:500], "files_hint": "", "priority": 1}
 			result = PlannerResult(type="leaves", units=[fallback])
 			result._infra_fallback = True  # type: ignore[attr-defined]

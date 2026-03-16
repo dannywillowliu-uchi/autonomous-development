@@ -3,17 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Literal
-from uuid import uuid4
 
-
-def _new_id() -> str:
-	return uuid4().hex[:12]
-
-
-def _now_iso() -> str:
-	return datetime.now(timezone.utc).isoformat()
+from autodev.models import _new_id, _now_iso
 
 
 @dataclass

@@ -18,7 +18,7 @@ from typing import Callable
 from autodev.db import Database
 from autodev.models import MergeRequest, Mission, Round, Worker, WorkUnit
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -138,7 +138,7 @@ class DashboardProvider:
 			try:
 				cb(snapshot)
 			except Exception:
-				log.exception("Dashboard callback error")
+				logger.exception("Dashboard callback error")
 		return snapshot
 
 	def subscribe(self, callback: Callable[[DashboardSnapshot], None]) -> None:
@@ -170,7 +170,7 @@ class DashboardProvider:
 			try:
 				self.refresh()
 			except Exception:
-				log.exception("Dashboard poll error")
+				logger.exception("Dashboard poll error")
 			time.sleep(interval)
 
 	@staticmethod
@@ -492,7 +492,7 @@ class MissionMetricsProvider:
 				try:
 					records.append(json.loads(line))
 				except json.JSONDecodeError:
-					log.warning("Skipping malformed JSONL line")
+					logger.warning("Skipping malformed JSONL line")
 			self._offset = f.tell()
 		return records
 

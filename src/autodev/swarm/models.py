@@ -3,21 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from autodev.models import _new_id, _now_iso
+
 if TYPE_CHECKING:
 	from autodev.swarm.capabilities import CapabilityManifest
-from uuid import uuid4
-
-
-def _now_iso() -> str:
-	return datetime.now(timezone.utc).isoformat()
-
-
-def _new_id() -> str:
-	return uuid4().hex[:12]
 
 
 # -- Planner Decisions --

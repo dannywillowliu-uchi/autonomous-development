@@ -10,7 +10,7 @@ from autodev.models import Epoch, Mission, Plan, WorkUnit
 from autodev.overlap import resolve_file_overlaps
 from autodev.recursive_planner import RecursivePlanner
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class ContinuousPlanner:
@@ -81,7 +81,7 @@ class ContinuousPlanner:
 		# Limit to max_units
 		units = units[:max_units]
 
-		log.info(
+		logger.info(
 			"Planned epoch %d: %d units",
 			self._epoch_count, len(units),
 		)

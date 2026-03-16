@@ -23,7 +23,7 @@ from autodev.json_utils import extract_json_from_text
 from autodev.models import CriticFinding, Mission, WorkUnit
 from autodev.recursive_planner import _parse_subprocess_cost
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 CRITIC_RESULT_MARKER = "CRITIC_RESULT:"
 
@@ -41,7 +41,7 @@ def _parse_critic_output(output: str) -> CriticFinding:
 		data = extract_json_from_text(output)
 
 	if not isinstance(data, dict):
-		log.warning("Could not parse CRITIC_RESULT, returning findings from raw output")
+		logger.warning("Could not parse CRITIC_RESULT, returning findings from raw output")
 		return CriticFinding(
 			findings=[output[:2000]] if output else [],
 			strategy_text=output[:2000] if output else "",
@@ -169,7 +169,7 @@ class CriticAgent:
 			units, self._config.target.resolved_path,
 		)
 		if preflight_failures:
-			log.warning(
+			logger.warning(
 				"Preflight validation found %d issue(s)", len(preflight_failures),
 			)
 			return CriticFinding(
@@ -316,7 +316,7 @@ CRITIC_RESULT:{{"findings": ["what was accomplished..."],\
 		timeout = delib.timeout
 		cwd = str(self._config.target.resolved_path)
 
-		log.info("Invoking %s LLM (budget=$%.2f, model=%s)", label, budget, model)
+		logger.info("Invoking %s LLM (budget=$%.2f, model=%s)", label, budget, model)
 
 		cmd = build_claude_cmd(self._config, model=model, budget=budget)
 		try:
@@ -335,7 +335,7 @@ CRITIC_RESULT:{{"findings": ["what was accomplished..."],\
 			output = stdout.decode() if stdout else ""
 			stderr_text = stderr.decode() if stderr else ""
 		except asyncio.TimeoutError:
-			log.error("%s LLM timed out after %ds", label, timeout)
+			logger.error("%s LLM timed out after %ds", label, timeout)
 			try:
 				proc.kill()
 				await proc.wait()
@@ -343,12 +343,12 @@ CRITIC_RESULT:{{"findings": ["what was accomplished..."],\
 				pass
 			return "", budget
 		except (FileNotFoundError, OSError) as exc:
-			log.warning("%s LLM failed to start: %s", label, exc)
+			logger.warning("%s LLM failed to start: %s", label, exc)
 			return "", 0.0
 
 		if proc.returncode != 0:
 			err_msg = stderr.decode()[:200] if stderr else "unknown error"
-			log.warning("%s LLM failed (rc=%d): %s", label, proc.returncode, err_msg)
+			logger.warning("%s LLM failed (rc=%d): %s", label, proc.returncode, err_msg)
 			return "", budget
 
 		cost = _parse_subprocess_cost(stderr_text, budget)

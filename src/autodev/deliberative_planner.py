@@ -39,7 +39,7 @@ from autodev.models import (
 from autodev.overlap import resolve_file_overlaps
 from autodev.recursive_planner import RecursivePlanner
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _format_critic_feedback(finding: CriticFinding) -> str:
@@ -190,13 +190,13 @@ class DeliberativePlanner:
 				break
 
 			if finding.verdict == "sufficient":
-				log.info(
+				logger.info(
 					"Critic approved plan at round %d (confidence=%.2f)",
 					round_num - 1, finding.confidence,
 				)
 				break
 
-			log.info(
+			logger.info(
 				"Critic requests refinement at round %d: %d gaps, %d risks",
 				round_num, len(finding.gaps), len(finding.risks),
 			)
@@ -244,7 +244,7 @@ class DeliberativePlanner:
 		# Limit to max_units
 		units = units[:max_units]
 
-		log.info(
+		logger.info(
 			"Deliberation complete: epoch=%d, units=%d, planner_cost=$%.2f",
 			self._epoch_counter, len(units), total_cost,
 		)
@@ -271,9 +271,9 @@ class DeliberativePlanner:
 		strategy_path = target_path / "MISSION_STRATEGY.md"
 		try:
 			strategy_path.write_text(strategy + "\n")
-			log.info("Wrote MISSION_STRATEGY.md (%d chars)", len(strategy))
+			logger.info("Wrote MISSION_STRATEGY.md (%d chars)", len(strategy))
 		except OSError as exc:
-			log.warning("Could not write MISSION_STRATEGY.md: %s", exc)
+			logger.warning("Could not write MISSION_STRATEGY.md: %s", exc)
 
 	def _store_knowledge(self, finding: CriticFinding, mission: Mission) -> None:
 		"""Store critic findings as KnowledgeItems in DB."""
@@ -290,4 +290,4 @@ class DeliberativePlanner:
 			try:
 				self._db.insert_knowledge_item(ki)
 			except Exception as exc:
-				log.debug("Failed to store knowledge item: %s", exc)
+				logger.debug("Failed to store knowledge item: %s", exc)

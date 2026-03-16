@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 	from autodev.auth.vault import KeychainVault
 	from autodev.notifier import TelegramNotifier
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -152,7 +152,7 @@ class AuthHandler:
 		for var in env_vars:
 			value = os.environ.get(var)
 			if value:
-				log.info("Found %s env var for %s", var, service)
+				logger.info("Found %s env var for %s", var, service)
 				await self._vault.store(service, "env_token", value)
 				return AuthResult(
 					success=True, service=service, credential_type="env_var",
@@ -269,7 +269,7 @@ class AuthHandler:
 			try:
 				await self._notifier.send(msg)
 			except Exception:
-				log.warning("Failed to send auth notification for %s", service)
+				logger.warning("Failed to send auth notification for %s", service)
 
 		return AuthResult(
 			success=False, service=service,
@@ -291,7 +291,7 @@ class AuthHandler:
 		except asyncio.TimeoutError:
 			return AuthResult(success=False, service=service, error=f"Browser timed out after {timeout_s}s")
 		except Exception as exc:
-			log.warning("Playwright auth failed for %s: %s", service, exc)
+			logger.warning("Playwright auth failed for %s: %s", service, exc)
 			return AuthResult(success=False, service=service, error=str(exc))
 
 	async def _ensure_browser(self) -> None:
@@ -425,7 +425,7 @@ class AuthHandler:
 
 	async def _handle_stuck(self, page: object, service: str, reason: str) -> AuthResult:
 		"""Screenshot page, send to Telegram, return failure."""
-		log.warning("Auth stuck for %s: %s", service, reason)
+		logger.warning("Auth stuck for %s: %s", service, reason)
 		if self._notifier and hasattr(self._notifier, "send_auth_help"):
 			try:
 				screenshot_bytes = await page.screenshot()
@@ -434,7 +434,7 @@ class AuthHandler:
 					screenshot_path = f.name
 				await self._notifier.send_auth_help(service, reason, screenshot_path)
 			except Exception:
-				log.exception("Failed to send auth help notification")
+				logger.exception("Failed to send auth help notification")
 		return AuthResult(
 			success=False, service=service, error=f"Stuck: {reason}", required_human=True,
 		)

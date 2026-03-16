@@ -18,7 +18,7 @@ from pathlib import Path
 from autodev.config import MissionConfig
 from autodev.db import Database
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def read_backlog(config: MissionConfig) -> str:
@@ -27,7 +27,7 @@ def read_backlog(config: MissionConfig) -> str:
 	try:
 		return backlog_path.read_text()
 	except FileNotFoundError:
-		log.info("No BACKLOG.md found at %s", backlog_path)
+		logger.info("No BACKLOG.md found at %s", backlog_path)
 		return ""
 
 
@@ -44,7 +44,7 @@ async def get_git_log(config: MissionConfig, limit: int = 20) -> str:
 		output = stdout.decode() if stdout else ""
 		return output.strip() if proc.returncode == 0 else ""
 	except (asyncio.TimeoutError, FileNotFoundError, OSError):
-		log.info("Could not read git log")
+		logger.info("Could not read git log")
 		return ""
 
 
@@ -80,7 +80,7 @@ def get_strategic_context(db: Database, limit: int = 10) -> str:
 			return ""
 		return "\n".join(f"- {e}" for e in entries)
 	except Exception:
-		log.debug("get_strategic_context not available", exc_info=True)
+		logger.debug("get_strategic_context not available", exc_info=True)
 		return ""
 
 
@@ -94,7 +94,7 @@ def get_episodic_context(db: Database) -> str:
 			for sm in semantic:
 				lines.append(f"  - [{sm.confidence:.1f}] {sm.content}")
 	except Exception:
-		log.debug("Failed to load semantic memories", exc_info=True)
+		logger.debug("Failed to load semantic memories", exc_info=True)
 
 	try:
 		episodes = db.get_episodic_memories_by_scope(["mission", "strategy"], limit=10)
@@ -103,7 +103,7 @@ def get_episodic_context(db: Database) -> str:
 			for ep in episodes:
 				lines.append(f"  - [{ep.event_type}] {ep.content} -> {ep.outcome}")
 	except Exception:
-		log.debug("Failed to load episodic memories", exc_info=True)
+		logger.debug("Failed to load episodic memories", exc_info=True)
 
 	return "\n".join(lines)
 
@@ -162,7 +162,7 @@ async def get_intel_context(config: MissionConfig, ttl_hours: float = 6.0) -> st
 						scan_duration_seconds=data.get("scan_duration_seconds", 0.0),
 					)
 			except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-				log.debug("Intel cache invalid, will re-scan", exc_info=True)
+				logger.debug("Intel cache invalid, will re-scan", exc_info=True)
 
 		# Cache miss or stale -- run a fresh scan
 		if report is None:
@@ -180,7 +180,7 @@ async def get_intel_context(config: MissionConfig, ttl_hours: float = 6.0) -> st
 		lines = [f"{i}. **{p.title}** -- {p.description}" for i, p in enumerate(top, 1)]
 		return "### Ecosystem Intelligence\n" + "\n".join(lines)
 	except Exception:
-		log.debug("get_intel_context failed", exc_info=True)
+		logger.debug("get_intel_context failed", exc_info=True)
 		return ""
 
 

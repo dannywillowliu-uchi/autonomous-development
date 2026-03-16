@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 from autodev.db import Database
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 FAILURE_STAGES = frozenset({
 	"acceptance_criteria",

@@ -1,33 +1,24 @@
 {
-  "cycle": 1,
+  "cycle": 3,
   "mission": "Implement tool call tracking for swarm agents.\n\nRead the full spec at docs/superpowers/specs/2026-03",
   "team_name": "autodev-autonomous-development",
   "agents": [
     {
-      "id": "7203c1f4",
-      "name": "dead-code-cleaner",
-      "role": "implementer",
-      "status": "dead",
-      "task_id": "d677d1f3",
-      "completed": 1,
-      "failed": 0
-    },
-    {
       "id": "40f58cc4",
       "name": "entire-config-remover",
       "role": "implementer",
-      "status": "working",
+      "status": "dead",
       "task_id": "845ddadf",
       "completed": 0,
-      "failed": 0
+      "failed": 1
     },
     {
       "id": "c7784b7e",
       "name": "small-fixes",
       "role": "implementer",
-      "status": "working",
+      "status": "dead",
       "task_id": "74d72f11",
-      "completed": 0,
+      "completed": 1,
       "failed": 0
     },
     {
@@ -36,6 +27,33 @@
       "role": "researcher",
       "status": "working",
       "task_id": "1db4facf",
+      "completed": 0,
+      "failed": 0
+    },
+    {
+      "id": "dc941e4e",
+      "name": "db-tool-tracking",
+      "role": "implementer",
+      "status": "working",
+      "task_id": "3bb4504c",
+      "completed": 0,
+      "failed": 0
+    },
+    {
+      "id": "c767ddd5",
+      "name": "spec-researcher",
+      "role": "researcher",
+      "status": "dead",
+      "task_id": "373b5a89",
+      "completed": 0,
+      "failed": 1
+    },
+    {
+      "id": "dec9f3ee",
+      "name": "verify-entire-config",
+      "role": "reviewer",
+      "status": "working",
+      "task_id": "845ddadf",
       "completed": 0,
       "failed": 0
     }
@@ -54,17 +72,17 @@
       "id": "845ddadf",
       "title": "Delete EntireConfig plumbing + fix build_claude_cmd",
       "status": "claimed",
-      "claimed_by": "40f58cc4",
-      "attempts": 0,
+      "claimed_by": "dec9f3ee",
+      "attempts": 1,
       "max_attempts": 3,
       "priority": "CRITICAL"
     },
     {
       "id": "74d72f11",
       "title": "Deduplicate _extract_json_array + fix auth import",
-      "status": "claimed",
+      "status": "completed",
       "claimed_by": "c7784b7e",
-      "attempts": 0,
+      "attempts": 1,
       "max_attempts": 3,
       "priority": "HIGH"
     },
@@ -76,13 +94,47 @@
       "attempts": 0,
       "max_attempts": 3,
       "priority": "NORMAL"
+    },
+    {
+      "id": "3bb4504c",
+      "title": "DB tables for tool call tracking",
+      "status": "claimed",
+      "claimed_by": "dc941e4e",
+      "attempts": 0,
+      "max_attempts": 3,
+      "priority": "CRITICAL"
+    },
+    {
+      "id": "373b5a89",
+      "title": "Stream-JSON parsing and output rewrite in controller.py",
+      "status": "pending",
+      "claimed_by": null,
+      "attempts": 1,
+      "max_attempts": 3,
+      "priority": "CRITICAL"
+    },
+    {
+      "id": "d257485d",
+      "title": "Planner visibility for tool failures and MCP status",
+      "status": "pending",
+      "claimed_by": null,
+      "attempts": 0,
+      "max_attempts": 3,
+      "priority": "HIGH"
+    },
+    {
+      "id": "5184ecb1",
+      "title": "CLI tool-usage command",
+      "status": "pending",
+      "claimed_by": null,
+      "attempts": 0,
+      "max_attempts": 3,
+      "priority": "NORMAL"
     }
   ],
   "core_tests": {},
   "stagnation": [],
   "discoveries": [
-    "[config-pipeline-impl] (report) Completed: (1) IntelligenceConfig dataclass added to config.py with evaluator_mode and max_daily_modifications fields, wired into MissionConfig and TOML loader. (2) scanner.py restructured to return raw findings only (removed evaluate_findings/generate_proposals calls). (3) auto_update.py updated with evaluator selection: LLM evaluator when mode='llm' with fallback to keyword, keyword evaluator when mode='keyword'. Removed duplicate _check_rate_limit() from _auto_launch(). (4) Tests updated: 5 IntelligenceConfig tests in test_config.py, existing auto_update tests adapted for new pipeline (mock keyword evaluator instead of mock proposals), 3 new evaluator selection tests added. 2927 tests pass (2 pre-existing failures in test_llm_evaluator.py owned by llm-evaluator-impl peer), ruff clean.",
-    "[browser-fix] (report) browser.py and test_browser.py are already complete and working. 32 browser tests pass, ruff lint clean, full suite 2942 pass (1 skipped). Previous agents completed the implementation before being killed. The SIGKILL was likely from attempting to install/run Playwright, not from code issues. No changes required.",
     "[final-verify] (report) Final integration verification for LLM evaluator + auth gateway: 2949 tests passed (1 skipped), ruff lint 100% clean. All 11 spec items verified: (1) find_claude_binary in intelligence/utils.py, (2) docs/program.md exists, (3) evaluate_findings in llm_evaluator.py, (4) IntelligenceConfig in config.py, (5) evaluator selection in auto_update.py, (6) KeychainVault in auth/vault.py, (7) HeadlessAuthHandler in auth/browser.py, (8) AuthGateway in auth/gateway.py, (9) handle_auth_request in swarm/controller.py, (10) auth instructions in worker_prompt.py, (11) all 4 auth notification methods on TelegramNotifier. Minor naming differences from spec (find_claude_binary vs _find_claude_binary, TelegramNotifier vs Notifier) but all functionality present and tested.",
     "[config-backend-impl] (report) Completed: (1) Added EntireConfig dataclass to config.py with api_key, api_base_url, org_id, environment_template, startup_timeout, machine_type, region, persist_environments fields. (2) Added entire field to BackendConfig. (3) Added _build_entire() TOML loader with ENTIRE_API_KEY env var fallback. (4) Wired into _build_backend(). (5) Added entire backend validation in validate_config() (section 6). (6) Created backends/entire.py with EntireBackend skeleton (all methods raise NotImplementedError). All 2949 tests pass (1 skipped), ruff clean.",
     "[test-writer] (report) Completed: Created 31 tests across 2 files. test_entire_config.py (16 tests): EntireConfig defaults, full/minimal TOML parsing, _build_entire with all/minimal/env fields, validate_config errors (api_key missing, api_base_url empty), warnings (environment_template empty), skipped when type=local. test_entire_backend.py (15 tests): instantiation, _resolve_api_key (config/env/missing), all 9 NotImplementedError stubs (initialize, provision_workspace, spawn, check_status, get_output, kill, release_workspace, cleanup, _api_request). All 2980 tests pass (1 skipped), ruff clean, no regressions.",
@@ -90,24 +142,71 @@
     "[quick-verify] (report) Final sanity check PASSED. 2986 tests passed (1 skipped, 10 harmless warnings), ruff lint 100% clean. Exit code 0 for both commands. The previous agent reported correct test count but may have had a non-zero exit from warnings -- confirmed all green now.",
     "[validation-gate] (report) Completed: Implemented _validate_decisions() in DrivingPlanner with 5 rule-based checks: (1) empty prompt rejection, (2) spawn budget enforcement, (3) duplicate task detection via SequenceMatcher >80% similarity, (4) file overlap detection between spawn/create_task decisions, (5) circular dependency detection via Kahn's algorithm. Wired into both initial plan and main loop before execute_decisions(). Created 25 tests covering all validation rules including edge cases. All 3021 tests pass, ruff clean.",
     "[test-gap-filler] (report) All spec-required test scenarios now covered. 128/128 tests pass across all 5 files. Only gap was in test_two_step_planner.py which was missing behavioral tests for the two-step flow (analysis+decision, fallbacks, disabled config). Added 4 tests. Lint clean.",
-    "[test-writer] (report) Created tests/test_tool_tracking.py with 15 tests in 4 test classes. Stream parsing (6 tests): init MCP status, tool use+result, tool error, result text extraction, invalid JSON, MCP tool name parsing. DB methods (3 tests): record+query tool calls, failure summary grouping, MCP status round-trip. Integration (1 test): AD_RESULT from stream-json preferred over raw output. Edge cases (5 tests): orphan result, multiple tool uses, list content, empty event, init without mcp_servers. All 15 pass, ruff clean."
+    "[test-writer] (report) Created tests/test_tool_tracking.py with 15 tests in 4 test classes. Stream parsing (6 tests): init MCP status, tool use+result, tool error, result text extraction, invalid JSON, MCP tool name parsing. DB methods (3 tests): record+query tool calls, failure summary grouping, MCP status round-trip. Integration (1 test): AD_RESULT from stream-json preferred over raw output. Edge cases (5 tests): orphan result, multiple tool uses, list content, empty event, init without mcp_servers. All 15 pass, ruff clean.",
+    "[db-impl] (report) Completed: Added tool_calls table (with 3 indexes) and mcp_status table to SCHEMA_SQL. Added 5 methods to Database class: record_tool_call, get_tool_usage (with run_id/agent_id filters), get_tool_failure_summary (grouped by tool_name), record_mcp_status, get_mcp_status. All 3100 tests pass, ruff clean.",
+    "[controller-impl] (report) Implemented stream-json parsing and tool call tracking: added _agent_tool_calls/_agent_final_results instance vars, _parse_stream_event method, rewrote _stream_agent_output, switched to output_format=stream-json, updated monitor_agents output extraction. All 3100 tests pass, ruff clean, bandit clean."
   ],
-  "cost_usd": 0.0,
-  "wall_minutes": 4.069482163900587,
+  "cost_usd": 2.46,
+  "wall_minutes": 11.276820885417207,
   "test_history": [],
   "completion_history": [
     0,
     0,
     0,
     0,
-    1
+    1,
+    2,
+    2
   ],
   "failure_history": [
     0,
     0,
     0,
     0,
+    0,
+    0,
     0
   ],
-  "log_events": []
+  "log_events": [
+    {
+      "cycle": 2,
+      "decisions": [
+        "wait",
+        "create_task",
+        "create_task",
+        "create_task",
+        "create_task",
+        "spawn",
+        "spawn"
+      ],
+      "ok": 7,
+      "failed": 0,
+      "reasonings": [
+        "Agents need time to complete their work. Killing them now wastes progress.",
+        "Priority 1 from the mission spec. Foundation for all other work.",
+        "Priorities 2-4 from spec all touch controller.py - bundled into one task to avoi",
+        "Priority 5 from spec. Depends on DB tables being done first.",
+        "Priority 6 from spec. Lower priority, can be done after core work."
+      ]
+    },
+    {
+      "cycle": 3,
+      "decisions": [
+        "kill",
+        "kill",
+        "spawn",
+        "wait",
+        "adjust"
+      ],
+      "ok": 5,
+      "failed": 0,
+      "reasonings": [
+        "4 independent verifiers confirmed db.py implementation is complete with 3115 tes",
+        "Stream-json parsing was verified complete by multiple agents. spec-researcher is",
+        "entire-config-remover reported completion but process shows failed=1. Need to ve",
+        "codebase-auditor is the only agent doing useful novel work. verify-entire-config",
+        "Scaling down to 2 max agents. Only codebase-auditor and verify-entire-config nee"
+      ]
+    }
+  ]
 }
