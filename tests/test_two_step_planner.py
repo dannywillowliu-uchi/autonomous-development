@@ -1,8 +1,15 @@
-"""Tests for two-step planner prompt templates and config flag."""
+"""Tests for two-step planner prompt templates, config flag, and behavioral flow."""
 
 from __future__ import annotations
 
+import json
+from unittest.mock import MagicMock
+
+import pytest
+
 from autodev.config import SwarmConfig
+from autodev.swarm.models import DecisionType, SwarmState
+from autodev.swarm.planner import DrivingPlanner
 from autodev.swarm.prompts import (
 	ANALYSIS_PROMPT_TEMPLATE,
 	CYCLE_PROMPT_TEMPLATE,

@@ -13,6 +13,7 @@ from collections import deque
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
+from autodev.swarm.evaluator import CycleEvaluator
 from autodev.swarm.models import (
 	AgentStatus,
 	DecisionType,
@@ -21,7 +22,9 @@ from autodev.swarm.models import (
 	TaskStatus,
 )
 from autodev.swarm.prompts import (
+	ANALYSIS_PROMPT_TEMPLATE,
 	CYCLE_PROMPT_TEMPLATE,
+	DECISION_FROM_ANALYSIS_PROMPT,
 	INITIAL_PLANNING_PROMPT,
 	SYSTEM_PROMPT,
 )
@@ -67,6 +70,8 @@ class DrivingPlanner:
 		self._log_events: list[dict[str, Any]] = []
 		self._last_plan_time: float = 0
 		self._consecutive_parse_failures = 0
+		self._evaluator = CycleEvaluator()
+		self._task_failure_counts: dict[str, list[str]] = {}
 
 		from pathlib import Path
 
@@ -111,6 +116,9 @@ class DrivingPlanner:
 				state = self._build_state(core_test_runner)
 				self._record_metrics(state)
 				self._write_state_file(state)
+
+				# Grade the cycle (evaluator runs every iteration, not just planning cycles)
+				self._evaluator.grade_cycle(state)
 
 				# Check if we should plan
 				if self._should_plan(state, events):
@@ -349,6 +357,7 @@ class DrivingPlanner:
 			agent_name = ev.get("agent_name", "?")
 			status = ev.get("status", "failed")
 			result = ev.get("result") or {}
+			task_title = ev.get("task_title", agent_name)
 
 			if status == "completed":
 				summary = result.get("summary", "")
@@ -361,6 +370,18 @@ class DrivingPlanner:
 				if error:
 					self._learnings.add_failed_approach(
 						agent_name, str(error), result.get("attempt", 1)
+					)
+
+				# Track failures per task for reflection
+				failures = self._task_failure_counts.setdefault(task_title, [])
+				failures.append(str(error) if error else "unknown error")
+				if len(failures) >= 2:
+					self._learnings.add_reflection(
+						task_title,
+						failures,
+						f"Task '{task_title}' has failed {len(failures)} times. "
+						"Consider: Was the task description clear enough? "
+						"Was the right agent role assigned? Were dependencies satisfied?",
 					)
 
 	def _record_metrics(self, state: SwarmState) -> None:
@@ -504,9 +525,96 @@ class DrivingPlanner:
 		if learnings_text:
 			state_text += "\n\n" + learnings_text
 
+		# Inject cycle evaluator feedback
+		evaluator_feedback = self._evaluator.get_feedback()
+		if evaluator_feedback:
+			state_text += f"\n\n## Previous Cycle Grade\n{evaluator_feedback}"
+
+		# Two-step planning: analysis then decisions
+		if self._config.two_step_planning:
+			result = await self._two_step_plan(state_text)
+			if result is not None:
+				return result
+			# Fall through to single-call on failure
+
 		prompt = CYCLE_PROMPT_TEMPLATE.format(state_text=state_text)
 		response = await self._call_llm(prompt)
 		return self._parse_decisions(response)
+
+	async def _two_step_plan(
+		self, state_text: str
+	) -> list[PlannerDecision] | None:
+		"""Two-step planning: analysis call then decision call.
+
+		Returns None if the analysis fails, signaling fallback to single-call.
+		"""
+		# Step 1: Analysis
+		analysis_prompt = ANALYSIS_PROMPT_TEMPLATE.format(state_text=state_text)
+		analysis_response = await self._call_llm(analysis_prompt)
+		analysis = self._parse_analysis(analysis_response)
+
+		# Gate: validate analysis is coherent
+		if analysis is None:
+			logger.info("Two-step analysis parse failed, falling back to single-call")
+			return None
+
+		valid_statuses = {"on_track", "stagnating", "blocked", "recovering"}
+		if analysis.get("status") not in valid_statuses:
+			logger.info(
+				"Two-step analysis has invalid status '%s', falling back to single-call",
+				analysis.get("status"),
+			)
+			return None
+
+		# Step 2: Decisions from analysis
+		decision_prompt = DECISION_FROM_ANALYSIS_PROMPT.format(
+			analysis_json=json.dumps(analysis, indent=2),
+			state_summary=state_text[:2000],
+			decision_types_reference="(See system prompt for decision type reference)",
+		)
+		response = await self._call_llm(decision_prompt)
+		return self._parse_decisions(response)
+
+	def _parse_analysis(self, response: str) -> dict[str, Any] | None:
+		"""Parse the analysis JSON from the first step of two-step planning.
+
+		Returns None on parse failure (caller should fall back to single-call).
+		"""
+		text = response.strip()
+
+		start = text.find("{")
+		if start == -1:
+			return None
+
+		# Find matching closing brace
+		depth = 0
+		end = start
+		for i in range(start, len(text)):
+			if text[i] == "{":
+				depth += 1
+			elif text[i] == "}":
+				depth -= 1
+				if depth == 0:
+					end = i + 1
+					break
+
+		json_text = text[start:end]
+		try:
+			result = json.loads(json_text)
+			if isinstance(result, dict):
+				return result
+		except json.JSONDecodeError:
+			# Attempt repair using existing logic (adapted for objects)
+			repaired = self._repair_truncated_json(json_text)
+			if repaired is not None:
+				try:
+					result = json.loads(repaired)
+					if isinstance(result, dict):
+						return result
+				except json.JSONDecodeError:
+					pass
+
+		return None
 
 	async def _call_llm(self, prompt: str) -> str:
 		"""Call the planner LLM via Claude Code subprocess."""

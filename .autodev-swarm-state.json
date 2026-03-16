@@ -25,7 +25,7 @@
     "[metrics-cli-retry] (report) Completed: metrics subcommand already existed in cli.py from previous agent (metrics-impl skipped it, scheduler-impl/spec-generator-impl added it). Added 7 tests for cmd_metrics covering: default output, no-data, --trend, --trend with insufficient data, --correlate with no data, arg parsing, --last-n flag. Fixed 2 lint issues: E501 line too long in cli.py metrics subparser, F401 unused MetricsTracker import in tests. All 36 CLI tests pass, full suite 2861 pass, ruff clean."
   ],
   "cost_usd": 0.0,
-  "wall_minutes": 537.580457066666,
+  "wall_minutes": 547.081760859733,
   "test_history": [],
   "completion_history": [
     0,
