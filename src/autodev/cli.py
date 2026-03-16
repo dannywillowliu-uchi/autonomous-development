@@ -1166,7 +1166,7 @@ def cmd_swarm_inject(args: argparse.Namespace) -> int:
 	from datetime import datetime, timezone
 
 	config = load_config(args.config)
-	team_name = f"swarm-{config.target.name}"
+	team_name = f"autodev-{config.target.name}"
 	inbox_path = Path.home() / ".claude" / "teams" / team_name / "inboxes" / "team-lead.json"
 
 	if not inbox_path.parent.exists():
