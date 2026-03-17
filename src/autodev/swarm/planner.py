@@ -554,7 +554,7 @@ class DrivingPlanner:
 		if pivot_text:
 			state_text += "\n\n" + pivot_text
 		for p in pivots:
-			self._learnings.add_stagnation_insight(p.metric, p.suggested_pivot)
+			self._learnings.add_stagnation_insight(p.trigger, p.strategy)
 
 		# Add scaling recommendation
 		scaling = self._controller.get_scaling_recommendation()

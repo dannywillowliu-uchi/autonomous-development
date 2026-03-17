@@ -1575,9 +1575,9 @@ class SwarmController:
 			# Agent success rate: completed agents / total finished agents
 			finished_agents = [
 				a for a in list(self._agents.values()) + self._dead_agent_history
-				if a.status in (AgentStatus.COMPLETED, AgentStatus.FAILED)
+				if a.status == AgentStatus.DEAD
 			]
-			completed_agents = [a for a in finished_agents if a.status == AgentStatus.COMPLETED]
+			completed_agents = [a for a in finished_agents if a.tasks_completed > 0]
 			agent_success_rate = len(completed_agents) / len(finished_agents) if finished_agents else 0.0
 
 			metrics = SwarmMetrics(
