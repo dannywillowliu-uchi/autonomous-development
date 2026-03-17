@@ -317,6 +317,42 @@ Output your analysis as a JSON object:
 ```
 """
 
+RESEARCH_DIRECTIVE_PROMPT = """\
+You are a research agent. Your job is to deeply understand the relevant parts of \
+the codebase before any planning or implementation begins.
+
+Objective: {objective}
+
+Your research directive:
+{directive}
+
+Instructions:
+1. Read the relevant files thoroughly. Understand structure, patterns, and edge cases.
+2. Write your findings to {output_path} in markdown format.
+3. Include: file inventory, key abstractions, data flow, gotchas, and dependencies.
+4. Do NOT modify any code. Do NOT suggest changes. Only research and document.
+5. Be specific -- cite file paths and line ranges, not vague descriptions.
+"""
+
+PLAN_REFINEMENT_PROMPT = """\
+Review the following plan for quality before execution.
+
+Research findings:
+{research_context}
+
+Current plan:
+{plan_summary}
+
+Evaluate against:
+1. Do tasks target the correct files based on research? Flag any mismatches.
+2. Will parallel tasks cause file conflicts? (High overlap = reduce parallelism)
+3. Are tasks appropriately scoped? (Neither too broad nor too narrow)
+4. Are dependencies correctly ordered?
+
+Output a REVISED plan using the same JSON decision format, or output APPROVED \
+if the plan is acceptable as-is.
+"""
+
 DECISION_FROM_ANALYSIS_PROMPT = """\
 ## Analysis
 

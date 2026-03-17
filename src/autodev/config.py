@@ -376,6 +376,11 @@ class SwarmConfig:
 	allowed_mcps: list[str] = field(default_factory=list)  # empty = all
 	two_step_planning: bool = True
 	daemon_mode: bool = False  # if True, idle when tasks complete instead of exiting
+	research_phase_enabled: bool = True
+	research_timeout_seconds: int = 300
+	research_max_agents: int = 2
+	plan_refinement_rounds: int = 1  # 0 to disable, max 3
+	plan_persistence_enabled: bool = True
 
 
 @dataclass
@@ -992,6 +997,16 @@ def _build_swarm(data: dict[str, Any]) -> SwarmConfig:
 		sc.two_step_planning = bool(data["two_step_planning"])
 	if "daemon_mode" in data:
 		sc.daemon_mode = bool(data["daemon_mode"])
+	if "research_phase_enabled" in data:
+		sc.research_phase_enabled = bool(data["research_phase_enabled"])
+	if "research_timeout_seconds" in data:
+		sc.research_timeout_seconds = int(data["research_timeout_seconds"])
+	if "research_max_agents" in data:
+		sc.research_max_agents = int(data["research_max_agents"])
+	if "plan_refinement_rounds" in data:
+		sc.plan_refinement_rounds = int(data["plan_refinement_rounds"])
+	if "plan_persistence_enabled" in data:
+		sc.plan_persistence_enabled = bool(data["plan_persistence_enabled"])
 	return sc
 
 
