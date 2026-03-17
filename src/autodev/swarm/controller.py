@@ -181,7 +181,7 @@ class SwarmController:
 
 	def render_state(self, state: SwarmState) -> str:
 		"""Render state as text for the planner prompt."""
-		return self._context.render_for_planner(state)
+		return self._context.render_for_planner(state, run_id=self._run_id)
 
 	async def execute_decisions(self, decisions: list[PlannerDecision]) -> list[dict[str, Any]]:
 		"""Execute a list of planner decisions. Returns results for each.

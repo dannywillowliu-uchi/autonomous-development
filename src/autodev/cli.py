@@ -710,7 +710,7 @@ type = "local"
 [swarm]
 enabled = false
 planner_model = "opus"
-planner_cooldown = 10
+planner_cooldown = 60
 max_agents = 0
 min_agents = 2
 stagnation_threshold = 3

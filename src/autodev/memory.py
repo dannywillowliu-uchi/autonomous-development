@@ -331,8 +331,9 @@ class MemoryManager:
 		)
 
 		try:
+			from autodev.intelligence.utils import find_claude_binary
 			proc = await asyncio.create_subprocess_exec(
-				"claude", "-p", "--model", self.config.distill_model,
+				find_claude_binary(), "-p", "--model", self.config.distill_model,
 				"--output-format", "text",
 				stdin=asyncio.subprocess.PIPE,
 				stdout=asyncio.subprocess.PIPE,

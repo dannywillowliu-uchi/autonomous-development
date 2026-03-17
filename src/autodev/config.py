@@ -367,7 +367,7 @@ class SwarmConfig:
 
 	enabled: bool = False
 	planner_model: str = "opus"
-	planner_cooldown: int = 10
+	planner_cooldown: int = 60
 	max_agents: int = 0  # 0 = unbounded
 	min_agents: int = 2
 	stagnation_threshold: int = 3

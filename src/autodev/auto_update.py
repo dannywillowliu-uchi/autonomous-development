@@ -299,8 +299,9 @@ class AutoUpdatePipeline:
 				f"```diff\n{diff_text[:50000]}\n```"
 			)
 
+			from autodev.intelligence.utils import find_claude_binary
 			review_proc = await asyncio.create_subprocess_exec(
-				"claude", "--print", "--output-format", "json", "-p", prompt,
+				find_claude_binary(), "-p", "--output-format", "json", "-p", prompt,
 				cwd=str(repo_path),
 				stdout=asyncio.subprocess.PIPE,
 				stderr=asyncio.subprocess.PIPE,
