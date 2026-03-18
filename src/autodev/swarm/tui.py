@@ -256,15 +256,14 @@ def _score_color(ratio: float, goal_met: bool = False) -> str:
 
 def _build_goal_panel(data: dict) -> Panel | None:
 	"""Build goal fitness score panel. Returns None if no goal data."""
-	goal_spec = data.get("goal_spec")
-	current_score = data.get("current_score")
-	if not goal_spec or not current_score:
+	goal = data.get("goal")
+	if not goal:
 		return None
 
 	text = Text()
-	composite = current_score.get("composite", 0.0)
-	target = goal_spec.get("target_score", 1.0)
-	goal_met = data.get("goal_met", False)
+	composite = goal.get("composite", 0.0)
+	target = goal.get("target", 1.0)
+	goal_met = goal.get("goal_met", False)
 
 	# Large composite score
 	ratio = composite / target if target > 0 else 0
@@ -276,15 +275,10 @@ def _build_goal_panel(data: dict) -> Panel | None:
 	text.append("\n")
 
 	# Per-component breakdown as bars
-	components = current_score.get("components", {})
-	spec_components = goal_spec.get("components", [])
-	if components and spec_components:
+	components = goal.get("components", {})
+	if components:
 		text.append("\n")
-		for comp in spec_components:
-			name = comp.get("name", "?")
-			weight = comp.get("weight", 1.0)
-			score = components.get(name, 0.0)
-
+		for name, score in components.items():
 			comp_ratio = score / target if target > 0 else 0
 			bar_color = _score_color(comp_ratio)
 
@@ -293,13 +287,12 @@ def _build_goal_panel(data: dict) -> Panel | None:
 			bar = "\u2588" * filled + "\u2591" * (bar_width - filled)
 
 			text.append(f"  {name}", style="bold")
-			text.append(f" (w={weight})\n", style="dim")
-			text.append("  ")
+			text.append("\n  ")
 			text.append(bar, style=bar_color)
 			text.append(f" {score:.1f}\n", style=bar_color)
 
 	# Score trend sparkline
-	score_history = data.get("score_history", [])
+	score_history = goal.get("score_history", [])
 	if score_history and len(score_history) > 1:
 		text.append("\nTrend\n", style="bold")
 		sparkchars = " \u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
@@ -309,16 +302,8 @@ def _build_goal_panel(data: dict) -> Panel | None:
 			text.append(sparkchars[idx], style="cyan")
 		text.append(f" ({score_history[-1]:.1f})\n", style="cyan")
 
-	# Last measurement timestamp
-	timestamp = current_score.get("timestamp", "")
-	if timestamp:
-		display_ts = timestamp
-		if "T" in timestamp:
-			display_ts = timestamp.split("T")[1][:8]
-		text.append(f"\nMeasured: {display_ts}", style="dim")
-
 	border_color = "green" if goal_met else "yellow"
-	title = f"Goal: {goal_spec.get('name', '?')}"
+	title = f"Goal: {goal.get('name', '?')}"
 	return Panel(text, title=title, border_style=border_color, padding=(0, 1))
 
 

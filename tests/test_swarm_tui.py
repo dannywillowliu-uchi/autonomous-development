@@ -15,35 +15,23 @@ def _make_goal_data(
 	target: float = 90.0,
 	goal_met: bool = False,
 	components: dict | None = None,
-	spec_components: list | None = None,
 	score_history: list | None = None,
-	timestamp: str = "2026-03-18T12:30:00Z",
 ) -> dict:
-	"""Build a state dict with goal data for testing."""
+	"""Build a state dict with goal data matching planner's JSON structure."""
 	if components is None:
 		components = {"tests": 80.0, "lint": 60.0}
-	if spec_components is None:
-		spec_components = [
-			{"name": "tests", "weight": 0.6, "command": "echo 80"},
-			{"name": "lint", "weight": 0.4, "command": "echo 60"},
-		]
 	if score_history is None:
 		score_history = [50.0, 60.0, 65.0, 70.0, 72.0]
 
 	return {
-		"goal_spec": {
+		"goal": {
 			"name": "Test Goal",
-			"target_score": target,
-			"components": spec_components,
-		},
-		"current_score": {
+			"target": target,
 			"composite": composite,
 			"components": components,
-			"timestamp": timestamp,
-			"success": True,
+			"goal_met": goal_met,
+			"score_history": score_history,
 		},
-		"score_history": score_history,
-		"goal_met": goal_met,
 		"cycle": 5,
 		"mission": "Test mission",
 		"cost_usd": 1.50,
@@ -97,14 +85,9 @@ class TestBuildGoalPanel:
 		data = _make_base_data()
 		assert _build_goal_panel(data) is None
 
-	def test_returns_none_without_current_score(self) -> None:
+	def test_returns_none_with_empty_goal(self) -> None:
 		data = _make_base_data()
-		data["goal_spec"] = {"name": "Test", "target_score": 90}
-		assert _build_goal_panel(data) is None
-
-	def test_returns_none_without_goal_spec(self) -> None:
-		data = _make_base_data()
-		data["current_score"] = {"composite": 72.0}
+		data["goal"] = {}
 		assert _build_goal_panel(data) is None
 
 	def test_returns_panel_with_goal_data(self) -> None:
@@ -149,13 +132,6 @@ class TestBuildGoalPanel:
 		assert "80.0" in rendered
 		assert "60.0" in rendered
 
-	def test_panel_shows_timestamp(self) -> None:
-		data = _make_goal_data(timestamp="2026-03-18T14:30:00Z")
-		panel = _build_goal_panel(data)
-		assert panel is not None
-		rendered = str(panel.renderable)
-		assert "14:30:00" in rendered
-
 	def test_panel_shows_sparkline_trend(self) -> None:
 		data = _make_goal_data(score_history=[10.0, 20.0, 30.0, 40.0, 50.0])
 		panel = _build_goal_panel(data)
@@ -177,7 +153,7 @@ class TestBuildGoalPanel:
 		assert panel is not None  # no crash
 
 	def test_handles_empty_components(self) -> None:
-		data = _make_goal_data(components={}, spec_components=[])
+		data = _make_goal_data(components={})
 		panel = _build_goal_panel(data)
 		assert panel is not None
 
