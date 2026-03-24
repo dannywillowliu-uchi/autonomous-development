@@ -369,6 +369,51 @@ class TestAgentChurn:
 		assert "5" in churn_pivots[0].trigger
 
 
+class TestCostEfficiency:
+	def test_cost_efficiency_decline_detected(self) -> None:
+		pivots = analyze_stagnation(
+			cycle_number=10,
+			test_history=[5, 6, 7, 8],
+			completion_history=[5, 5, 1, 1],
+			failure_history=[0, 0, 0, 0],
+			cost_history=[1.0, 1.0, 1.0, 1.0],
+		)
+		eff_pivots = [p for p in pivots if "Cost efficiency dropped" in p.trigger]
+		assert len(eff_pivots) == 1
+		assert eff_pivots[0].strategy == "reduce_and_focus"
+
+	def test_cost_efficiency_insufficient_data(self) -> None:
+		pivots = analyze_stagnation(
+			cycle_number=3,
+			test_history=[5, 5],
+			completion_history=[5, 5],
+			failure_history=[0, 0],
+			cost_history=[1.0, 1.0],
+		)
+		eff_pivots = [p for p in pivots if "Cost efficiency dropped" in p.trigger]
+		assert eff_pivots == []
+
+
+class TestFileHotspots:
+	def test_file_hotspot_detected(self) -> None:
+		pivots = analyze_stagnation(
+			cycle_number=5,
+			test_history=[5, 6, 7],
+			completion_history=[1, 2, 3],
+			failure_history=[0, 0, 0],
+			cost_history=[0.1, 0.2, 0.3],
+			file_changes={
+				"agent1": ["a.py", "b.py"],
+				"agent2": ["a.py", "c.py"],
+				"agent3": ["a.py"],
+			},
+		)
+		hotspot_pivots = [p for p in pivots if p.strategy == "serialize_hotspot"]
+		assert len(hotspot_pivots) == 1
+		assert "a.py" in hotspot_pivots[0].trigger
+		assert "3 agents" in hotspot_pivots[0].trigger
+
+
 class TestPivotsToDecisions:
 	def test_research_systemic_error_decision(self) -> None:
 		pivots = [PivotRecommendation(
@@ -382,6 +427,19 @@ class TestPivotsToDecisions:
 		assert decisions[0]["type"] == "create_task"
 		assert "Research systemic error" in decisions[0]["payload"]["title"]
 		assert decisions[0]["priority"] == 10
+
+	def test_serialize_hotspot_decision(self) -> None:
+		pivots = [PivotRecommendation(
+			trigger="File hotspots detected: a.py (3 agents)",
+			strategy="serialize_hotspot",
+			severity="warning",
+			details="Serialize work on contested files to avoid merge conflicts",
+		)]
+		decisions = pivots_to_decisions(pivots)
+		assert len(decisions) == 1
+		assert decisions[0]["type"] == "adjust"
+		assert decisions[0]["payload"]["max_agents"] == 1
+		assert decisions[0]["priority"] == 9
 
 	def test_rethink_approach_decision(self) -> None:
 		pivots = [PivotRecommendation(

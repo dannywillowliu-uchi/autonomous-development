@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -9,6 +10,8 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,11 +65,27 @@ class BudgetConfig:
 
 	max_per_session_usd: float = 5.0
 	max_per_run_usd: float = 50.0
+	max_agent_spawns: int = 20
+	max_cost_rate_usd_per_min: float = 2.0
+	warn_threshold_pct: float = 0.8
+	enforce: bool = True
 	evaluator_budget_usd: float = 0.50
 	fixup_budget_usd: float = 2.0
 	ema_alpha: float = 0.3
 	outlier_multiplier: float = 3.0
 	conservatism_base: float = 0.5
+
+	def is_over_budget(self, current_cost: float) -> bool:
+		"""Check if current cost has reached or exceeded the per-run cap."""
+		if self.max_per_run_usd <= 0:
+			return False
+		return current_cost >= self.max_per_run_usd
+
+	def is_warning(self, current_cost: float) -> bool:
+		"""Check if current cost has crossed the warning threshold."""
+		if self.max_per_run_usd <= 0 or self.warn_threshold_pct <= 0:
+			return False
+		return current_cost >= (self.warn_threshold_pct * self.max_per_run_usd)
 
 
 @dataclass
@@ -393,6 +412,11 @@ class SwarmConfig:
 	research_max_agents: int = 2
 	plan_refinement_rounds: int = 1  # 0 to disable, max 3
 	plan_persistence_enabled: bool = True
+	budget: BudgetConfig | None = None
+	# MUST be "text" -- AD_RESULT markers are invisible inside stream-json output.
+	# stream-json embeds text in JSON string fields where quotes are escaped,
+	# making brace-counting parsers fail to extract the AD_RESULT JSON.
+	worker_output_format: str = "text"
 
 
 @dataclass
@@ -648,7 +672,8 @@ def _build_git(data: dict[str, Any]) -> GitConfig:
 def _build_budget(data: dict[str, Any]) -> BudgetConfig:
 	bc = BudgetConfig()
 	for key in (
-		"max_per_session_usd", "max_per_run_usd", "evaluator_budget_usd", "fixup_budget_usd",
+		"max_per_session_usd", "max_per_run_usd", "max_cost_rate_usd_per_min",
+		"warn_threshold_pct", "evaluator_budget_usd", "fixup_budget_usd",
 		"ema_alpha", "outlier_multiplier", "conservatism_base",
 	):
 		if key in data:
@@ -1053,6 +1078,10 @@ def _build_swarm(data: dict[str, Any]) -> SwarmConfig:
 		sc.plan_refinement_rounds = int(data["plan_refinement_rounds"])
 	if "plan_persistence_enabled" in data:
 		sc.plan_persistence_enabled = bool(data["plan_persistence_enabled"])
+	if "budget" in data and isinstance(data["budget"], dict):
+		sc.budget = _build_budget(data["budget"])
+	if "worker_output_format" in data:
+		sc.worker_output_format = str(data["worker_output_format"])
 	return sc
 
 
@@ -1292,7 +1321,19 @@ def build_claude_cmd(
 
 	Centralizes all claude CLI flag construction so MCP config, model,
 	and other flags are applied consistently across all spawn points.
+
+	IMPORTANT: output_format MUST be "text" for workers that emit AD_RESULT
+	markers. With "stream-json", text output is embedded in JSON string fields
+	where quotes are escaped as \\", making brace-counting parsers fail to
+	extract the AD_RESULT JSON payload. See SwarmConfig.worker_output_format.
 	"""
+	if output_format == "stream-json":
+		logger.warning(
+			"build_claude_cmd: output_format='stream-json' requested. "
+			"AD_RESULT markers will be embedded in JSON string fields and may "
+			"not be parseable by brace-counting extractors. Use 'text' format "
+			"for reliable AD_RESULT extraction."
+		)
 	from autodev.intelligence.utils import find_claude_binary
 	claude_bin = find_claude_binary()
 	if resume_session:

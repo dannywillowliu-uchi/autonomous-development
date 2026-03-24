@@ -13,18 +13,96 @@ from autodev.models import MCResultSchema
 
 logger = logging.getLogger(__name__)
 
+
+def extract_text_from_stream_json(output: str) -> str:
+	"""Extract plain text from stream-json (NDJSON) formatted output.
+
+	When Claude Code runs with --output-format stream-json, stdout contains
+	one JSON event per line. AD_RESULT markers are embedded inside JSON string
+	fields where quotes are escaped as \\", making brace-counting parsers fail.
+
+	This function extracts the text content from:
+	1. "result" events (final result text -- preferred)
+	2. "assistant" events (message text blocks -- fallback)
+
+	Returns concatenated plain text suitable for AD_RESULT parsing.
+	"""
+	result_text = ""
+	assistant_texts: list[str] = []
+
+	for line in output.splitlines():
+		line = line.strip()
+		# Strip trace file prefixes like "[OUT] "
+		if line.startswith("[OUT] "):
+			line = line[6:]
+		if not line or not line.startswith("{"):
+			continue
+		try:
+			event = json.loads(line)
+		except (json.JSONDecodeError, ValueError):
+			continue
+		if not isinstance(event, dict):
+			continue
+
+		event_type = event.get("type")
+
+		# "result" event has the final output text -- this is the primary source
+		if event_type == "result":
+			text = event.get("result", "")
+			if text:
+				result_text = text
+
+		# "assistant" events contain message text blocks
+		elif event_type == "assistant":
+			content = event.get("message", {}).get("content", [])
+			if isinstance(content, list):
+				for block in content:
+					if isinstance(block, dict) and block.get("type") == "text":
+						text = block.get("text", "")
+						if text:
+							assistant_texts.append(text)
+
+	# Prefer "result" event text (clean final output)
+	if result_text:
+		return result_text
+	# Fall back to concatenated assistant text blocks
+	if assistant_texts:
+		return "\n".join(assistant_texts)
+	return ""
+
+
 def parse_mc_result(output: str) -> dict[str, object] | None:
 	"""Extract AD_RESULT JSON from session output.
 
-	Handles both single-line and multiline JSON after the AD_RESULT: marker.
+	Handles plain text, multiline JSON, and stream-json (NDJSON) output.
+	When output is stream-json, AD_RESULT markers are inside JSON-encoded
+	text fields where quotes are escaped -- direct brace-counting fails.
+	We first try the raw output, then fall back to extracting text from
+	stream-json events.
 	"""
-	# Find the last AD_RESULT: marker in the output
+	result = _parse_ad_result_from_text(output)
+	if result:
+		return result
+
+	# Fallback: output may be stream-json NDJSON where AD_RESULT is
+	# embedded inside JSON string fields with escaped quotes.
+	# Extract plain text from the JSON events and retry.
+	extracted = extract_text_from_stream_json(output)
+	if extracted:
+		result = _parse_ad_result_from_text(extracted)
+		if result:
+			return result
+
+	return None
+
+
+def _parse_ad_result_from_text(output: str) -> dict[str, object] | None:
+	"""Extract AD_RESULT JSON from plain text output."""
 	marker = "AD_RESULT:"
 	idx = output.rfind(marker)
 	if idx == -1:
 		return None
 
-	# Extract everything after the marker
 	remainder = output[idx + len(marker):]
 
 	# Try balanced brace extraction (handles multiline JSON)

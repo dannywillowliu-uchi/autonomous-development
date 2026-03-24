@@ -172,3 +172,7 @@ class SwarmState:
 	current_fitness: FitnessResult | None = None
 	score_history: list[float] = field(default_factory=list)
 	goal_met: bool = False
+	# Circuit breaker state snapshot
+	circuit_breaker_summary: dict[str, Any] = field(default_factory=dict)
+	# Budget status for planner cost-awareness
+	budget_status: dict[str, float] = field(default_factory=dict)

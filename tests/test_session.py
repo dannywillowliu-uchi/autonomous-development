@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from autodev.session import (
 	build_branch_name,
 	extract_fallback_handoff,
+	extract_text_from_stream_json,
 	parse_mc_result,
 	validate_mc_result,
 )
@@ -464,3 +466,148 @@ class TestExtractFallbackHandoff:
 		)
 		result = extract_fallback_handoff(output, exit_code=1)
 		assert result["status"] == "failed"
+
+
+class TestExtractTextFromStreamJson:
+	"""Tests for extract_text_from_stream_json -- extracts plain text from NDJSON output."""
+
+	def test_result_event(self) -> None:
+		"""Extracts text from a stream-json 'result' event."""
+		ad_result = 'AD_RESULT:{"status":"completed","commits":[],"summary":"done","files_changed":[]}'
+		result_event = json.dumps({"type": "result", "result": ad_result})
+		output = f'{{"type":"system","subtype":"init"}}\n{result_event}\n'
+		text = extract_text_from_stream_json(output)
+		assert "AD_RESULT:" in text
+		assert '"status":"completed"' in text
+
+	def test_assistant_text_blocks(self) -> None:
+		"""Extracts text from assistant message text blocks."""
+		ad_json = '{"status":"completed","commits":[],"summary":"done","files_changed":[]}'
+		event = json.dumps({
+			"type": "assistant",
+			"message": {
+				"content": [
+					{"type": "text", "text": "Working on the task..."},
+					{"type": "text", "text": f"AD_RESULT:{ad_json}"},
+				],
+			},
+		})
+		text = extract_text_from_stream_json(event)
+		assert "AD_RESULT:" in text
+		assert "Working on the task" in text
+
+	def test_result_event_preferred_over_assistant(self) -> None:
+		"""Result event text is preferred over assistant text blocks."""
+		assistant = json.dumps({
+			"type": "assistant",
+			"message": {"content": [{"type": "text", "text": "intermediate text"}]},
+		})
+		result = json.dumps({"type": "result", "result": "final result text"})
+		output = f"{assistant}\n{result}\n"
+		text = extract_text_from_stream_json(output)
+		assert text == "final result text"
+
+	def test_trace_file_prefixes_stripped(self) -> None:
+		"""[OUT] prefixes from trace files are stripped before parsing."""
+		event = json.dumps({"type": "result", "result": "AD_RESULT:{}"})
+		output = f"[OUT] {event}\n"
+		text = extract_text_from_stream_json(output)
+		assert "AD_RESULT:" in text
+
+	def test_non_json_lines_ignored(self) -> None:
+		"""Non-JSON lines (headers, garbage) are silently skipped."""
+		output = (
+			"# Agent: test-agent\n"
+			"# Format: stream-json\n"
+			"\n"
+			'{"type":"result","result":"hello"}\n'
+			"not json at all\n"
+		)
+		text = extract_text_from_stream_json(output)
+		assert text == "hello"
+
+	def test_empty_output(self) -> None:
+		"""Empty or whitespace output returns empty string."""
+		assert extract_text_from_stream_json("") == ""
+		assert extract_text_from_stream_json("  \n\n  ") == ""
+
+	def test_no_text_events(self) -> None:
+		"""Output with only system events (no text) returns empty string."""
+		output = '{"type":"system","subtype":"init"}\n{"type":"system","subtype":"hook_started"}\n'
+		text = extract_text_from_stream_json(output)
+		assert text == ""
+
+
+class TestParseMcResultStreamJson:
+	"""Tests for parse_mc_result with stream-json (NDJSON) formatted output.
+
+	This is the critical bug scenario: when --output-format stream-json is used,
+	AD_RESULT markers are embedded inside JSON string fields where quotes are
+	escaped as \\". The brace-counting parser fails because it enters a "string"
+	state and never exits (all \\" look escaped). parse_mc_result must fall back
+	to extracting text from the stream-json events.
+	"""
+
+	def test_ad_result_in_result_event(self) -> None:
+		"""AD_RESULT in a stream-json 'result' event is extracted correctly."""
+		ad_json = '{"status":"completed","commits":["abc"],"summary":"done","files_changed":["f.py"]}'
+		ad_text = f"AD_RESULT:{ad_json}"
+		result_event = json.dumps({"type": "result", "result": ad_text})
+		output = (
+			'{"type":"system","subtype":"init"}\n'
+			f"{result_event}\n"
+		)
+		result = parse_mc_result(output)
+		assert result is not None
+		assert result["status"] == "completed"
+		assert result["commits"] == ["abc"]
+		assert result["summary"] == "done"
+
+	def test_ad_result_in_assistant_text(self) -> None:
+		"""AD_RESULT in assistant message text is extracted from stream-json."""
+		ad_json = '{"status":"completed","commits":[],"summary":"fixed it","files_changed":["a.py"]}'
+		event = json.dumps({
+			"type": "assistant",
+			"message": {
+				"content": [{"type": "text", "text": f"AD_RESULT:{ad_json}"}],
+			},
+		})
+		output = f"{event}\n"
+		result = parse_mc_result(output)
+		assert result is not None
+		assert result["status"] == "completed"
+		assert result["summary"] == "fixed it"
+
+	def test_stream_json_with_only_hooks_returns_none(self) -> None:
+		"""Stream-json output with only hook events (no text) returns None."""
+		output = (
+			'{"type":"system","subtype":"hook_started","hook_name":"SessionStart:startup"}\n'
+			'{"type":"system","subtype":"hook_response","exit_code":0}\n'
+		)
+		result = parse_mc_result(output)
+		assert result is None
+
+	def test_stream_json_with_trace_prefixes(self) -> None:
+		"""Stream-json output with [OUT] trace prefixes is handled."""
+		ad_json = '{"status":"blocked","commits":[],"summary":"stuck","files_changed":[],"concerns":["blocked"]}'
+		result_event = json.dumps({"type": "result", "result": f"AD_RESULT:{ad_json}"})
+		output = (
+			"[OUT] " + '{"type":"system","subtype":"init"}\n'
+			"[OUT] " + f"{result_event}\n"
+			"[ERR] some stderr\n"
+		)
+		result = parse_mc_result(output)
+		assert result is not None
+		assert result["status"] == "blocked"
+
+	def test_plain_text_still_works(self) -> None:
+		"""Plain text output (non-NDJSON) still works after adding stream-json fallback."""
+		output = (
+			"Working on task...\n"
+			"Done.\n"
+			'AD_RESULT:{"status":"completed","commits":["xyz"],"summary":"all good","files_changed":["b.py"]}\n'
+		)
+		result = parse_mc_result(output)
+		assert result is not None
+		assert result["status"] == "completed"
+		assert result["commits"] == ["xyz"]

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from autodev.session_trace import attach_git_note, extract_trace_summary
+from autodev.swarm.circuit_breaker import SwarmCircuitBreaker
 from autodev.swarm.context import ContextSynthesizer
 from autodev.swarm.models import (
 	AgentRole,
@@ -86,8 +88,24 @@ class SwarmController:
 		self._agent_outputs: dict[str, str] = {}  # agent_id -> accumulated output
 		self._agent_spawn_times: dict[str, str] = {}  # agent_id -> ISO timestamp
 		self._agent_tool_calls: dict[str, list[dict]] = {}  # agent_id -> tool calls
-		self._agent_final_results: dict[str, str] = {}  # agent_id -> stream-json result text
+		self._agent_final_results: dict[str, str] = {}  # agent_id -> result text (unused with text format)
 		self._start_notified = False
+		self._checkpoint_planner_state: dict[str, Any] | None = None
+		self.circuit_breaker = SwarmCircuitBreaker()
+
+	def _config_hash(self) -> str:
+		"""Compute a stable hash of swarm config for drift detection."""
+		cfg = self._swarm_config
+		blob = json.dumps({
+			"max_agents": cfg.max_agents,
+			"min_agents": cfg.min_agents,
+			"planner_model": cfg.planner_model,
+			"planner_cooldown": cfg.planner_cooldown,
+			"two_step_planning": cfg.two_step_planning,
+			"daemon_mode": cfg.daemon_mode,
+			"stagnation_threshold": cfg.stagnation_threshold,
+		}, sort_keys=True)
+		return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 	async def _notify(self, message: str) -> None:
 		"""Send a Telegram notification if configured."""
@@ -123,6 +141,7 @@ class SwarmController:
 
 	async def initialize(self) -> None:
 		"""Set up team directory and initial state."""
+		self._detect_orphan_agents()
 		team_dir = Path.home() / ".claude" / "teams" / self._team_name
 		team_dir.mkdir(parents=True, exist_ok=True)
 		(team_dir / "inboxes").mkdir(exist_ok=True)
@@ -164,6 +183,212 @@ class SwarmController:
 			await self._notify(f"[autodev] Swarm started: {objective}")
 			self._start_notified = True
 
+	# -- Checkpoint / Resume --
+
+	def _write_checkpoint(self) -> None:
+		"""Serialize recoverable swarm state to .autodev-swarm-checkpoint.json."""
+		project_path = Path(self._config.target.resolved_path)
+		checkpoint_path = project_path / ".autodev-swarm-checkpoint.json"
+
+		agents_data: dict[str, dict[str, Any]] = {}
+		for aid, agent in self._agents.items():
+			pid = None
+			proc = self._processes.get(aid)
+			if proc and proc.returncode is None:
+				raw_pid = proc.pid
+				pid = raw_pid if isinstance(raw_pid, int) else None
+			agents_data[aid] = {
+				"id": agent.id,
+				"name": agent.name,
+				"role": agent.role.value,
+				"status": agent.status.value,
+				"current_task_id": agent.current_task_id,
+				"spawned_at": agent.spawned_at,
+				"tasks_completed": agent.tasks_completed,
+				"tasks_failed": agent.tasks_failed,
+				"pid": pid,
+			}
+
+		tasks_data: dict[str, dict[str, Any]] = {}
+		for tid, task in self._tasks.items():
+			tasks_data[tid] = {
+				"id": task.id,
+				"title": task.title,
+				"description": task.description,
+				"priority": task.priority.value,
+				"status": task.status.value,
+				"claimed_by": task.claimed_by,
+				"depends_on": task.depends_on,
+				"files_hint": task.files_hint,
+				"attempt_count": task.attempt_count,
+				"max_attempts": task.max_attempts,
+				"result_summary": task.result_summary,
+			}
+
+		planner_state = self._checkpoint_planner_state or {
+			"cycle_count": None,
+			"test_history": [],
+			"completion_history": [],
+			"failure_history": [],
+			"cost_history": [],
+		}
+
+		checkpoint = {
+			"version": 1,
+			"run_id": self._run_id,
+			"timestamp": _now_iso(),
+			"team_name": self._team_name,
+			"config_hash": self._config_hash(),
+			"start_commit": self._start_commit,
+			"total_cost_usd": self._total_cost_usd,
+			"agent_costs": dict(self._agent_costs),
+			"agents": agents_data,
+			"tasks": tasks_data,
+			"planner": planner_state,
+		}
+
+		tmp_path = checkpoint_path.with_suffix(".tmp")
+		tmp_path.write_text(json.dumps(checkpoint, indent=2))
+		tmp_path.rename(checkpoint_path)
+		logger.debug("Checkpoint written to %s", checkpoint_path)
+
+	def update_checkpoint_planner_state(
+		self,
+		cycle_count: int,
+		test_history: list,
+		completion_history: list,
+		failure_history: list,
+		cost_history: list,
+	) -> None:
+		"""Store planner metrics for next checkpoint write."""
+		self._checkpoint_planner_state = {
+			"cycle_count": cycle_count,
+			"test_history": list(test_history),
+			"completion_history": list(completion_history),
+			"failure_history": list(failure_history),
+			"cost_history": list(cost_history),
+		}
+
+	@classmethod
+	def from_checkpoint(cls, config: MissionConfig, swarm_config: SwarmConfig, db: Database) -> SwarmController:
+		"""Restore a SwarmController from a checkpoint file.
+
+		Rebuilds agents and tasks from the persisted state. For agents with
+		a recorded PID, probes whether the process is still alive and sets
+		the status accordingly.
+		"""
+		project_path = Path(config.target.resolved_path)
+		checkpoint_path = project_path / ".autodev-swarm-checkpoint.json"
+		if not checkpoint_path.exists():
+			raise FileNotFoundError(
+				f"No checkpoint file at {checkpoint_path}. Cannot resume."
+			)
+
+		try:
+			data = json.loads(checkpoint_path.read_text())
+		except (json.JSONDecodeError, OSError) as exc:
+			raise ValueError(
+				f"Corrupt checkpoint file at {checkpoint_path}: {exc}"
+			) from exc
+
+		ctrl = cls(config, swarm_config, db)
+
+		# Detect config drift
+		saved_hash = data.get("config_hash")
+		current_hash = ctrl._config_hash()
+		if saved_hash and saved_hash != current_hash:
+			logger.warning(
+				"Config drift detected: checkpoint hash %s != current %s. "
+				"Swarm config may have changed since last run.",
+				saved_hash, current_hash,
+			)
+
+		# Restore scalar state
+		ctrl._run_id = data["run_id"]
+		ctrl._team_name = data["team_name"]
+		ctrl._start_commit = data.get("start_commit")
+		ctrl._total_cost_usd = data.get("total_cost_usd", 0.0)
+		ctrl._agent_costs = data.get("agent_costs", {})
+
+		# Restore agents
+		for aid, ainfo in data.get("agents", {}).items():
+			agent = SwarmAgent(
+				id=ainfo["id"],
+				name=ainfo["name"],
+				role=AgentRole(ainfo["role"]),
+				status=AgentStatus(ainfo["status"]),
+				current_task_id=ainfo.get("current_task_id"),
+				spawned_at=ainfo.get("spawned_at", ""),
+				tasks_completed=ainfo.get("tasks_completed", 0),
+				tasks_failed=ainfo.get("tasks_failed", 0),
+			)
+			# Probe PID liveness
+			pid = ainfo.get("pid")
+			if pid is not None:
+				try:
+					os.kill(pid, 0)
+					agent.status = AgentStatus.WORKING
+				except OSError:
+					agent.status = AgentStatus.DEAD
+			ctrl._agents[aid] = agent
+
+		# Restore tasks
+		for tid, tinfo in data.get("tasks", {}).items():
+			task = SwarmTask(
+				id=tinfo["id"],
+				title=tinfo["title"],
+				description=tinfo.get("description", ""),
+				priority=TaskPriority(tinfo["priority"]),
+				status=TaskStatus(tinfo["status"]),
+				claimed_by=tinfo.get("claimed_by"),
+				depends_on=tinfo.get("depends_on", []),
+				files_hint=tinfo.get("files_hint", []),
+				attempt_count=tinfo.get("attempt_count", 0),
+				max_attempts=tinfo.get("max_attempts", 3),
+				result_summary=tinfo.get("result_summary", ""),
+			)
+			ctrl._tasks[tid] = task
+
+		# Restore planner state if present
+		planner = data.get("planner")
+		if planner and planner.get("cycle_count") is not None:
+			ctrl._checkpoint_planner_state = planner
+
+		logger.info("Restored swarm from checkpoint: run_id=%s, %d agents, %d tasks",
+			ctrl._run_id, len(ctrl._agents), len(ctrl._tasks))
+		return ctrl
+
+	def _detect_orphan_agents(self) -> None:
+		"""Check for a stale checkpoint with orphan agent processes on fresh start."""
+		project_path = Path(self._config.target.resolved_path)
+		checkpoint_path = project_path / ".autodev-swarm-checkpoint.json"
+		if not checkpoint_path.exists():
+			return
+
+		try:
+			data = json.loads(checkpoint_path.read_text())
+		except (json.JSONDecodeError, OSError):
+			return
+
+		any_alive = False
+		for ainfo in data.get("agents", {}).values():
+			pid = ainfo.get("pid")
+			if pid is None:
+				continue
+			try:
+				os.kill(pid, 0)
+				any_alive = True
+				logger.warning(
+					"Orphan agent process detected: %s (pid %d) from run %s",
+					ainfo.get("name", "?"), pid, data.get("run_id", "?"),
+				)
+			except OSError:
+				pass
+
+		if not any_alive:
+			logger.info("Removing stale checkpoint (all agent PIDs dead)")
+			checkpoint_path.unlink(missing_ok=True)
+
 	def build_state(self, core_test_results: dict[str, Any] | None = None) -> SwarmState:
 		"""Build current swarm state snapshot for the planner."""
 		wall_time = time.monotonic() - self._start_time
@@ -178,6 +403,8 @@ class SwarmController:
 			capabilities=capabilities,
 			recent_file_changes=dict(self._recent_changes),
 			agent_costs=dict(self._agent_costs),
+			circuit_breaker_summary=self.circuit_breaker.get_summary(),
+			budget_status=self._get_budget_status(),
 		)
 
 	def render_state(self, state: SwarmState) -> str:
@@ -213,6 +440,7 @@ class SwarmController:
 			except Exception as e:
 				logger.error("Failed to execute decision %s: %s", decision.type, e)
 				results.append({"decision": decision.type.value, "success": False, "error": str(e)})
+		self._write_checkpoint()
 		return results
 
 	def _resolve_spawn_task_id(
@@ -280,6 +508,17 @@ class SwarmController:
 
 	async def _handle_spawn(self, payload: dict[str, Any]) -> dict[str, Any]:
 		"""Spawn a new agent in the swarm."""
+		# Budget gate
+		if self._check_budget():
+			logger.warning("Spawn blocked: budget exhausted ($%.2f spent)", self._total_cost_usd)
+			return {"error": "Budget exhausted", "spawned": False}
+
+		# Circuit breaker gate
+		can_spawn, cb_reason = self.circuit_breaker.can_spawn()
+		if not can_spawn:
+			logger.warning("Spawn blocked by circuit breaker: %s", cb_reason)
+			return {"error": cb_reason, "spawned": False}
+
 		# Enforce max_agents
 		active = [a for a in self._agents.values() if a.status in (AgentStatus.WORKING, AgentStatus.SPAWNING)]
 		if self._swarm_config.max_agents > 0 and len(active) >= self._swarm_config.max_agents:
@@ -741,7 +980,7 @@ class SwarmController:
 			setting_sources=setting_sources,
 			permission_mode="auto",
 			max_turns=200,
-			output_format="stream-json",
+			output_format="text",
 		)
 		env = claude_subprocess_env(self._config)
 		env["AUTODEV_TEAM_NAME"] = self._team_name
@@ -772,17 +1011,19 @@ class SwarmController:
 	async def _stream_agent_output(
 		self, agent_id: str, agent_name: str, proc: asyncio.subprocess.Process
 	) -> None:
-		"""Stream agent stdout/stderr to a trace file, parsing stream-json events."""
+		"""Stream agent stdout/stderr to a trace file.
+
+		With text output format, stdout contains plain text (including AD_RESULT
+		markers). Lines are accumulated in _agent_outputs for AD_RESULT parsing.
+		"""
 		self._trace_dir.mkdir(parents=True, exist_ok=True)
 		trace_path = self._trace_dir / f"{agent_name}-{agent_id[:8]}.log"
-		tool_calls: list[dict] = []
-		pending_tool_uses: dict[str, dict] = {}  # tool_use_id -> {name, start_time, mcp_server}
 
 		try:
 			with open(trace_path, "w") as f:
 				f.write(f"# Agent: {agent_name} ({agent_id})\n")
 				f.write(f"# Started: {self._agent_spawn_times.get(agent_id, '')}\n")
-				f.write("# Format: stream-json\n\n")
+				f.write("# Format: text\n\n")
 
 				async def read_stream(stream: asyncio.StreamReader, prefix: str) -> None:
 					while True:
@@ -794,12 +1035,6 @@ class SwarmController:
 						f.flush()
 
 						if prefix == "[OUT] ":
-							decoded_stripped = decoded.strip()
-							if decoded_stripped:
-								self._parse_stream_event(
-									decoded_stripped, agent_id, agent_name,
-									pending_tool_uses, tool_calls,
-								)
 							self._agent_outputs[agent_id] = (
 								self._agent_outputs.get(agent_id, "") + decoded
 							)
@@ -814,8 +1049,6 @@ class SwarmController:
 
 		except Exception as e:
 			logger.warning("Trace streaming error for %s: %s", agent_name, e)
-
-		self._agent_tool_calls[agent_id] = tool_calls
 
 	def _parse_stream_event(
 		self,
@@ -918,11 +1151,10 @@ class SwarmController:
 					except (asyncio.TimeoutError, Exception):
 						pass
 
-				# Try final result text first (from stream-json "result" event),
-				# fall back to raw accumulated output, then pipe read
-				output = self._agent_final_results.pop(agent_id, "")
-				if not output:
-					output = self._agent_outputs.pop(agent_id, "")
+				# With text output format, _agent_outputs has plain text
+				# containing AD_RESULT markers directly. Fall back to pipe read.
+				output = self._agent_outputs.pop(agent_id, "")
+				self._agent_final_results.pop(agent_id, None)
 				if not output:
 					try:
 						stdout_bytes = await proc.stdout.read() if proc.stdout else b""
@@ -955,8 +1187,10 @@ class SwarmController:
 				agent.death_time = time.monotonic()
 				if status == "completed":
 					agent.tasks_completed += 1
+					self.circuit_breaker.record_success(agent.current_task_id)
 				else:
 					agent.tasks_failed += 1
+					self.circuit_breaker.record_failure(agent.current_task_id)
 
 				task = self._resolve_agent_task(agent)
 				if task:
@@ -1031,6 +1265,7 @@ class SwarmController:
 		self._recover_orphaned_tasks(events)
 		self._check_claim_timeouts(events)
 		self._cleanup_dead_agents()
+		self._write_checkpoint()
 		return events
 
 	def _save_agent_trace(
@@ -1559,13 +1794,73 @@ class SwarmController:
 				idle.append(agent)
 		return idle
 
+	def _budget_limit(self) -> float:
+		"""Read max_per_run_usd from config, returning 0.0 on error."""
+		try:
+			return float(self._config.scheduler.budget.max_per_run_usd)
+		except (TypeError, ValueError):
+			return 0.0
+
+	def _check_budget(self) -> bool:
+		"""Check if the cost budget for this run is exhausted.
+
+		Returns True if budget is exhausted (no more spawns allowed).
+		Returns False if under budget or budget is uncapped (0).
+		"""
+		budget_limit = self._budget_limit()
+		if budget_limit <= 0:
+			return False
+		return self._total_cost_usd >= budget_limit
+
+	def _get_budget_status(self) -> dict[str, float]:
+		"""Get current budget status for planner context.
+
+		Returns dict with budget_used_usd, budget_remaining_usd,
+		cost_per_task_avg, and estimated_tasks_affordable.
+		"""
+		budget_limit = self._budget_limit()
+		completed = [t for t in self._tasks.values() if t.status == TaskStatus.COMPLETED]
+		completed_count = len(completed)
+
+		cost_per_task = self._total_cost_usd / completed_count if completed_count > 0 else 0.0
+		remaining = max(budget_limit - self._total_cost_usd, 0.0) if budget_limit > 0 else float("inf")
+		affordable = int(remaining / cost_per_task) if cost_per_task > 0 else -1  # -1 = unknown
+
+		return {
+			"budget_used_usd": round(self._total_cost_usd, 4),
+			"budget_limit_usd": budget_limit,
+			"budget_remaining_usd": round(remaining, 4) if remaining != float("inf") else 0.0,
+			"cost_per_task_avg": round(cost_per_task, 4),
+			"estimated_tasks_affordable": affordable,
+		}
+
 	def get_scaling_recommendation(self) -> dict[str, int]:
-		"""Get scaling recommendation based on current state."""
+		"""Get scaling recommendation based on current state and cost rate."""
 		active = [a for a in self._agents.values() if a.status in (AgentStatus.WORKING, AgentStatus.SPAWNING)]
 		pending = [t for t in self._tasks.values() if t.status == TaskStatus.PENDING]
 		idle = [a for a in self._agents.values() if a.status == AgentStatus.IDLE]
 
 		rec: dict[str, int] = {"scale_up": 0, "scale_down": 0}
+
+		# Budget exhausted -> scale down only
+		if self._check_budget():
+			rec["scale_down"] = len(active) + len(idle)
+			return rec
+
+		# Cost-rate awareness: check if budget can cover pending tasks
+		budget_status = self._get_budget_status()
+		budget_limit = budget_status["budget_limit_usd"]
+		cost_per_task = budget_status["cost_per_task_avg"]
+		affordable = budget_status["estimated_tasks_affordable"]
+
+		# If we know cost/task and remaining budget can't cover pending tasks, scale down
+		if budget_limit > 0 and cost_per_task > 0 and affordable >= 0:
+			if affordable < len(pending) and len(active) > 1:
+				# Can't afford all pending -- reduce parallelism to conserve budget
+				rec["scale_down"] = max(len(active) - 1, 0)
+				return rec
+
+		# Default ratio-based logic
 		if len(pending) > 2 * max(len(active), 1):
 			rec["scale_up"] = min(len(pending) - len(active), 3)
 		if len(idle) >= 2:
@@ -1588,6 +1883,7 @@ class SwarmController:
 			f"Completed: {len(completed)}, Failed: {len(failed)}\n"
 			f"Cost: ${self._total_cost_usd:.2f}"
 		)
+		self._write_checkpoint()
 		logger.info("Swarm controller cleaned up")
 
 	async def _record_metrics(self) -> None:

@@ -192,6 +192,8 @@ class ContextSynthesizer:
 		capabilities: CapabilityManifest | None = None,
 		recent_file_changes: dict[str, list[str]] | None = None,
 		agent_costs: dict[str, float] | None = None,
+		circuit_breaker_summary: dict[str, Any] | None = None,
+		budget_status: dict[str, float] | None = None,
 	) -> SwarmState:
 		"""Build a complete SwarmState snapshot for the planner."""
 		self._cycle_number += 1
@@ -230,6 +232,8 @@ class ContextSynthesizer:
 			current_fitness=current_fitness,
 			score_history=list(self._score_history),
 			goal_met=goal_met,
+			circuit_breaker_summary=circuit_breaker_summary or {},
+			budget_status=budget_status or {},
 		)
 		return state
 
@@ -406,6 +410,38 @@ class ContextSynthesizer:
 				f"Pass: {tr.get('pass', '?')} | Fail: {tr.get('fail', '?')} | "
 				f"Skip: {tr.get('skip', '?')} | Total: {tr.get('total', '?')}"
 			)
+
+		# Budget status
+		bs = state.budget_status
+		if bs and bs.get("budget_limit_usd", 0) > 0:
+			budget_lines = [
+				f"Used: ${bs.get('budget_used_usd', 0):.2f} / ${bs.get('budget_limit_usd', 0):.2f}",
+				f"Remaining: ${bs.get('budget_remaining_usd', 0):.2f}",
+			]
+			cpt = bs.get("cost_per_task_avg", 0)
+			if cpt > 0:
+				budget_lines.append(f"Avg cost/task: ${cpt:.2f}")
+			affordable = bs.get("estimated_tasks_affordable", -1)
+			if affordable >= 0:
+				budget_lines.append(f"Estimated tasks affordable: {affordable}")
+			exhausted = bs.get("budget_remaining_usd", 1) <= 0
+			if exhausted:
+				sections.append("## BUDGET EXHAUSTED (spawns blocked)\n" + "\n".join(budget_lines))
+			else:
+				sections.append("## Budget Status\n" + "\n".join(budget_lines))
+
+		# Circuit breaker
+		cb = state.circuit_breaker_summary
+		if cb and cb.get("state") != "closed":
+			cb_lines = [f"State: {cb['state']}"]
+			if cb.get("trip_reason"):
+				cb_lines.append(f"Reason: {cb['trip_reason']}")
+			cb_lines.append(f"Consecutive failures: {cb.get('consecutive_failures', 0)}")
+			task_failures = cb.get("task_failures", {})
+			if task_failures:
+				tf_parts = [f"{tid}: {cnt}" for tid, cnt in task_failures.items()]
+				cb_lines.append(f"Per-task failures: {', '.join(tf_parts)}")
+			sections.append("## CIRCUIT BREAKER (spawns blocked)\n" + "\n".join(cb_lines))
 
 		# Stagnation
 		if state.stagnation_signals:

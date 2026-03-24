@@ -22,6 +22,8 @@ class StagnationConfig:
 	failure_rate_threshold: float = 0.6  # fraction of failures to trigger
 	repeated_error_min_agents: int = 2  # min agents sharing same error
 	agent_churn_min_respawns: int = 2  # min respawns on same task to trigger
+	cost_per_completion_threshold: float = 5.0  # max cost per task before flagging
+	file_hotspot_threshold: int = 3  # min agents touching same file to flag
 
 
 @dataclass
@@ -45,6 +47,7 @@ def analyze_stagnation(
 	config: StagnationConfig | None = None,
 	error_messages: list[str] | None = None,
 	task_agent_counts: dict[str, int] | None = None,
+	file_changes: dict[str, list[str]] | None = None,
 ) -> list[PivotRecommendation]:
 	"""Analyze metric histories and recommend pivots if stagnating.
 
@@ -121,6 +124,14 @@ def analyze_stagnation(
 	if task_agent_counts:
 		_check_agent_churn(task_agent_counts, cfg, pivots)
 
+	# Predictive: declining cost efficiency
+	if completion_history and cost_history:
+		_check_cost_efficiency(completion_history, cost_history, cfg, pivots)
+
+	# Predictive: file hotspots (merge conflict risk)
+	if file_changes:
+		_check_file_hotspots(file_changes, cfg, pivots)
+
 	return pivots
 
 
@@ -171,6 +182,55 @@ def _check_agent_churn(
 				"not the execution. Pause this task and spawn a research agent to "
 				"find an alternative approach before retrying."
 			),
+		))
+
+
+def _check_cost_efficiency(
+	completion_history: list[int],
+	cost_history: list[float],
+	cfg: StagnationConfig,
+	pivots: list[PivotRecommendation],
+) -> None:
+	"""Detect declining cost efficiency as a leading stagnation indicator."""
+	if len(completion_history) < 4 or len(cost_history) < 4:
+		return
+	mid = len(completion_history) // 2
+	first_completions = sum(completion_history[:mid])
+	second_completions = sum(completion_history[mid:])
+	first_cost = sum(cost_history[:mid])
+	second_cost = sum(cost_history[mid:])
+	if first_cost <= 0 or second_cost <= 0:
+		return
+	first_efficiency = first_completions / first_cost
+	second_efficiency = second_completions / second_cost
+	if first_efficiency > 0 and second_efficiency < first_efficiency * 0.5:
+		pivots.append(PivotRecommendation(
+			trigger=f"Cost efficiency dropped from {first_efficiency:.2f} to {second_efficiency:.2f} tasks/$",
+			strategy="reduce_and_focus",
+			severity="warning",
+			details="Reduce agent count and focus on highest-priority tasks",
+		))
+
+
+def _check_file_hotspots(
+	file_changes: dict[str, list[str]],
+	cfg: StagnationConfig,
+	pivots: list[PivotRecommendation],
+) -> None:
+	"""Detect files touched by too many agents (merge conflict risk)."""
+	file_to_agents: dict[str, set[str]] = {}
+	for agent, files in file_changes.items():
+		for f in files:
+			file_to_agents.setdefault(f, set()).add(agent)
+	hotspots = {f: agents for f, agents in file_to_agents.items() if len(agents) >= cfg.file_hotspot_threshold}
+	if hotspots:
+		ranked = sorted(hotspots.items(), key=lambda x: -len(x[1]))
+		hotspot_list = ", ".join(f"{f} ({len(a)} agents)" for f, a in ranked)
+		pivots.append(PivotRecommendation(
+			trigger=f"File hotspots detected: {hotspot_list}",
+			strategy="serialize_hotspot",
+			severity="warning",
+			details="Serialize work on contested files to avoid merge conflicts",
 		))
 
 
@@ -231,6 +291,13 @@ def pivots_to_decisions(pivots: list[PivotRecommendation]) -> list[dict]:
 					"priority": 2,
 				},
 				"reasoning": f"Pivot: {p.trigger}. Current approach is failing repeatedly.",
+				"priority": 9,
+			})
+		elif p.strategy == "serialize_hotspot":
+			decisions.append({
+				"type": "adjust",
+				"payload": {"max_agents": 1},
+				"reasoning": f"Pivot: {p.trigger}. Serializing to avoid conflicts.",
 				"priority": 9,
 			})
 	return decisions

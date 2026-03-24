@@ -97,6 +97,7 @@ class DrivingPlanner:
 			decisions = await self._initial_plan(state)
 			decisions = self._validate_decisions(decisions, state)
 			await self._controller.execute_decisions(decisions)
+			self._save_checkpoint()
 
 			self._write_state_file(state)
 
@@ -143,11 +144,13 @@ class DrivingPlanner:
 						decisions = self._validate_decisions(decisions, state)
 						results = await self._controller.execute_decisions(decisions)
 						self._log_cycle(decisions, results)
+						self._save_checkpoint()
 				elif self._should_plan(state, events):
 					decisions = await self._plan_cycle(state)
 					decisions = self._validate_decisions(decisions, state)
 					results = await self._controller.execute_decisions(decisions)
 					self._log_cycle(decisions, results)
+					self._save_checkpoint()
 
 				# Check termination conditions
 				if self._should_stop(state):
@@ -164,6 +167,17 @@ class DrivingPlanner:
 				"Driving planner stopped after %d cycles",
 				self._cycle_count,
 			)
+
+	def _save_checkpoint(self) -> None:
+		"""Push planner metrics to the controller and trigger a checkpoint write."""
+		self._controller.update_checkpoint_planner_state(
+			cycle_count=self._cycle_count,
+			test_history=self._test_history,
+			completion_history=self._completion_history,
+			failure_history=self._failure_history,
+			cost_history=self._cost_history,
+		)
+		self._controller._write_checkpoint()
 
 	def stop(self) -> None:
 		"""Signal the planner to stop."""
@@ -615,6 +629,18 @@ class DrivingPlanner:
 		# Inject goal score delta if goal is active
 		state_text = self._inject_goal_delta(state_text, state)
 
+		# Collect extended stagnation signals
+		error_messages = [
+			err
+			for errors in self._task_failure_counts.values()
+			for err in errors
+		]
+		task_agent_counts = {
+			t.id: t.attempt_count
+			for t in state.tasks
+			if t.attempt_count > 0
+		}
+
 		pivots = analyze_stagnation(
 			cycle_number=self._cycle_count,
 			test_history=self._test_history,
@@ -622,6 +648,9 @@ class DrivingPlanner:
 			failure_history=self._failure_history,
 			cost_history=self._cost_history,
 			threshold=self._config.stagnation_threshold,
+			error_messages=error_messages or None,
+			task_agent_counts=task_agent_counts or None,
+			file_changes=state.recent_file_changes or None,
 		)
 		pivot_text = format_pivots_for_planner(pivots)
 		if pivot_text:
