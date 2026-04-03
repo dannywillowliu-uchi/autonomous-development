@@ -49,3 +49,22 @@
 00:03:13 INFO autodev.swarm.controller: Created task 0ca9eb3b8457: Verify all tests pass after P3+P4 wiring
 00:03:13 INFO autodev.swarm.controller: Planner waiting 120s: The redirected agent needs time to read controller.py, session.py, and the spec, then implement the P3+P4 wiring changes. This is a focused single-file change but requires careful understanding of the existing code. Wait before checking progress.
 00:05:13 INFO autodev.swarm.planner: Cycle 5: 4 decisions (redirect, create_task, create_task, wait), 4 ok, 0 failed
+00:05:43 INFO autodev.swarm.controller: Auto-committed task 'P2: Add _parse_stream_event() method to controller.py': 19c52283
+00:05:44 INFO httpx: HTTP Request: POST https://api.telegram.org/bot8685447637:AAGCWVSvkG9QrpUalBgVwhwi9KL0NvbCUrs/sendMessage "HTTP/1.1 400 Bad Request"
+00:05:45 INFO autodev.swarm.controller: Auto-pushed to origin/main
+00:05:45 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:05:45 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:05:45 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:09:21 INFO autodev.swarm.planner: Parsed 2 decisions from planner (cycle 6)
+00:09:21 INFO autodev.swarm.controller: Auto-assigned spawn 'final-verifier' to unclaimed task 24b94afd26eb (P5: Add tool failure and MCP status visibility to planner context)
+00:09:21 INFO autodev.swarm.controller: Spawned agent final-verifier (tester) for task 24b94afd26eb
+00:09:21 INFO autodev.swarm.controller: Planner waiting 120s: Let the final-verifier agent run the full test suite and commit if green. Also let the existing unknown working agent finish its current task.
+00:11:21 INFO autodev.swarm.planner: Cycle 6: 2 decisions (spawn, wait), 2 ok, 0 failed
+00:11:51 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:11:51 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:11:51 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:13:03 INFO autodev.swarm.planner: Parsed 2 decisions from planner (cycle 7)
+00:13:03 INFO autodev.swarm.controller: Planner waiting 90s: final-verifier is only 2m30s into P5 (context.py planner visibility). It needs time to implement _render_tool_failures() and _render_mcp_status(). No reason to intervene.
+00:14:33 INFO autodev.swarm.controller: Auto-assigned spawn 'cli-tool-usage' to unclaimed task 309f0dc87eb2 (P6: Add autodev tool-usage CLI command)
+00:14:33 INFO autodev.swarm.controller: Spawned agent cli-tool-usage (implementer) for task 309f0dc87eb2
+00:14:33 INFO autodev.swarm.planner: Cycle 7: 2 decisions (wait, spawn), 2 ok, 0 failed
