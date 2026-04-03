@@ -981,7 +981,7 @@ class SwarmController:
 			setting_sources=setting_sources,
 			permission_mode="auto",
 			max_turns=200,
-			output_format="text",
+			output_format="stream-json",
 		)
 		env = claude_subprocess_env(self._config)
 		env["AUTODEV_TEAM_NAME"] = self._team_name
@@ -1014,17 +1014,21 @@ class SwarmController:
 	) -> None:
 		"""Stream agent stdout/stderr to a trace file.
 
-		With text output format, stdout contains plain text (including AD_RESULT
-		markers). Lines are accumulated in _agent_outputs for AD_RESULT parsing.
+		With stream-json output format, stdout contains one JSON event per line.
+		Each event is parsed for tool call tracking via _parse_stream_event().
+		Raw lines are accumulated in _agent_outputs for AD_RESULT fallback parsing.
 		"""
 		self._trace_dir.mkdir(parents=True, exist_ok=True)
 		trace_path = self._trace_dir / f"{agent_name}-{agent_id[:8]}.log"
+
+		pending_tool_uses: dict[str, dict] = {}
+		tool_calls: list[dict] = []
 
 		try:
 			with open(trace_path, "w") as f:
 				f.write(f"# Agent: {agent_name} ({agent_id})\n")
 				f.write(f"# Started: {self._agent_spawn_times.get(agent_id, '')}\n")
-				f.write("# Format: text\n\n")
+				f.write("# Format: stream-json\n\n")
 
 				async def read_stream(stream: asyncio.StreamReader, prefix: str) -> None:
 					while True:
@@ -1039,6 +1043,10 @@ class SwarmController:
 							self._agent_outputs[agent_id] = (
 								self._agent_outputs.get(agent_id, "") + decoded
 							)
+							self._parse_stream_event(
+								decoded.strip(), agent_id, agent_name,
+								pending_tool_uses, tool_calls,
+							)
 
 				tasks = []
 				if proc.stdout:
@@ -1050,6 +1058,9 @@ class SwarmController:
 
 		except Exception as e:
 			logger.warning("Trace streaming error for %s: %s", agent_name, e)
+		finally:
+			if tool_calls:
+				self._agent_tool_calls[agent_id] = tool_calls
 
 	def _parse_stream_event(
 		self,
@@ -1152,18 +1163,34 @@ class SwarmController:
 					except (asyncio.TimeoutError, Exception):
 						pass
 
-				# With text output format, _agent_outputs has plain text
-				# containing AD_RESULT markers directly. Fall back to pipe read.
-				output = self._agent_outputs.pop(agent_id, "")
-				self._agent_final_results.pop(agent_id, None)
-				if not output:
+				# With stream-json, AD_RESULT markers are inside JSON events.
+				# Prefer final result text from 'result' event, fall back to
+				# extract_text_from_stream_json for NDJSON output.
+				raw_output = self._agent_outputs.pop(agent_id, "")
+				final_result_text = self._agent_final_results.pop(agent_id, "")
+				if not raw_output and not final_result_text:
 					try:
 						stdout_bytes = await proc.stdout.read() if proc.stdout else b""
-						output = stdout_bytes.decode(errors="replace")
+						raw_output = stdout_bytes.decode(errors="replace")
 					except Exception:
-						output = ""
+						raw_output = ""
 
-				result = self._parse_ad_result(output)
+				# Extract plain text from stream-json for AD_RESULT parsing
+				extracted_text = ""
+				if raw_output:
+					extracted_text = extract_text_from_stream_json(raw_output)
+
+				# Try sources in order: result event text, extracted text, raw output
+				result = None
+				if final_result_text:
+					result = self._parse_ad_result(final_result_text)
+				if not result and extracted_text:
+					result = self._parse_ad_result(extracted_text)
+				if not result and raw_output:
+					result = self._parse_ad_result(raw_output)
+
+				# Best available plain text for cost parsing and trace storage
+				output = final_result_text or extracted_text or raw_output
 				if result:
 					result, validation_warnings = self._validate_ad_result(result)
 					for w in validation_warnings:
