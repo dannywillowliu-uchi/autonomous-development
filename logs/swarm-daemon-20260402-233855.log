@@ -38,3 +38,14 @@
 23:59:44 INFO autodev.swarm.controller: Auto-assigned spawn 'stream-json-researcher' to unclaimed task d6737f40a6cd (P2: Add _parse_stream_event() method to controller.py)
 23:59:44 INFO autodev.swarm.controller: Spawned agent stream-json-researcher (researcher) for task d6737f40a6cd
 23:59:44 INFO autodev.swarm.planner: Cycle 4: 2 decisions (wait, spawn), 2 ok, 0 failed
+00:00:14 INFO autodev.swarm.controller: Auto-committed task 'P1: Add tool_calls and mcp_status DB tables': 803890d2
+00:00:15 INFO httpx: HTTP Request: POST https://api.telegram.org/bot8685447637:AAGCWVSvkG9QrpUalBgVwhwi9KL0NvbCUrs/sendMessage "HTTP/1.1 200 OK"
+00:00:16 INFO autodev.swarm.controller: Auto-pushed to origin/main
+00:00:16 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:00:16 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:03:13 INFO autodev.swarm.planner: Parsed 4 decisions from planner (cycle 5)
+00:03:13 INFO autodev.swarm.controller: Spawned agent  (general) for task None
+00:03:13 INFO autodev.swarm.controller: Created task 08e52577b377: Close duplicate P5/P6 tasks - work already done
+00:03:13 INFO autodev.swarm.controller: Created task 0ca9eb3b8457: Verify all tests pass after P3+P4 wiring
+00:03:13 INFO autodev.swarm.controller: Planner waiting 120s: The redirected agent needs time to read controller.py, session.py, and the spec, then implement the P3+P4 wiring changes. This is a focused single-file change but requires careful understanding of the existing code. Wait before checking progress.
+00:05:13 INFO autodev.swarm.planner: Cycle 5: 4 decisions (redirect, create_task, create_task, wait), 4 ok, 0 failed

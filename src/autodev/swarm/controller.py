@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from autodev.session import extract_text_from_stream_json
 from autodev.session_trace import attach_git_note, extract_trace_summary
 from autodev.swarm.circuit_breaker import SwarmCircuitBreaker
 from autodev.swarm.context import ContextSynthesizer

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "run_id": "2026-04-03_06-39-00",
-  "timestamp": "2026-04-03T06:59:44.877847+00:00",
+  "timestamp": "2026-04-03T07:05:13.676619+00:00",
   "team_name": "autodev-autonomous-development",
   "config_hash": "ea822f3146b51db1",
   "start_commit": "e6397f519f50faae01d0094d76fcc0fc2a43ce82",
@@ -23,10 +23,10 @@
       "id": "be8403961f82",
       "name": "db-tables-implementer",
       "role": "implementer",
-      "status": "working",
+      "status": "dead",
       "current_task_id": "73999f4ee803",
       "spawned_at": "2026-04-03T06:51:24.157919+00:00",
-      "tasks_completed": 0,
+      "tasks_completed": 1,
       "tasks_failed": 0,
       "pid": null
     },
@@ -39,7 +39,18 @@
       "spawned_at": "2026-04-03T06:59:44.868628+00:00",
       "tasks_completed": 0,
       "tasks_failed": 0,
-      "pid": 17153
+      "pid": null
+    },
+    "f1049b0d8960": {
+      "id": "f1049b0d8960",
+      "name": "",
+      "role": "general",
+      "status": "working",
+      "current_task_id": null,
+      "spawned_at": "2026-04-03T07:03:13.669514+00:00",
+      "tasks_completed": 0,
+      "tasks_failed": 0,
+      "pid": 18149
     }
   },
   "tasks": {
@@ -63,15 +74,15 @@
       "title": "P1: Add tool_calls and mcp_status DB tables",
       "description": "In src/autodev/db.py, add two new tables and their CRUD methods.\n\nTables:\n- tool_calls: id, run_id, agent_id, tool_name, mcp_server (nullable), input_summary (nullable), output_summary (nullable), is_error boolean, error_message (nullable), duration_ms (nullable), timestamp\n- mcp_status: id, run_id, agent_id, server_name, status (connected/failed/timeout), timestamp\n\nMethods to add:\n- record_tool_call(run_id, agent_id, tool_name, mcp_server=None, input_summary=None, output_summary=None, is_error=False, error_message=None, duration_ms=None)\n- get_tool_usage(run_id=None, agent_id=None, tool_name=None) -> list of tool call records\n- get_tool_failure_summary(run_id) -> list of {tool_name, error_count, last_error}\n- record_mcp_status(run_id, agent_id, server_name, status)\n- get_mcp_status(run_id) -> list of mcp status records\n\nFollow existing db.py patterns: use conn context manager, CREATE TABLE IF NOT EXISTS in ensure_tables(), parameterized queries. Read the full spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md for details.\n\nFile: src/autodev/db.py ONLY. Run existing tests after to confirm no regressions.",
       "priority": 3,
-      "status": "claimed",
+      "status": "completed",
       "claimed_by": "be8403961f82",
       "depends_on": [],
       "files_hint": [
         "src/autodev/db.py"
       ],
-      "attempt_count": 0,
+      "attempt_count": 1,
       "max_attempts": 3,
-      "result_summary": ""
+      "result_summary": "Implemented tool call tracking DB tables: updated tool_calls schema with input_summary/output_summary/is_error columns, added compound indexes, added migration for existing DBs, updated all methods to match new API, fixed all downstream consumers (cli.py, context.py, tests). 3321 tests pass, lint clean, bandit clean."
     },
     "d6737f40a6cd": {
       "id": "d6737f40a6cd",
@@ -147,10 +158,38 @@
       "attempt_count": 0,
       "max_attempts": 3,
       "result_summary": ""
+    },
+    "08e52577b377": {
+      "id": "08e52577b377",
+      "title": "Close duplicate P5/P6 tasks - work already done",
+      "description": "P5 (planner visibility) has TWO pending tasks (24b94afd26eb and 90e30f2f4c5f) but the work is already committed in context.py:548 (_render_tool_failures) and context.py:558 (_render_mcp_status), both called in build_state() at lines 526/529. P6 (CLI command) is also already implemented in cli.py:221-226 and cli.py:1483. These tasks should be marked complete to prevent agents from wasting time on already-done work. The planner will handle this administratively.",
+      "priority": 1,
+      "status": "pending",
+      "claimed_by": null,
+      "depends_on": [],
+      "files_hint": [],
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "result_summary": ""
+    },
+    "0ca9eb3b8457": {
+      "id": "0ca9eb3b8457",
+      "title": "Verify all tests pass after P3+P4 wiring",
+      "description": "After the P3+P4 implementation lands (rewriting _stream_agent_output to use _parse_stream_event and switching to stream-json), run the full test suite and verification:\n1. .venv/bin/python -m pytest tests/test_tool_tracking.py -v (tool tracking specific tests)\n2. .venv/bin/python -m pytest -q (all tests)\n3. .venv/bin/ruff check src/ tests/\n4. .venv/bin/bandit -r src/ -lll -q\nAll must pass. If test_tool_tracking.py tests fail, the parse event wiring is wrong. If other tests fail, the stream-json switch broke something.",
+      "priority": 2,
+      "status": "pending",
+      "claimed_by": null,
+      "depends_on": [],
+      "files_hint": [
+        "tests/test_tool_tracking.py"
+      ],
+      "attempt_count": 0,
+      "max_attempts": 3,
+      "result_summary": ""
     }
   },
   "planner": {
-    "cycle_count": 4,
+    "cycle_count": 5,
     "test_history": [],
     "completion_history": [
       0,
@@ -168,9 +207,11 @@
       0,
       0,
       0,
-      1
+      1,
+      2
     ],
     "failure_history": [
+      0,
       0,
       0,
       0,
@@ -189,6 +230,7 @@
       0
     ],
     "cost_history": [
+      0.0,
       0.0,
       0.0,
       0.0,
