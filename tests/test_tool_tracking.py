@@ -291,7 +291,7 @@ class TestDBToolTracking:
 		assert row["agent_name"] == "worker-1"
 		assert row["tool_name"] == "Read"
 		assert row["mcp_server"] == ""
-		assert row["success"] == 1
+		assert row["is_error"] is False
 		assert row["error_message"] == ""
 		assert row["duration_ms"] == pytest.approx(42.5)
 

@@ -1,0 +1,3 @@
+/Users/dannyliu/personal_projects/autonomous-development/scripts/run-swarm-daemon.sh: line 23:   957 Terminated: 15          "$PROJECT_DIR/.venv/bin/python" -m autodev swarm --no-dashboard >> "$LOG_FILE" 2>&1
+/Users/dannyliu/personal_projects/autonomous-development/scripts/run-swarm-daemon.sh: line 23: 21319 Terminated: 15          "$PROJECT_DIR/.venv/bin/python" -m autodev swarm --no-dashboard >> "$LOG_FILE" 2>&1
+/Users/dannyliu/personal_projects/autonomous-development/scripts/run-swarm-daemon.sh: line 23: 21806 Terminated: 15          "$PROJECT_DIR/.venv/bin/python" -m autodev swarm --no-dashboard >> "$LOG_FILE" 2>&1

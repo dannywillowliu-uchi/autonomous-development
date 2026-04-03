@@ -1,121 +1,58 @@
 {
-  "cycle": 16,
-  "mission": "The spec is ready. Here's a summary of what it covers:\n\n**GOAL.md Integration Spec** -- Adapts the [",
+  "cycle": 2,
+  "mission": "Implement tool call tracking for swarm agents.\n\nRead the full spec at docs/superpowers/specs/2026-03",
   "team_name": "autodev-autonomous-development",
   "agents": [
     {
-      "id": "8af0a558",
-      "name": "cli-goal-flag",
+      "id": "c4430643",
+      "name": "controller-rewrite",
       "role": "implementer",
       "status": "dead",
-      "task_id": "6141e5d0",
-      "completed": 0,
-      "failed": 2
-    },
-    {
-      "id": "42dc4759",
-      "name": "cli-goal-implementer",
-      "role": "implementer",
-      "status": "dead",
-      "task_id": "59012205",
-      "completed": 0,
-      "failed": 2
-    },
-    {
-      "id": "69247db7",
-      "name": "workspace-state-verifier",
-      "role": "reviewer",
-      "status": "dead",
-      "task_id": "7bc5ea82",
+      "task_id": "3de58b73",
       "completed": 0,
       "failed": 1
+    },
+    {
+      "id": "e9c1f3dd",
+      "name": "controller-state-assessor",
+      "role": "debugger",
+      "status": "working",
+      "task_id": "3de58b73",
+      "completed": 0,
+      "failed": 0
+    },
+    {
+      "id": "be840396",
+      "name": "db-tables-implementer",
+      "role": "implementer",
+      "status": "working",
+      "task_id": "73999f4e",
+      "completed": 0,
+      "failed": 0
     }
   ],
   "tasks": [
     {
-      "id": "715926b6",
-      "title": "Research goal-md format and patterns",
-      "status": "failed",
-      "claimed_by": null,
-      "attempts": 3,
+      "id": "3de58b73",
+      "title": "Rewrite _stream_agent_output + switch output format + fix mo",
+      "status": "claimed",
+      "claimed_by": "e9c1f3dd",
+      "attempts": 1,
       "max_attempts": 3,
       "priority": "CRITICAL"
     },
     {
-      "id": "6141e5d0",
-      "title": "Implement GoalConfig in config.py",
-      "status": "failed",
-      "claimed_by": null,
-      "attempts": 4,
-      "max_attempts": 3,
-      "priority": "CRITICAL"
-    },
-    {
-      "id": "33a4bcc8",
-      "title": "Implement goal.py core module",
-      "status": "failed",
-      "claimed_by": null,
-      "attempts": 3,
-      "max_attempts": 3,
-      "priority": "CRITICAL"
-    },
-    {
-      "id": "7bc5ea82",
-      "title": "Swarm integration for goal-md",
-      "status": "pending",
-      "claimed_by": null,
-      "attempts": 2,
-      "max_attempts": 3,
-      "priority": "HIGH"
-    },
-    {
-      "id": "94e964ca",
-      "title": "Mission mode integration for goal-md",
-      "status": "pending",
-      "claimed_by": null,
-      "attempts": 2,
-      "max_attempts": 3,
-      "priority": "NORMAL"
-    },
-    {
-      "id": "59012205",
-      "title": "TUI fitness score panel",
-      "status": "failed",
-      "claimed_by": null,
-      "attempts": 3,
-      "max_attempts": 3,
-      "priority": "NORMAL"
-    },
-    {
-      "id": "b0c7a59b",
-      "title": "Mark completed tasks as done",
-      "status": "pending",
-      "claimed_by": null,
+      "id": "73999f4e",
+      "title": "P1: Add tool_calls and mcp_status DB tables",
+      "status": "claimed",
+      "claimed_by": "be840396",
       "attempts": 0,
       "max_attempts": 3,
       "priority": "CRITICAL"
     },
     {
-      "id": "c49d23ee",
-      "title": "Worker prompt integration for GOAL.md fitness",
-      "status": "pending",
-      "claimed_by": null,
-      "attempts": 0,
-      "max_attempts": 3,
-      "priority": "NORMAL"
-    },
-    {
-      "id": "9cd9df72",
-      "title": "CLI --goal flag and goal-status subcommand",
-      "status": "pending",
-      "claimed_by": null,
-      "attempts": 0,
-      "max_attempts": 3,
-      "priority": "NORMAL"
-    },
-    {
-      "id": "8d5f9a66",
-      "title": "Review all GOAL.md integration changes",
+      "id": "d6737f40",
+      "title": "P2: Add _parse_stream_event() method to controller.py",
       "status": "pending",
       "claimed_by": null,
       "attempts": 0,
@@ -123,17 +60,8 @@
       "priority": "HIGH"
     },
     {
-      "id": "8a778550",
-      "title": "Worker prompt GOAL.md fitness integration",
-      "status": "pending",
-      "claimed_by": null,
-      "attempts": 0,
-      "max_attempts": 3,
-      "priority": "HIGH"
-    },
-    {
-      "id": "0b5e91ed",
-      "title": "Final integration review after all 7 spec areas complete",
+      "id": "24b94afd",
+      "title": "P5: Add tool failure and MCP status visibility to planner co",
       "status": "pending",
       "claimed_by": null,
       "attempts": 0,
@@ -141,13 +69,22 @@
       "priority": "NORMAL"
     },
     {
-      "id": "0fb1b26e",
-      "title": "Fix AD_RESULT emission in swarm worker prompt",
+      "id": "309f0dc8",
+      "title": "P6: Add autodev tool-usage CLI command",
       "status": "pending",
       "claimed_by": null,
       "attempts": 0,
       "max_attempts": 3,
-      "priority": "HIGH"
+      "priority": "NORMAL"
+    },
+    {
+      "id": "498aae23",
+      "title": "P7: Integration tests for tool call tracking",
+      "status": "pending",
+      "claimed_by": null,
+      "attempts": 0,
+      "max_attempts": 3,
+      "priority": "NORMAL"
     }
   ],
   "core_tests": {},
@@ -156,34 +93,24 @@
       "metric": "completed_tasks",
       "cycles": 5,
       "pivot": "Reduce parallelism. Focus agents on fewer, higher-impact tasks."
-    },
-    {
-      "metric": "high_failure_rate",
-      "cycles": 1,
-      "pivot": "More than half of tasks are failing. Spawn a research agent to diagnose the syst"
     }
   ],
   "discoveries": [
-    "[goal-core-impl] (report) goal.py module complete: GoalSpec/FitnessResult/IterationEntry dataclasses, parse_goal_file, run_fitness (with component weighted composite), IterationLog (JSON-backed), check_stopping, rank_actions, render_score_summary. 25 tests covering all specified cases. Full verification passes.",
-    "[goal-md-researcher] (report) Research on jmilinovich/goal-md complete. Key findings: (1) GOAL.md has 11 required sections. (2) Fitness functions output JSON with score/max keys, use check() helper for pass/partial/fail. (3) iterations.jsonl is append-only JSONL with before/after/action/result/note. (4) Three operating modes: converge, continuous, supervised. (5) Three metric mutability modes: locked, split, open. (6) Revert is git-based with atomic commits. (7) Action catalog ranked by estimated point impact with gotchas. (8) Dual-score pattern separates instrument quality from outcome quality.",
-    "[workspace-verifier] (report) WORKSPACE VERIFICATION COMPLETE. Findings: (1) goal.py: 465 lines, real implementation -- parser, fitness runner, IterationLog, check_stopping, rank_actions, render_score_summary. All present and functional. (2) test_goal.py: 25 tests, all pass. (3) config.py: GoalConfig dataclass is COMPLETE and clean -- not broken. Has GoalConfig class, _build_goal() parser, auto_detect logic in load_config(), goal field on MissionConfig. (4) test_goal_config.py: 5 tests, all pass. (5) Full suite: 3080 passed, ruff clean, bandit clean. (6) Committed all 4 files as 268e624. Workspace is clean for downstream agents.",
-    "[tui-fitness-panel] (report) Added _build_goal_panel() and _score_color() to tui.py. Panel shows composite score, per-component bars with color coding, sparkline trend, and timestamp. Conditionally integrated into sidebar layout (splits into goal+signals when active, just signals when no goal data). 26 new tests all passing. Full suite: 3106 passed, ruff clean, bandit clean.",
-    "[swarm-goal-integrator] (report) Integrated GOAL.md fitness scoring into all 5 swarm files. Added 4 new fields to SwarmState, goal evaluation in ContextSynthesizer, goal-aware system prompt addendum, score delta injection per cycle, goal_met stopping condition in planner, and goal fitness summary in completion report. 31 new tests in test_swarm_goal.py, plus fixed 4 existing tests. All 3165 tests passing, ruff clean, bandit clean.",
-    "[mission-goal-integrator] (report) Mission mode goal integration complete: (1) continuous_controller.py: _init_goal_tracking auto-detects GOAL.md, _measure_fitness runs before/after each epoch, auto-reverts on regression via green_branch._rollback_merge, goal_met stopping condition in _should_stop, fitness scores written to MISSION_STATE.md changelog. (2) deliberative_planner.py: new goal_context parameter injected into planner's project context with score summary, trend, constraints, and prioritization instructions. (3) worker.py: goal_context passed to render_mission_worker_prompt with fitness command, current score, constraints, and action catalog. (4) planner_context.py: Goal Fitness section in MISSION_STATE.md from state_changelog entries. (5) 28 new tests covering init, measurement, regression detection, stopping, worker prompts, and context building.",
-    "[cli-goal-flag] (report) CLI goal integration complete: (1) --goal flag added to both swarm and mission subcommands in build_parser(). (2) goal-status subcommand added with --goal, --config, --timeout flags. (3) cmd_goal_status() displays composite score, per-component scores with bars, target, progress percentage, and stopping status. (4) _resolve_goal_path() helper handles explicit path, config-based, and auto-detection. (5) cmd_mission/cmd_swarm wire --goal into config.goal.enabled and config.goal.goal_file. (6) 20 new tests covering arg parsing, path resolution, goal-status output, error cases, and config wiring. Full suite: 3212 passed, ruff clean, bandit clean.",
-    "[workspace-state-verifier] (report) WORKSPACE VERIFICATION COMPLETE. All 6 areas PRESENT and WORKING. 3212 tests pass, ruff clean, bandit clean. Worker prompt + CLI --goal already done. Workspace ready for final review.",
-    "[workspace-consistency-check] (report) WORKSPACE CONSISTENCY REPORT -- GOAL.md Integration\n\n== TEST RESULTS ==\n3212 passed, 1 skipped, 0 failures (86s)\n\n== LINT/SECURITY ==\nruff: All checks passed\nbandit: No issues found (clean)\n\n== COMMITTED (in git history) ==\n- PRESENT: src/autodev/goal.py (core module, 464 lines, commit 268e624)\n- PRESENT: src/autodev/config.py (GoalConfig dataclass, commit 268e624)\n- PRESENT: tests/test_goal.py (372 lines, commit 268e624)\n- PRESENT: tests/test_goal_config.py (102 lines, commit 268e624)\n\n== UNCOMMITTED BUT PRESENT IN WORKING TREE ==\n- PRESENT: src/autodev/swarm/controller.py (goal fitness summary code)\n- PRESENT: src/autodev/swarm/planner.py (fitness score tracking, goal context in cycles)\n- PRESENT: src/autodev/swarm/context.py (45 goal/fitness references)\n- PRESENT: src/autodev/swarm/prompts.py (4 goal references)\n- PRESENT: src/autodev/swarm/tui.py (18 goal/fitness references -- fitness panel)\n- PRESENT: src/autodev/swarm/worker_prompt.py (6 goal references)\n- PRESENT: src/autodev/swarm/models.py (goal fields in SwarmState)\n- PRESENT: src/autodev/continuous_controller.py (97 goal/fitness references -- mission mode)\n- PRESENT: src/autodev/deliberative_planner.py (5 goal references)\n- PRESENT: src/autodev/planner_context.py (4 goal references)\n- PRESENT: src/autodev/worker.py (29 goal references)\n- PRESENT: src/autodev/cli.py (--goal flag, goal-status subcommand)\n\n== TEST FILES (all PRESENT, all passing) ==\n- tests/test_swarm_goal.py: 31 tests (swarm-goal-integrator)\n- tests/test_goal_mission_integration.py: 28 tests (mission-goal-integrator)\n- tests/test_swarm_tui.py: 26 tests (tui-fitness-panel)\n- tests/test_worker_prompt_goal.py: 13 tests (worker prompt goal)\n- tests/test_cli_goal.py: 20 tests (CLI goal flag)\nTotal new goal tests: 118\n\n== RESEARCH ==\n- PRESENT: .claude-project/research/goal-md-format.md (22KB)\n\n== MISSING ==\nNone. All claimed work from all 6 agents is present.\n\n== RECOMMENDATION ==\nWorkspace is READY. All 6 agents' work is present, all 3212 tests pass, lint and security are clean. The uncommitted changes (14 modified files + 5 new test files) should be committed. No conflicts detected between agent outputs.",
-    "[head-verification-reviewer] (report) HEAD verification complete. All 3212 tests pass, ruff clean, bandit clean. All goal-related files verified: goal.py (parse_goal_file, GoalSpec, FitnessResult, run_fitness, check_stopping, IterationLog all importable), config.py (GoalConfig dataclass present), swarm/context.py (goal fitness evaluation integrated), swarm/planner.py (goal-based stopping + fitness delta injection), swarm/tui.py (FitnessPanel/goal panel built), cli.py (--goal flag + goal-status subcommand), continuous_controller.py (full goal tracking with iteration log, regression detection, revert support), deliberative_planner.py (goal context injection). Note: task spec referenced parse_goal_md but the actual function is parse_goal_file. No conflicts detected between agent commits."
+    "[circuit-breaker-impl-v2] (report) Circuit breaker complete. 21 tests pass. Full state machine, per-task tracking, on_trip callback, reset, get_summary. 3260 full suite passed.",
+    "[state-verifier] (report) STATE VERIFICATION REPORT -- Circuit breaker: EXISTS (173 lines, 21 tests, NOT wired into controller/planner). Checkpoint/resume: EXISTS (14 tests, IS wired into controller at 3 call sites). Stagnation extensions: EXISTS (319 lines, 30 tests, PARTIALLY wired - planner calls analyze_stagnation but does NOT pass error_messages/task_agent_counts/file_changes). BLOCKER: circuit breaker + stagnation extended params need wiring into controller.py and planner.py.",
+    "[wire-circuit-breaker] (report) All wiring complete. Circuit breaker summary exposed in SwarmState, rendered for planner when tripped, and extended stagnation params (error_messages, task_agent_counts, file_changes) forwarded from planner to analyze_stagnation(). All 3266 tests pass, ruff clean, bandit clean.",
+    "[state-verifier] (report) FINAL STATE VERIFICATION REPORT. See AD_RESULT for full details.",
+    "[state-audit] (report) STATE AUDIT REPORT (2026-03-24)\n\n1. CIRCUIT BREAKER: DONE. 21 unit + 6 integration tests pass. Wired in controller: import, init, spawn gate, success/failure recording, summary in SwarmState. Not in planner directly (correct - planner sees via state render).\n\n2. CHECKPOINT/RESUME: DONE. 14 tests pass. Wired in controller: _write_checkpoint(), from_checkpoint(), update_checkpoint_planner_state(). Atomic writes, config drift, orphan cleanup all tested.\n\n3. STAGNATION EXTENSIONS: DONE. 35 tests pass. Repeated errors, agent churn, cost efficiency, file hotspots, pivots-to-decisions. Planner calls analyze_stagnation with extended params.\n\n4. BUDGET ENFORCEMENT: PARTIAL. Spawn budget in planner (lines 210, 284). Retry budget in controller (line 1777). No BudgetConfig, no cost-cap in main loop, no predictive stagnation.\n\nFULL SUITE: 3266 passed, 1 skipped, 0 failures. No regressions.",
+    "[adresult-fix] (report) ROOT CAUSE: committed controller.py line 744 uses output_format=\"stream-json\". With stream-json, AD_RESULT markers are embedded inside JSON string fields where quotes are escaped as \\\"\u2014the brace-counting parser enters string state and never exits, returning None every time. The working copy fix (output_format=\"text\") by another agent is correct. I added: (1) extract_text_from_stream_json() utility in session.py that extracts plain text from NDJSON events, (2) updated parse_mc_result with stream-json fallback, (3) SwarmConfig.worker_output_format field defaulting to \"text\", (4) warning in build_claude_cmd when stream-json is used, (5) 14 new tests covering both formats. All 3303 tests pass (1 pre-existing failure in test_swarm_circuit_breaker_integration.py excluded\u2014belongs to circuit-breaker-impl agent).",
+    "[state-auditor] (report) STATE AUDIT REPORT (2026-03-24 - FINAL)\n\nSUMMARY: All 5 feature areas have code on disk. 4/5 fully DONE, 1 has minor test bug (not production). Full suite: 3306 passed, 3 failed, 1 skipped. Ruff clean. Bandit clean.\n\n1. CIRCUIT BREAKER: DONE (minor test bug)\n- Files: circuit_breaker.py (172 lines), test files (495 lines)\n- Tests: 24 pass, 3 FAIL (test mock bug: _agent_outputs vs _agent_final_results)\n- Wired: import, init, spawn gate, success/failure recording, SwarmState summary\n\n2. CHECKPOINT/RESUME: DONE\n- 15 tests pass. Atomic writes, config drift, orphan cleanup. 3 call sites in controller.\n\n3. STAGNATION EXTENSIONS: DONE\n- 36 tests pass. Cost efficiency + file hotspot detectors added. Extended params wired in planner.\n\n4. AD_RESULT FIX: DONE\n- 52 tests pass. output_format=text default, stream-json fallback parser, build_claude_cmd warning.\n\n5. BUDGET ENFORCEMENT: DONE\n- 31 tests pass. BudgetConfig dataclass, _check_budget, _get_budget_status, spawn blocking, cost-rate awareness, affordable-task estimation.\n\nREMAINING: Fix 3 integration test failures (test mock setup bug, not production code). Commit all work.",
+    "[budget-config-impl] (report) BudgetConfig spec fields complete. Added max_agent_spawns=20, enforce=True, is_over_budget(), is_warning() to BudgetConfig dataclass. Added 12 new spec tests (TestIsOverBudget, TestIsWarning, TestEnforceFalseAllowsOverspend, expanded TestBudgetConfigDefaults). Full suite: 3321 passed, 0 failed. Ruff clean, bandit clean.",
+    "[ground-truth-verifier] (report) GROUND TRUTH VERIFICATION REPORT (2026-03-24)\n\nUNCOMMITTED FILES (modified): .autodev-swarm-learnings.md, .autodev-swarm-state.json, logs/launchd-stderr.log, logs/swarm-daemon-stderr.log, src/autodev/config.py, src/autodev/session.py, src/autodev/swarm/context.py, src/autodev/swarm/controller.py, src/autodev/swarm/models.py, src/autodev/swarm/planner.py, src/autodev/swarm/stagnation.py, tests/test_session.py, tests/test_swarm_stagnation.py\nUNTRACKED (new): src/autodev/swarm/budget.py, src/autodev/swarm/circuit_breaker.py, tests/test_swarm_budget.py, tests/test_swarm_checkpoint.py, tests/test_swarm_circuit_breaker.py, tests/test_swarm_circuit_breaker_integration.py\nDIFF STATS: 13 files changed, 831 insertions(+), 457 deletions(-)\n\nPYTEST TOTAL: 3321 passed, 0 failed, 1 skipped\nINTEGRATION TEST (test_swarm_circuit_breaker_integration.py): 6 passed, 0 failed\nRUFF: clean (no output)\n\nVERDICT: ready-to-commit. All 3321 tests pass. Integration tests that previously had 3 mock failures are now fully passing (6/6). Ruff is clean. No blockers.",
+    "[final-commit] (report) Commit e6397f5 already contains all src/ and tests/ changes. git diff HEAD -- src/ tests/ is empty. Verification suite passes: 3321 tests, ruff clean, bandit clean. No additional commit needed."
   ],
   "cost_usd": 0.0,
-  "wall_minutes": 68.35545863679994,
+  "wall_minutes": 14.396982383333333,
   "test_history": [],
   "completion_history": [
-    0,
-    0,
-    0,
-    0,
-    0,
     0,
     0,
     0,
@@ -204,260 +131,40 @@
     0,
     0,
     0,
-    2,
-    2,
-    2,
-    2,
-    2,
-    2,
-    2,
-    2,
-    2,
-    2,
-    2,
-    2,
-    2,
-    2,
-    3,
-    3,
-    4
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
   ],
   "log_events": [
     {
       "cycle": 2,
       "decisions": [
-        "wait"
-      ],
-      "ok": 1,
-      "failed": 0,
-      "reasonings": [
-        "Patience is critical at cycle start. Killing or redirecting 30-second-old agents"
-      ]
-    },
-    {
-      "cycle": 3,
-      "decisions": [
-        "wait"
-      ],
-      "ok": 1,
-      "failed": 0,
-      "reasonings": [
-        "The analysis correctly identifies this as on-track with no intervention needed. "
-      ]
-    },
-    {
-      "cycle": 4,
-      "decisions": [
-        "spawn",
-        "wait"
-      ],
-      "ok": 2,
-      "failed": 0,
-      "reasonings": [
-        "goal-core-impl reported success but died. Changes may be uncommitted (git status",
-        "Two things must complete before next wave: (1) verifier confirms clean workspace"
-      ]
-    },
-    {
-      "cycle": 5,
-      "decisions": [
-        "wait"
-      ],
-      "ok": 1,
-      "failed": 0,
-      "reasonings": [
-        "Critical path is config.py \u2014 one agent is actively modifying it. All downstream "
-      ]
-    },
-    {
-      "cycle": 6,
-      "decisions": [
-        "create_task",
-        "spawn",
-        "spawn",
-        "spawn",
-        "wait"
-      ],
-      "ok": 5,
-      "failed": 0,
-      "reasonings": [
-        "The tracker shows 0/6 but 3 tasks are done. Fix tracking first so future cycles ",
-        "Highest impact remaining task. Swarm mode is the default -- goal integration her",
-        "Medium impact, completely independent file set from swarm integration. Can safel",
-        "Low impact but completely independent (only touches tui.py). Safe to parallelize",
-        "Three agents just spawned on independent file sets. They need at least 5-10 minu"
-      ]
-    },
-    {
-      "cycle": 7,
-      "decisions": [
-        "wait",
-        "create_task",
-        "create_task",
-        "create_task"
-      ],
-      "ok": 4,
-      "failed": 0,
-      "reasonings": [
-        "Default action is WAIT. These are substantial integration tasks that need 10-20m",
-        "Spec change area 5 has no task in the pool. Worker integration depends on goal.p",
-        "Spec change area 6 has no task in the pool. CLI depends on both goal.py core and",
-        "CLAUDE.md mandates no unreviewed commits. Three integration agents will produce "
-      ]
-    },
-    {
-      "cycle": 8,
-      "decisions": [
-        "wait",
-        "spawn",
-        "spawn"
-      ],
-      "ok": 3,
-      "failed": 0,
-      "reasonings": [
-        "Active agents are working on the two most complex tasks. Killing or redirecting ",
-        "Touches worker.py and swarm/worker_prompt.py -- zero overlap with active agents ",
-        "Touches only cli.py -- completely isolated from all other agents' files. Depende"
-      ]
-    },
-    {
-      "cycle": 9,
-      "decisions": [
-        "kill",
-        "kill",
-        "spawn",
-        "spawn",
-        "wait"
-      ],
-      "ok": 5,
-      "failed": 0,
-      "reasonings": [
-        "This agent is redoing completed research. The slot is better used for worker pro",
-        "GoalConfig is done and verified. This agent is wasting credits reimplementing it",
-        "Worker prompt integration is unblocked and has no file overlap with CLI work. Sp",
-        "CLI task has no file overlap with worker prompt work. Both can run in parallel. ",
-        "mission-goal-integrator is doing real work on the last major piece. Killing it w"
-      ]
-    },
-    {
-      "cycle": 10,
-      "decisions": [
-        "kill",
-        "kill",
-        "kill",
-        "kill",
-        "spawn",
-        "wait"
-      ],
-      "ok": 6,
-      "failed": 0,
-      "reasonings": [
-        "Agent is re-researching worker prompt integration that was already completed. Wa",
-        "GoalConfig was implemented and verified by a dead agent. This agent is redoing t",
-        "goal.py module was already implemented with parser, fitness runner, and stopping",
-        "TUI panel with component bars and sparkline was already implemented and verified",
-        "Dead agents committed at different baselines (3080-3165 tests). Must verify comb"
-      ]
-    },
-    {
-      "cycle": 11,
-      "decisions": [
         "spawn",
         "create_task",
-        "wait"
-      ],
-      "ok": 3,
-      "failed": 0,
-      "reasonings": [
-        "Multiple agents modified overlapping files (config.py, goal.py, worker.py). Befo",
-        "One of 2 remaining real tasks. Goal.py and GoalConfig are done (verified by prev",
-        "The reviewer must confirm workspace integrity first. Spawning implementers on a "
-      ]
-    },
-    {
-      "cycle": 12,
-      "decisions": [
-        "kill",
-        "kill",
-        "kill",
-        "kill",
-        "spawn",
-        "spawn",
         "create_task",
-        "adjust"
+        "create_task",
+        "create_task",
+        "create_task",
+        "spawn",
+        "wait"
       ],
       "ok": 8,
       "failed": 0,
       "reasonings": [
-        "Agent is working on a task that a previous agent already completed and verified.",
-        "Agent is working on a task that a previous agent already completed.",
-        "Agent is working on a task that a previous agent already completed.",
-        "Agent is working on a task that a previous agent already completed.",
-        "This is the only remaining spec area (5 of 7). Two prior agents failed -- giving"
-      ]
-    },
-    {
-      "cycle": 13,
-      "decisions": [
-        "kill",
-        "kill",
-        "kill",
-        "kill",
-        "kill",
-        "adjust",
-        "wait"
-      ],
-      "ok": 7,
-      "failed": 0,
-      "reasonings": [
-        "Agent spawned 30s ago to redo verification that's already done. Pure credit wast",
-        "goal.py is done and committed. Respawning agents to redo it risks introducing me",
-        "CLI --goal flag and TUI fitness panel already implemented and tested.",
-        "Agent already reported its task done. Kill to free resources.",
-        "Verification is done. No reason to keep this agent alive."
-      ]
-    },
-    {
-      "cycle": 14,
-      "decisions": [
-        "kill",
-        "kill",
-        "create_task",
-        "wait"
-      ],
-      "ok": 4,
-      "failed": 0,
-      "reasonings": [
-        "Agent completed its task. Idle agents on completed work risk corrupting the clea",
-        "Agent completed its task. Free the slot for the final review agent.",
-        "Systemic AD_RESULT emission failure caused all task tracking to report 0% comple",
-        "The reviewer needs time to run pytest (3212 tests), ruff, bandit, review the dif"
-      ]
-    },
-    {
-      "cycle": 15,
-      "decisions": [
-        "wait"
-      ],
-      "ok": 1,
-      "failed": 0,
-      "reasonings": [
-        "This is a serialized close-out phase. Both agents need time to do thorough work "
-      ]
-    },
-    {
-      "cycle": 16,
-      "decisions": [
-        "kill",
-        "kill",
-        "wait"
-      ],
-      "ok": 3,
-      "failed": 0,
-      "reasonings": [
-        "Dead agent consuming tracking resources. Its work is already in the working tree",
-        "Dead agent cleanup. All implementation work is present and passing tests.",
-        "The commit agent needs 1-3 minutes to run pytest + ruff + bandit + git add + git"
+        "controller.py has uncommitted modifications from the dead controller-rewrite age",
+        "DB tables are the foundation everything else depends on. Independent of controll",
+        "The parse method is a prerequisite for the stream rewrite (P3) and output format",
+        "Planner visibility depends on DB tables (P1) but NOT on controller.py work (P2-P",
+        "CLI command depends on DB tables (P1) but NOT on controller.py work. Can be para"
       ]
     }
   ]

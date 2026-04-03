@@ -1,0 +1,11 @@
+=== Swarm daemon starting at Fri Mar 20 07:39:16 PDT 2026 ===
+07:39:21 INFO autodev.swarm.controller: Swarm controller initialized for team autodev-autonomous-development
+07:39:21 WARNING autodev.notifier: Telegram connection error: [Errno 8] nodename nor servname provided, or not known, retry after 1.0s (1/3)
+07:39:30 INFO httpx: HTTP Request: POST https://api.telegram.org/bot8685447637:AAGCWVSvkG9QrpUalBgVwhwi9KL0NvbCUrs/sendMessage "HTTP/1.1 200 OK"
+07:39:30 INFO autodev.swarm.planner: Driving planner started
+07:41:29 INFO autodev.swarm.planner: Parsed 1 decisions from planner (cycle 1)
+07:41:29 INFO autodev.swarm.controller: Spawned agent verify-tool-tracking-complete (tester) for task None
+07:41:33 WARNING autodev.swarm.controller: Trace streaming error for verify-tool-tracking-complete: Separator is found, but chunk is longer than limit
+07:45:25 INFO autodev.swarm.planner: Parsed 1 decisions from planner (cycle 2)
+07:45:25 INFO autodev.swarm.controller: Planner waiting 0s: Mission complete. All 7 spec items (DB tables, stream-JSON parsing, rewritten _stream_agent_output, output format switch, planner visibility, CLI command, tests) implemented, verified by independent agent (3220/3220 tests pass, ruff clean, bandit clean), and committed at HEAD 0330003. No further agent spawns or tasks needed.
+07:45:25 INFO autodev.swarm.planner: Cycle 2: 1 decisions (wait), 1 ok, 0 failed

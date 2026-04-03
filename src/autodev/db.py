@@ -596,17 +596,22 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	run_id TEXT NOT NULL,
 	agent_id TEXT NOT NULL,
-	agent_name TEXT NOT NULL,
+	agent_name TEXT NOT NULL DEFAULT '',
 	tool_name TEXT NOT NULL,
-	mcp_server TEXT NOT NULL DEFAULT '',
+	mcp_server TEXT,
+	input_summary TEXT,
+	output_summary TEXT,
+	is_error INTEGER NOT NULL DEFAULT 0,
 	success INTEGER NOT NULL DEFAULT 1,
-	error_message TEXT NOT NULL DEFAULT '',
-	timestamp TEXT NOT NULL,
-	duration_ms REAL NOT NULL DEFAULT 0.0
+	error_message TEXT,
+	duration_ms INTEGER,
+	timestamp TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_run ON tool_calls(run_id);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_agent ON tool_calls(agent_id);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool_name);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_run_agent ON tool_calls(run_id, agent_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_run_tool ON tool_calls(run_id, tool_name);
 
 CREATE TABLE IF NOT EXISTS mcp_status (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -614,8 +619,9 @@ CREATE TABLE IF NOT EXISTS mcp_status (
 	agent_id TEXT NOT NULL,
 	server_name TEXT NOT NULL,
 	status TEXT NOT NULL,
-	timestamp TEXT NOT NULL
+	timestamp TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_mcp_status_run ON mcp_status(run_id);
 """
 
 
@@ -674,6 +680,7 @@ class Database:
 		self._migrate_chain_id_column()
 		self._migrate_knowledge_items()
 		self._migrate_parent_unit_id_column()
+		self._migrate_tool_calls_columns()
 
 	def _migrate_degradation_level_column(self) -> None:
 		"""Add degradation_level column to missions table (idempotent)."""
@@ -922,6 +929,24 @@ class Database:
 			else:
 				logger.warning("Migration failed for work_units.parent_unit_id: %s", exc)
 				raise
+
+	def _migrate_tool_calls_columns(self) -> None:
+		"""Add input_summary, output_summary, is_error columns to tool_calls (idempotent)."""
+		migrations = [
+			("tool_calls", "input_summary", "ALTER TABLE tool_calls ADD COLUMN input_summary TEXT"),
+			("tool_calls", "output_summary", "ALTER TABLE tool_calls ADD COLUMN output_summary TEXT"),
+			("tool_calls", "is_error", "ALTER TABLE tool_calls ADD COLUMN is_error INTEGER NOT NULL DEFAULT 0"),
+		]
+		for table, col, sql in migrations:
+			try:
+				self.conn.execute(sql)
+				logger.debug("Migration: added column %s.%s", table, col)
+			except sqlite3.OperationalError as exc:
+				if "duplicate column name" in str(exc):
+					pass
+				else:
+					logger.warning("Migration failed for %s.%s: %s", table, col, exc)
+					raise
 
 	def close(self) -> None:
 		logger.debug("Closing database connection")
@@ -3375,20 +3400,30 @@ class Database:
 		self,
 		run_id: str,
 		agent_id: str,
-		agent_name: str,
 		tool_name: str,
-		mcp_server: str = "",
-		success: bool = True,
-		error_message: str = "",
+		mcp_server: str | None = None,
+		input_summary: str | None = None,
+		output_summary: str | None = None,
+		is_error: bool = False,
+		error_message: str | None = None,
+		duration_ms: int | None = None,
+		agent_name: str = "",
+		success: bool | None = None,
 		timestamp: str = "",
-		duration_ms: float = 0.0,
 	) -> None:
 		"""Record a single tool call."""
+		if success is not None and not is_error:
+			is_error = not success
+		effective_success = 0 if is_error else 1
 		self.conn.execute(
 			"INSERT INTO tool_calls "
-			"(run_id, agent_id, agent_name, tool_name, mcp_server, success, error_message, timestamp, duration_ms) "
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			(run_id, agent_id, agent_name, tool_name, mcp_server, int(success), error_message, timestamp, duration_ms),
+			"(run_id, agent_id, agent_name, tool_name, mcp_server, input_summary, output_summary, "
+			"is_error, success, error_message, duration_ms, timestamp) "
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), datetime('now')))",
+			(
+				run_id, agent_id, agent_name, tool_name, mcp_server, input_summary, output_summary,
+				int(is_error), effective_success, error_message, duration_ms, timestamp,
+			),
 		)
 		self.conn.commit()
 
@@ -3396,6 +3431,7 @@ class Database:
 		self,
 		run_id: str | None = None,
 		agent_id: str | None = None,
+		tool_name: str | None = None,
 		limit: int = 100,
 	) -> list[dict[str, Any]]:
 		"""Return tool calls with optional filters, most recent first."""
@@ -3407,6 +3443,9 @@ class Database:
 		if agent_id:
 			clauses.append("agent_id = ?")
 			params.append(agent_id)
+		if tool_name:
+			clauses.append("tool_name = ?")
+			params.append(tool_name)
 		where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
 		params.append(limit)
 		rows = self.conn.execute(
@@ -3421,10 +3460,12 @@ class Database:
 				"agent_name": r["agent_name"],
 				"tool_name": r["tool_name"],
 				"mcp_server": r["mcp_server"],
-				"success": bool(r["success"]),
+				"input_summary": r["input_summary"],
+				"output_summary": r["output_summary"],
+				"is_error": bool(r["is_error"]),
 				"error_message": r["error_message"],
-				"timestamp": r["timestamp"],
 				"duration_ms": r["duration_ms"],
+				"timestamp": r["timestamp"],
 			}
 			for r in rows
 		]
@@ -3433,21 +3474,21 @@ class Database:
 		"""Return tool failure counts grouped by tool_name, ordered by count desc."""
 		if run_id:
 			rows = self.conn.execute(
-				"SELECT tool_name, COUNT(*) as failure_count, MAX(error_message) as last_error "
-				"FROM tool_calls WHERE success = 0 AND run_id = ? "
-				"GROUP BY tool_name ORDER BY failure_count DESC",
+				"SELECT tool_name, COUNT(*) as error_count, MAX(error_message) as last_error "
+				"FROM tool_calls WHERE is_error = 1 AND run_id = ? "
+				"GROUP BY tool_name ORDER BY error_count DESC",
 				(run_id,),
 			).fetchall()
 		else:
 			rows = self.conn.execute(
-				"SELECT tool_name, COUNT(*) as failure_count, MAX(error_message) as last_error "
-				"FROM tool_calls WHERE success = 0 "
-				"GROUP BY tool_name ORDER BY failure_count DESC",
+				"SELECT tool_name, COUNT(*) as error_count, MAX(error_message) as last_error "
+				"FROM tool_calls WHERE is_error = 1 "
+				"GROUP BY tool_name ORDER BY error_count DESC",
 			).fetchall()
 		return [
 			{
 				"tool_name": r["tool_name"],
-				"failure_count": r["failure_count"],
+				"error_count": r["error_count"],
 				"last_error": r["last_error"],
 			}
 			for r in rows
@@ -3459,12 +3500,12 @@ class Database:
 		agent_id: str,
 		server_name: str,
 		status: str,
-		timestamp: str,
+		timestamp: str = "",
 	) -> None:
 		"""Record MCP server connection status."""
 		self.conn.execute(
 			"INSERT INTO mcp_status (run_id, agent_id, server_name, status, timestamp) "
-			"VALUES (?, ?, ?, ?, ?)",
+			"VALUES (?, ?, ?, ?, COALESCE(NULLIF(?, ''), datetime('now')))",
 			(run_id, agent_id, server_name, status, timestamp),
 		)
 		self.conn.commit()

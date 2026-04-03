@@ -1,0 +1,11 @@
+=== Swarm daemon starting at Fri Mar 20 07:59:46 PDT 2026 ===
+07:59:50 INFO autodev.swarm.controller: Swarm controller initialized for team autodev-autonomous-development
+07:59:51 INFO httpx: HTTP Request: POST https://api.telegram.org/bot8685447637:AAGCWVSvkG9QrpUalBgVwhwi9KL0NvbCUrs/sendMessage "HTTP/1.1 200 OK"
+07:59:51 INFO autodev.swarm.planner: Driving planner started
+08:00:55 INFO autodev.swarm.planner: Parsed 2 decisions from planner (cycle 1)
+08:00:55 INFO autodev.swarm.controller: Spawned agent verify-current-state (researcher) for task None
+08:00:55 INFO autodev.swarm.controller: Planner waiting 90s: Wait for verification agent to confirm current state before spawning implementation agents. If work is already done, we avoid wasting budget on 4-6 unnecessary agents.
+08:00:58 WARNING autodev.swarm.controller: Trace streaming error for verify-current-state: Separator is found, but chunk is longer than limit
+08:04:06 INFO autodev.swarm.planner: Parsed 1 decisions from planner (cycle 2)
+08:04:06 INFO autodev.swarm.controller: Planner waiting 0s: Mission is complete. All 7 spec items verified by 3 independent agents. 3220 tests pass, ruff clean, bandit clean. No uncommitted source changes. Recommend terminating the swarm run and selecting the next objective.
+08:04:06 INFO autodev.swarm.planner: Cycle 2: 1 decisions (wait), 1 ok, 0 failed
