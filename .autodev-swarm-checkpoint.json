@@ -1,32 +1,21 @@
 {
   "version": 1,
   "run_id": "2026-04-03_06-39-00",
-  "timestamp": "2026-04-03T07:20:39.942054+00:00",
+  "timestamp": "2026-04-03T07:24:12.051196+00:00",
   "team_name": "autodev-autonomous-development",
   "config_hash": "ea822f3146b51db1",
   "start_commit": "e6397f519f50faae01d0094d76fcc0fc2a43ce82",
   "total_cost_usd": 0.0,
   "agent_costs": {},
   "agents": {
-    "b8a35045ede7": {
-      "id": "b8a35045ede7",
-      "name": "final-verifier",
-      "role": "tester",
-      "status": "dead",
-      "current_task_id": "24b94afd26eb",
-      "spawned_at": "2026-04-03T07:09:21.752228+00:00",
-      "tasks_completed": 1,
-      "tasks_failed": 0,
-      "pid": null
-    },
     "085dcc5f38e1": {
       "id": "085dcc5f38e1",
       "name": "cli-tool-usage",
       "role": "implementer",
-      "status": "working",
+      "status": "dead",
       "current_task_id": "309f0dc87eb2",
       "spawned_at": "2026-04-03T07:14:33.054310+00:00",
-      "tasks_completed": 0,
+      "tasks_completed": 1,
       "tasks_failed": 0,
       "pid": null
     },
@@ -34,12 +23,23 @@
       "id": "95b223700c8b",
       "name": "p7-integration-tests",
       "role": "tester",
-      "status": "working",
+      "status": "dead",
       "current_task_id": "498aae231f4c",
       "spawned_at": "2026-04-03T07:16:08.343293+00:00",
-      "tasks_completed": 0,
+      "tasks_completed": 1,
       "tasks_failed": 0,
       "pid": null
+    },
+    "207f2645194f": {
+      "id": "207f2645194f",
+      "name": "final-commit-verifier",
+      "role": "reviewer",
+      "status": "working",
+      "current_task_id": "90e30f2f4c5f",
+      "spawned_at": "2026-04-03T07:22:12.043214+00:00",
+      "tasks_completed": 0,
+      "tasks_failed": 0,
+      "pid": 33269
     }
   },
   "tasks": {
@@ -108,38 +108,38 @@
       "title": "P6: Add autodev tool-usage CLI command",
       "description": "In src/autodev/cli.py, add a new subcommand 'tool-usage' under the autodev CLI.\n\nFlags:\n- --run-id: Filter by run ID (optional, defaults to latest)\n- --failures-only: Show only failed tool calls\n- --top N: Show top N most-used tools (default 10)\n\nOutput: Formatted table showing tool name, call count, error count, error rate, avg duration. If --failures-only, show tool name, error count, last error message. Use the db.get_tool_usage() and db.get_tool_failure_summary() methods.\n\nRead the full spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md. File: src/autodev/cli.py ONLY. Depends on DB tables (P1) existing.",
       "priority": 1,
-      "status": "claimed",
+      "status": "completed",
       "claimed_by": "085dcc5f38e1",
       "depends_on": [],
       "files_hint": [
         "src/autodev/cli.py"
       ],
-      "attempt_count": 0,
+      "attempt_count": 1,
       "max_attempts": 3,
-      "result_summary": ""
+      "result_summary": "Implemented autodev tool-usage CLI command with aggregated summary table showing call count, avg duration, and failure count per tool. Fixed is_error/success field mismatch, added proper DB context manager, and --top defaults to all."
     },
     "498aae231f4c": {
       "id": "498aae231f4c",
       "title": "P7: Integration tests for tool call tracking",
       "description": "Create tests/test_tool_tracking.py with comprehensive tests for the tool tracking feature.\n\nTest categories:\n1. Stream event parsing: test _parse_stream_event with init events (MCP status), assistant events (tool_use start), user events (tool_result completion), result events (final text), and invalid JSON handling.\n2. DB methods: test record_tool_call, get_tool_usage, get_tool_failure_summary, record_mcp_status, get_mcp_status with various filters.\n3. MCP server name extraction: test mcp__server__tool -> server parsing, non-MCP tool names, edge cases.\n4. AD_RESULT extraction: test extraction from stream-json result event, fallback to text parsing.\n5. End-to-end: mock a stream of JSON events, verify they produce correct DB records and planner context.\n\nUse pytest fixtures. Use in-memory SQLite for DB tests. Mock subprocess output for stream tests. All existing tests must still pass.\n\nRead the full spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md. File: tests/test_tool_tracking.py. Run full test suite after.",
       "priority": 1,
-      "status": "claimed",
+      "status": "completed",
       "claimed_by": "95b223700c8b",
       "depends_on": [],
       "files_hint": [
         "tests/test_tool_tracking.py"
       ],
-      "attempt_count": 0,
+      "attempt_count": 1,
       "max_attempts": 3,
-      "result_summary": ""
+      "result_summary": "Added 20 comprehensive integration tests to tests/test_tool_tracking.py covering stream event parsing edge cases, DB method filters/limits/nullables, MCP status deduplication, and AD_RESULT fallback chain. All 35 tests pass, full suite (3341) green, ruff and bandit clean."
     },
     "90e30f2f4c5f": {
       "id": "90e30f2f4c5f",
       "title": "P5: Planner visibility - tool failures and MCP status in context",
       "description": "In swarm/context.py, add _render_tool_failures() and _render_mcp_status() methods that query the DB tables created in P1. Include their output in build_state() so the planner sees tool failure patterns and broken MCP servers in its cycle state text. Depends on P1 (DB tables and query methods in db.py). Read the spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md for details.",
       "priority": 1,
-      "status": "pending",
-      "claimed_by": null,
+      "status": "claimed",
+      "claimed_by": "207f2645194f",
       "depends_on": [],
       "files_hint": [
         "src/autodev/swarm/context.py"
@@ -194,7 +194,7 @@
     }
   },
   "planner": {
-    "cycle_count": 9,
+    "cycle_count": 10,
     "test_history": [],
     "completion_history": [
       0,
@@ -217,9 +217,11 @@
       3,
       3,
       4,
-      4
+      4,
+      6
     ],
     "failure_history": [
+      0,
       0,
       0,
       0,
@@ -243,6 +245,7 @@
       0
     ],
     "cost_history": [
+      0.0,
       0.0,
       0.0,
       0.0,

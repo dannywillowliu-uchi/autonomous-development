@@ -86,3 +86,15 @@
 00:21:10 INFO autodev.swarm.controller: Auto-committed task 'P6: Add autodev tool-usage CLI command': dea1e07a
 00:21:10 INFO httpx: HTTP Request: POST https://api.telegram.org/bot8685447637:AAGCWVSvkG9QrpUalBgVwhwi9KL0NvbCUrs/sendMessage "HTTP/1.1 200 OK"
 00:21:11 INFO autodev.swarm.controller: Auto-pushed to origin/main
+00:21:11 INFO autodev.swarm.controller: Auto-committed task 'P7: Integration tests for tool call tracking': 7e4d4741
+00:21:12 INFO httpx: HTTP Request: POST https://api.telegram.org/bot8685447637:AAGCWVSvkG9QrpUalBgVwhwi9KL0NvbCUrs/sendMessage "HTTP/1.1 200 OK"
+00:21:13 INFO autodev.swarm.controller: Auto-pushed to origin/main
+00:21:13 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:21:13 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:21:13 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:21:13 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:22:12 INFO autodev.swarm.planner: Parsed 2 decisions from planner (cycle 10)
+00:22:12 INFO autodev.swarm.controller: Auto-assigned spawn 'final-commit-verifier' to unclaimed task 90e30f2f4c5f (P5: Planner visibility - tool failures and MCP status in context)
+00:22:12 INFO autodev.swarm.controller: Spawned agent final-commit-verifier (reviewer) for task 90e30f2f4c5f
+00:22:12 INFO autodev.swarm.controller: Planner waiting 120s: Let the final-commit-verifier agent run the full verification suite and commit. This is the last step before mission completion.
+00:24:12 INFO autodev.swarm.planner: Cycle 10: 2 decisions (spawn, wait), 2 ok, 0 failed
