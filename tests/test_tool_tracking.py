@@ -359,6 +359,153 @@ class TestDBToolTracking:
 		assert len(failed) == 1
 		assert failed[0]["server_name"] == "stitch"
 
+	def test_get_tool_usage_empty(self, real_db: Database) -> None:
+		"""get_tool_usage on empty table should return empty list."""
+		results = real_db.get_tool_usage(run_id="nonexistent")
+		assert results == []
+
+	def test_get_tool_failure_summary_no_failures(self, real_db: Database) -> None:
+		"""Failure summary with only successful calls should return empty list."""
+		real_db.record_tool_call(
+			run_id="run-ok",
+			agent_id="a1",
+			agent_name="w1",
+			tool_name="Read",
+			success=True,
+			timestamp="2026-03-15T10:00:00",
+		)
+		summary = real_db.get_tool_failure_summary(run_id="run-ok")
+		assert summary == []
+
+	def test_get_tool_usage_filter_by_agent(self, real_db: Database) -> None:
+		"""get_tool_usage should filter by agent_id when provided."""
+		for agent in ["a1", "a2"]:
+			real_db.record_tool_call(
+				run_id="run-1",
+				agent_id=agent,
+				agent_name=f"worker-{agent}",
+				tool_name="Read",
+				success=True,
+				timestamp="2026-03-15T10:00:00",
+			)
+		results = real_db.get_tool_usage(agent_id="a1")
+		assert len(results) == 1
+		assert results[0]["agent_id"] == "a1"
+
+	def test_get_tool_usage_filter_by_tool_name(self, real_db: Database) -> None:
+		"""get_tool_usage should filter by tool_name when provided."""
+		for tool in ["Read", "Bash", "Read"]:
+			real_db.record_tool_call(
+				run_id="run-1",
+				agent_id="a1",
+				agent_name="w1",
+				tool_name=tool,
+				success=True,
+				timestamp="2026-03-15T10:00:00",
+			)
+		results = real_db.get_tool_usage(tool_name="Read")
+		assert len(results) == 2
+		assert all(r["tool_name"] == "Read" for r in results)
+
+	def test_get_tool_usage_respects_limit(self, real_db: Database) -> None:
+		"""get_tool_usage should respect the limit parameter."""
+		for i in range(5):
+			real_db.record_tool_call(
+				run_id="run-1",
+				agent_id="a1",
+				agent_name="w1",
+				tool_name="Read",
+				success=True,
+				timestamp=f"2026-03-15T10:0{i}:00",
+			)
+		results = real_db.get_tool_usage(run_id="run-1", limit=3)
+		assert len(results) == 3
+
+	def test_record_tool_call_success_param_sets_is_error(self, real_db: Database) -> None:
+		"""Passing success=False should set is_error=True in the DB."""
+		real_db.record_tool_call(
+			run_id="run-1",
+			agent_id="a1",
+			agent_name="w1",
+			tool_name="Bash",
+			success=False,
+			error_message="exit code 1",
+			timestamp="2026-03-15T10:00:00",
+		)
+		results = real_db.get_tool_usage(run_id="run-1")
+		assert len(results) == 1
+		assert results[0]["is_error"] is True
+
+	def test_record_tool_call_duplicate_entries(self, real_db: Database) -> None:
+		"""Multiple calls with same params should create separate rows."""
+		for _ in range(3):
+			real_db.record_tool_call(
+				run_id="run-1",
+				agent_id="a1",
+				agent_name="w1",
+				tool_name="Read",
+				success=True,
+				timestamp="2026-03-15T10:00:00",
+			)
+		results = real_db.get_tool_usage(run_id="run-1")
+		assert len(results) == 3
+
+	def test_mcp_status_multiple_agents_same_server(self, real_db: Database) -> None:
+		"""Multiple agents reporting same MCP server should each get their own row."""
+		for agent in ["a1", "a2", "a3"]:
+			real_db.record_mcp_status(
+				run_id="run-1",
+				agent_id=agent,
+				server_name="obsidian",
+				status="connected",
+				timestamp="2026-03-15T10:00:00",
+			)
+		results = real_db.get_mcp_status(run_id="run-1")
+		assert len(results) == 3
+		assert all(r["server_name"] == "obsidian" for r in results)
+		agents = {r["agent_id"] for r in results}
+		assert agents == {"a1", "a2", "a3"}
+
+	def test_get_mcp_status_empty(self, real_db: Database) -> None:
+		"""get_mcp_status on nonexistent run should return empty list."""
+		results = real_db.get_mcp_status(run_id="nonexistent")
+		assert results == []
+
+	def test_get_tool_failure_summary_without_run_id(self, real_db: Database) -> None:
+		"""Failure summary without run_id should aggregate across all runs."""
+		for run in ["run-1", "run-2"]:
+			real_db.record_tool_call(
+				run_id=run,
+				agent_id="a1",
+				agent_name="w1",
+				tool_name="Bash",
+				success=False,
+				error_message="fail",
+				timestamp="2026-03-15T10:00:00",
+			)
+		summary = real_db.get_tool_failure_summary()
+		assert len(summary) == 1
+		assert summary[0]["error_count"] == 2
+
+	def test_record_tool_call_nullable_fields(self, real_db: Database) -> None:
+		"""Fields with None values should be stored correctly."""
+		real_db.record_tool_call(
+			run_id="run-1",
+			agent_id="a1",
+			agent_name="w1",
+			tool_name="Read",
+			mcp_server=None,
+			input_summary=None,
+			output_summary=None,
+			error_message=None,
+			duration_ms=None,
+			timestamp="2026-03-15T10:00:00",
+		)
+		results = real_db.get_tool_usage(run_id="run-1")
+		assert len(results) == 1
+		assert results[0]["mcp_server"] is None
+		assert results[0]["duration_ms"] is None
+
 
 # -- Integration: AD_RESULT from stream-json ---------------------------------
 
@@ -390,6 +537,38 @@ class TestADResultFromStream:
 		result = ctrl._parse_ad_result(output)
 		assert result is not None
 		assert result["status"] == "completed"
+
+	def test_ad_result_fallback_to_agent_outputs(self, ctrl: SwarmController) -> None:
+		"""When _agent_final_results is empty, _agent_outputs should be used."""
+		agent_id = "agent-fallback"
+		ad_result_text = 'AD_RESULT:{"status":"completed","summary":"fallback"}'
+
+		# Only set _agent_outputs (no final_results)
+		ctrl._agent_outputs[agent_id] = ad_result_text
+
+		final = ctrl._agent_final_results.get(agent_id, "")
+		fallback = ctrl._agent_outputs.get(agent_id, "")
+
+		output = final or fallback
+		assert "AD_RESULT" in output
+
+		result = ctrl._parse_ad_result(output)
+		assert result is not None
+		assert result["summary"] == "fallback"
+
+	def test_ad_result_missing_from_both(self, ctrl: SwarmController) -> None:
+		"""When neither source has AD_RESULT, _parse_ad_result should return None."""
+		agent_id = "agent-none"
+		ctrl._agent_outputs[agent_id] = "some output without the marker"
+
+		output = ctrl._agent_final_results.get(agent_id, "") or ctrl._agent_outputs.get(agent_id, "")
+		result = ctrl._parse_ad_result(output)
+		assert result is None
+
+	def test_parse_ad_result_malformed_json(self, ctrl: SwarmController) -> None:
+		"""AD_RESULT with malformed JSON should return None."""
+		result = ctrl._parse_ad_result('AD_RESULT:{not valid json}')
+		assert result is None
 
 
 # -- Edge Cases ---------------------------------------------------------------
@@ -506,3 +685,99 @@ class TestStreamParsingEdgeCases:
 			json.dumps(event), "agent-1", "worker-1", pending, tool_calls,
 		)
 		assert ctrl._db.record_mcp_status.call_count == 0
+
+	def test_init_event_with_empty_mcp_servers(self, ctrl: SwarmController) -> None:
+		"""Init event with empty mcp_servers list should not record anything."""
+		event = {"type": "system", "subtype": "init", "mcp_servers": []}
+		pending: dict[str, dict] = {}
+		tool_calls: list[dict] = []
+
+		ctrl._parse_stream_event(
+			json.dumps(event), "agent-1", "worker-1", pending, tool_calls,
+		)
+		assert ctrl._db.record_mcp_status.call_count == 0
+
+	def test_tool_result_no_content_field(self, ctrl: SwarmController) -> None:
+		"""Tool result with missing content field should still record with empty error."""
+		tool_use = {
+			"type": "assistant",
+			"message": {"content": [{"id": "tu_nc", "name": "Bash", "type": "tool_use", "input": {}}]},
+		}
+		tool_result = {
+			"type": "user",
+			"message": {
+				"content": [
+					{"type": "tool_result", "tool_use_id": "tu_nc", "is_error": True},
+				],
+			},
+		}
+		pending: dict[str, dict] = {}
+		tool_calls: list[dict] = []
+
+		ctrl._parse_stream_event(json.dumps(tool_use), "a1", "w1", pending, tool_calls)
+		ctrl._parse_stream_event(json.dumps(tool_result), "a1", "w1", pending, tool_calls)
+
+		assert len(tool_calls) == 1
+		assert tool_calls[0]["success"] is False
+		# No content field -> error_message should be empty string (no content to extract)
+		assert tool_calls[0]["error_message"] == ""
+
+	def test_unknown_event_type_ignored(self, ctrl: SwarmController) -> None:
+		"""Events with unknown types should be silently ignored."""
+		event = {"type": "ping", "data": "heartbeat"}
+		pending: dict[str, dict] = {}
+		tool_calls: list[dict] = []
+
+		ctrl._parse_stream_event(json.dumps(event), "a1", "w1", pending, tool_calls)
+		assert len(tool_calls) == 0
+		assert len(pending) == 0
+
+	def test_assistant_event_mixed_content_types(self, ctrl: SwarmController) -> None:
+		"""Assistant event with both text and tool_use blocks should only track tool_use."""
+		event = {
+			"type": "assistant",
+			"message": {
+				"content": [
+					{"type": "text", "text": "Let me read that file."},
+					{"id": "tu_mix", "name": "Read", "type": "tool_use", "input": {}},
+				],
+			},
+		}
+		pending: dict[str, dict] = {}
+		tool_calls: list[dict] = []
+
+		ctrl._parse_stream_event(json.dumps(event), "a1", "w1", pending, tool_calls)
+		assert len(pending) == 1
+		assert "tu_mix" in pending
+
+	def test_result_event_empty_text(self, ctrl: SwarmController) -> None:
+		"""Result event with empty result string should not populate _agent_final_results."""
+		event = {"type": "result", "result": ""}
+		pending: dict[str, dict] = {}
+		tool_calls: list[dict] = []
+
+		ctrl._parse_stream_event(json.dumps(event), "a-empty", "w1", pending, tool_calls)
+		assert "a-empty" not in ctrl._agent_final_results
+
+	def test_error_message_truncated_to_500_chars(self, ctrl: SwarmController) -> None:
+		"""Error messages longer than 500 chars should be truncated."""
+		long_error = "x" * 1000
+		tool_use = {
+			"type": "assistant",
+			"message": {"content": [{"id": "tu_long", "name": "Bash", "type": "tool_use", "input": {}}]},
+		}
+		tool_result = {
+			"type": "user",
+			"message": {
+				"content": [
+					{"type": "tool_result", "tool_use_id": "tu_long", "content": long_error, "is_error": True},
+				],
+			},
+		}
+		pending: dict[str, dict] = {}
+		tool_calls: list[dict] = []
+
+		ctrl._parse_stream_event(json.dumps(tool_use), "a1", "w1", pending, tool_calls)
+		ctrl._parse_stream_event(json.dumps(tool_result), "a1", "w1", pending, tool_calls)
+
+		assert len(tool_calls[0]["error_message"]) == 500

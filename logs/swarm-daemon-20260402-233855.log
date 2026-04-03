@@ -68,3 +68,18 @@
 00:14:33 INFO autodev.swarm.controller: Auto-assigned spawn 'cli-tool-usage' to unclaimed task 309f0dc87eb2 (P6: Add autodev tool-usage CLI command)
 00:14:33 INFO autodev.swarm.controller: Spawned agent cli-tool-usage (implementer) for task 309f0dc87eb2
 00:14:33 INFO autodev.swarm.planner: Cycle 7: 2 decisions (wait, spawn), 2 ok, 0 failed
+00:15:03 INFO autodev.swarm.controller: Auto-committed task 'P5: Add tool failure and MCP status visibility to planner context': e106b67d
+00:15:03 INFO httpx: HTTP Request: POST https://api.telegram.org/bot8685447637:AAGCWVSvkG9QrpUalBgVwhwi9KL0NvbCUrs/sendMessage "HTTP/1.1 200 OK"
+00:15:04 INFO autodev.swarm.controller: Auto-pushed to origin/main
+00:15:04 INFO autodev.swarm.learnings: Added learning to /Users/dannyliu/personal_projects/autonomous-development/.autodev-swarm-learnings.md
+00:16:08 INFO autodev.swarm.planner: Parsed 3 decisions from planner (cycle 8)
+00:16:08 WARNING autodev.swarm.planner: Validation gate rejected: Decision #2 (create_task): duplicate task ('p7: integration tests for tool call tracking' ~100% similar to 'p7: integration tests for tool call tracking')
+00:16:08 INFO autodev.swarm.planner: Validation gate: 2/3 decisions passed, 1 rejected
+00:16:08 INFO autodev.swarm.controller: Auto-assigned spawn 'p7-integration-tests' to unclaimed task 498aae231f4c (P7: Integration tests for tool call tracking)
+00:16:08 INFO autodev.swarm.controller: Spawned agent p7-integration-tests (tester) for task 498aae231f4c
+00:16:08 INFO autodev.swarm.controller: Planner waiting 90s: cli-tool-usage agent started 31s ago on P6 (CLI command). It's straightforward work -- let it finish before evaluating next steps.
+00:17:38 INFO autodev.swarm.planner: Cycle 8: 2 decisions (wait, spawn), 2 ok, 0 failed
+00:19:09 INFO autodev.swarm.planner: Parsed 2 decisions from planner (cycle 9)
+00:19:09 INFO autodev.swarm.controller: Planner waiting 90s: Both active agents (cli-tool-usage at 3.5min, p7-integration-tests at 2min) are young and working. P1-P5 already committed with 3321 tests passing. Let them finish before taking any action.
+00:20:39 INFO autodev.swarm.controller: Created task 850c00a71e59: Final verification and commit after P6+P7
+00:20:39 INFO autodev.swarm.planner: Cycle 9: 2 decisions (wait, create_task), 2 ok, 0 failed

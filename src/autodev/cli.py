@@ -223,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
 	tool_usage.add_argument("--config", default=DEFAULT_CONFIG)
 	tool_usage.add_argument("--run-id", default=None, help="Filter by run ID")
 	tool_usage.add_argument("--failures-only", action="store_true", help="Show only failed tool calls")
-	tool_usage.add_argument("--top", type=int, default=20, help="Show top N most-used tools")
+	tool_usage.add_argument("--top", type=int, default=None, help="Show top N most-used tools (default: all)")
 
 	# autodev traces
 	traces = sub.add_parser("traces", help="Manage git notes-based reasoning traces")
@@ -1483,28 +1483,55 @@ def cmd_metrics(args: argparse.Namespace) -> int:
 def cmd_tool_usage(args: argparse.Namespace) -> int:
 	"""Show tool usage summary from swarm runs."""
 	db_path = _get_db_path(args.config)
-	db = Database(str(db_path))
+	if not db_path.exists():
+		print("No database found. Run a swarm first.")
+		return 1
 
-	if args.failures_only:
-		failures = db.get_tool_failure_summary(run_id=args.run_id)
-		if not failures:
-			print("No tool failures found.")
+	with Database(db_path) as db:
+		if args.failures_only:
+			failures = db.get_tool_failure_summary(run_id=args.run_id)
+			if not failures:
+				print("No tool failures found.")
+				return 0
+			if args.top:
+				failures = failures[:args.top]
+			print(f"{'Tool':<40} {'Failures':>8}  Last Error")
+			print("-" * 90)
+			for f in failures:
+				error_preview = (f["last_error"] or "")[:60]
+				print(f"{f['tool_name']:<40} {f['error_count']:>8}  {error_preview}")
 			return 0
-		print(f"{'Tool':<40} {'Failures':>8}  Last Error")
-		print("-" * 80)
-		for f in failures:
-			print(f"{f['tool_name']:<40} {f['error_count']:>8}  {f['last_error'][:60]}")
-		return 0
 
-	usage = db.get_tool_usage(run_id=args.run_id, limit=args.top)
-	if not usage:
-		print("No tool usage data found.")
-		return 0
-	print(f"{'Tool':<40} {'Server':<15} {'Status':>7} {'Duration':>10}")
-	print("-" * 80)
-	for u in usage:
-		status = "OK" if u["success"] else "FAIL"
-		print(f"{u['tool_name']:<40} {u.get('mcp_server', ''):<15} {status:>7} {u.get('duration_ms', 0):>8.0f}ms")
+		usage = db.get_tool_usage(run_id=args.run_id, limit=100000)
+		if not usage:
+			print("No tool usage data found.")
+			return 0
+
+		# Aggregate by tool name
+		agg: dict[str, dict[str, float]] = {}
+		for u in usage:
+			name = u["tool_name"]
+			if name not in agg:
+				agg[name] = {"count": 0, "total_duration": 0.0, "failures": 0}
+			agg[name]["count"] += 1
+			agg[name]["total_duration"] += u.get("duration_ms") or 0
+			if u["is_error"]:
+				agg[name]["failures"] += 1
+
+		sorted_tools = sorted(agg.items(), key=lambda x: x[1]["count"], reverse=True)
+		if args.top:
+			sorted_tools = sorted_tools[:args.top]
+
+		print(f"{'Tool':<40} {'Calls':>6} {'Avg ms':>8} {'Failures':>9}")
+		print("-" * 65)
+		for name, stats in sorted_tools:
+			avg_ms = stats["total_duration"] / stats["count"] if stats["count"] else 0
+			print(f"{name:<40} {stats['count']:>6.0f} {avg_ms:>8.0f} {stats['failures']:>9.0f}")
+
+		total_calls = sum(s["count"] for _, s in sorted_tools)
+		total_failures = sum(s["failures"] for _, s in sorted_tools)
+		print("-" * 65)
+		print(f"{'Total':<40} {total_calls:>6.0f} {'':>8} {total_failures:>9.0f}")
 	return 0
 
 
