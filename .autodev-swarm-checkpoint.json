@@ -1,190 +1,39 @@
 {
   "version": 1,
-  "run_id": "2026-04-03_06-39-00",
-  "timestamp": "2026-04-03T07:24:12.051196+00:00",
+  "run_id": "2026-04-06_20-06-47",
+  "timestamp": "2026-04-06T20:14:15.570406+00:00",
   "team_name": "autodev-autonomous-development",
   "config_hash": "ea822f3146b51db1",
-  "start_commit": "e6397f519f50faae01d0094d76fcc0fc2a43ce82",
+  "start_commit": "a60a42c75a016c121bc01f7b0a2b8babdd881f55",
   "total_cost_usd": 0.0,
   "agent_costs": {},
   "agents": {
-    "085dcc5f38e1": {
-      "id": "085dcc5f38e1",
-      "name": "cli-tool-usage",
-      "role": "implementer",
-      "status": "dead",
-      "current_task_id": "309f0dc87eb2",
-      "spawned_at": "2026-04-03T07:14:33.054310+00:00",
-      "tasks_completed": 1,
-      "tasks_failed": 0,
-      "pid": null
-    },
-    "95b223700c8b": {
-      "id": "95b223700c8b",
-      "name": "p7-integration-tests",
-      "role": "tester",
-      "status": "dead",
-      "current_task_id": "498aae231f4c",
-      "spawned_at": "2026-04-03T07:16:08.343293+00:00",
-      "tasks_completed": 1,
-      "tasks_failed": 0,
-      "pid": null
-    },
-    "207f2645194f": {
-      "id": "207f2645194f",
-      "name": "final-commit-verifier",
+    "eaa5d19a9b26": {
+      "id": "eaa5d19a9b26",
+      "name": "spec-completeness-verifier",
       "role": "reviewer",
       "status": "working",
-      "current_task_id": "90e30f2f4c5f",
-      "spawned_at": "2026-04-03T07:22:12.043214+00:00",
+      "current_task_id": "535924ea6c1b",
+      "spawned_at": "2026-04-06T20:11:45.488839+00:00",
       "tasks_completed": 0,
       "tasks_failed": 0,
-      "pid": 33269
+      "pid": 1982
     }
   },
   "tasks": {
-    "3de58b732253": {
-      "id": "3de58b732253",
-      "title": "Rewrite _stream_agent_output + switch output format + fix monitor_agents",
-      "description": "Three tightly coupled changes in src/autodev/swarm/controller.py:\n\n1. REWRITE _stream_agent_output (lines 1011-1051): Change from plain text accumulation to JSON line parsing. Each stdout line should be parsed with self._parse_stream_event(). Keep trace file writing (raw lines). Keep _agent_outputs accumulation for any non-JSON lines. Store tool calls in self._agent_tool_calls[agent_id] at the end. Track pending_tool_uses dict within the method. The spec's exact implementation is in docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md section 4.\n\n2. SWITCH OUTPUT FORMAT (line 983): Change output_format='text' to output_format='stream-json' in _spawn_agent().\n\n3. FIX monitor_agents (lines 1154-1157): Currently line 1156 does `output = self._agent_outputs.pop(agent_id, '')` and line 1157 DISCARDS _agent_final_results. Reverse this: try _agent_final_results FIRST, fall back to _agent_outputs. Per spec section 6: `output = self._agent_final_results.pop(agent_id, '') or self._agent_outputs.pop(agent_id, '')`\n\nCRITICAL CONTEXT: A previous agent found that stream-json breaks AD_RESULT parsing when using the raw JSON stream (escaped quotes confuse the brace-counting parser). The solution is already in place: _parse_stream_event extracts clean result text from the 'result' event type and stores in _agent_final_results. The monitor_agents fix ensures we use that clean text for AD_RESULT parsing.\n\nAfter changes, run: .venv/bin/python -m pytest tests/test_tool_tracking.py -v && .venv/bin/python -m pytest tests/ -q --tb=short && .venv/bin/ruff check src/autodev/swarm/controller.py",
+    "535924ea6c1b": {
+      "id": "535924ea6c1b",
+      "title": "Verify tool call tracking completeness against spec",
+      "description": "Read docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md and cross-reference against actual code in db.py, swarm/controller.py, swarm/context.py, cli.py, and tests/test_tool_tracking.py. Check all 7 priorities are fully implemented. Run full verification suite.",
       "priority": 3,
-      "status": "completed",
-      "claimed_by": "e9c1f3dd313c",
-      "depends_on": [],
-      "files_hint": [
-        "src/autodev/swarm/controller.py"
-      ],
-      "attempt_count": 2,
-      "max_attempts": 3,
-      "result_summary": "Reverted controller.py to committed version. The uncommitted changes re-introduced the stream-json output format bug (violating documented gotcha). Committed version already has the correct output_format=text fix from e6397f5."
-    },
-    "73999f4ee803": {
-      "id": "73999f4ee803",
-      "title": "P1: Add tool_calls and mcp_status DB tables",
-      "description": "In src/autodev/db.py, add two new tables and their CRUD methods.\n\nTables:\n- tool_calls: id, run_id, agent_id, tool_name, mcp_server (nullable), input_summary (nullable), output_summary (nullable), is_error boolean, error_message (nullable), duration_ms (nullable), timestamp\n- mcp_status: id, run_id, agent_id, server_name, status (connected/failed/timeout), timestamp\n\nMethods to add:\n- record_tool_call(run_id, agent_id, tool_name, mcp_server=None, input_summary=None, output_summary=None, is_error=False, error_message=None, duration_ms=None)\n- get_tool_usage(run_id=None, agent_id=None, tool_name=None) -> list of tool call records\n- get_tool_failure_summary(run_id) -> list of {tool_name, error_count, last_error}\n- record_mcp_status(run_id, agent_id, server_name, status)\n- get_mcp_status(run_id) -> list of mcp status records\n\nFollow existing db.py patterns: use conn context manager, CREATE TABLE IF NOT EXISTS in ensure_tables(), parameterized queries. Read the full spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md for details.\n\nFile: src/autodev/db.py ONLY. Run existing tests after to confirm no regressions.",
-      "priority": 3,
-      "status": "completed",
-      "claimed_by": "be8403961f82",
-      "depends_on": [],
-      "files_hint": [
-        "src/autodev/db.py"
-      ],
-      "attempt_count": 1,
-      "max_attempts": 3,
-      "result_summary": "Implemented tool call tracking DB tables: updated tool_calls schema with input_summary/output_summary/is_error columns, added compound indexes, added migration for existing DBs, updated all methods to match new API, fixed all downstream consumers (cli.py, context.py, tests). 3321 tests pass, lint clean, bandit clean."
-    },
-    "d6737f40a6cd": {
-      "id": "d6737f40a6cd",
-      "title": "P2: Add _parse_stream_event() method to controller.py",
-      "description": "In src/autodev/swarm/controller.py, add a new method _parse_stream_event(self, agent_id: str, event: dict) that handles stream-json events.\n\nEvent types to handle:\n- 'init': Extract MCP server connection status from event data. Call db.record_mcp_status() for each server.\n- 'assistant' with content_block type 'tool_use': Record the start of a tool call. Store in self._pending_tool_uses[agent_id] with tool name, input, and start timestamp.\n- 'user' with tool_result: Match to pending tool_use by tool_use_id. Calculate duration. Call db.record_tool_call() with all fields. Extract MCP server name from tool name pattern mcp__server__tool -> server.\n- 'result': Store the final result text in self._agent_final_results[agent_id].\n- Invalid/unknown events: log warning, skip.\n\nAdd instance attributes in __init__: self._pending_tool_uses = {}, self._agent_final_results = {}, self._agent_tool_calls = {}\n\nRead the full spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md. File: src/autodev/swarm/controller.py ONLY. Do NOT modify _stream_agent_output or _spawn_agent yet.",
-      "priority": 2,
-      "status": "completed",
-      "claimed_by": "af7ff118df43",
-      "depends_on": [],
-      "files_hint": [
-        "src/autodev/swarm/controller.py"
-      ],
-      "attempt_count": 1,
-      "max_attempts": 3,
-      "result_summary": "Produced stream-json design document with root cause analysis, 5-step implementation plan, data flow diagram, 7 invariants, and 6 test cases"
-    },
-    "24b94afd26eb": {
-      "id": "24b94afd26eb",
-      "title": "P5: Add tool failure and MCP status visibility to planner context",
-      "description": "In src/autodev/swarm/context.py, add planner visibility for tool tracking data.\n\n1. Add method _render_tool_failures(self, run_id: str) -> str: Query db.get_tool_failure_summary(run_id). Format as a section showing tool name, error count, and last error message for each failing tool. Return empty string if no failures.\n\n2. Add method _render_mcp_status(self, run_id: str) -> str: Query db.get_mcp_status(run_id). Format as a section showing server name, status, and which agents are affected. Return empty string if no MCP data.\n\n3. In build_state() (or render method), include both sections so the planner sees tool failures and broken MCP servers in its state text. Place after agent status, before recommendations.\n\nRead the full spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md. File: src/autodev/swarm/context.py ONLY. Depends on DB tables (P1) existing.",
-      "priority": 1,
-      "status": "completed",
-      "claimed_by": "b8a35045ede7",
-      "depends_on": [],
-      "files_hint": [
-        "src/autodev/swarm/context.py"
-      ],
-      "attempt_count": 1,
-      "max_attempts": 3,
-      "result_summary": "All verification passed: 3321 tests green, 15 tool-tracking tests green, ruff clean, bandit clean. Committed controller.py stream-json + AD_RESULT extraction + monitor_agents integration."
-    },
-    "309f0dc87eb2": {
-      "id": "309f0dc87eb2",
-      "title": "P6: Add autodev tool-usage CLI command",
-      "description": "In src/autodev/cli.py, add a new subcommand 'tool-usage' under the autodev CLI.\n\nFlags:\n- --run-id: Filter by run ID (optional, defaults to latest)\n- --failures-only: Show only failed tool calls\n- --top N: Show top N most-used tools (default 10)\n\nOutput: Formatted table showing tool name, call count, error count, error rate, avg duration. If --failures-only, show tool name, error count, last error message. Use the db.get_tool_usage() and db.get_tool_failure_summary() methods.\n\nRead the full spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md. File: src/autodev/cli.py ONLY. Depends on DB tables (P1) existing.",
-      "priority": 1,
-      "status": "completed",
-      "claimed_by": "085dcc5f38e1",
-      "depends_on": [],
-      "files_hint": [
-        "src/autodev/cli.py"
-      ],
-      "attempt_count": 1,
-      "max_attempts": 3,
-      "result_summary": "Implemented autodev tool-usage CLI command with aggregated summary table showing call count, avg duration, and failure count per tool. Fixed is_error/success field mismatch, added proper DB context manager, and --top defaults to all."
-    },
-    "498aae231f4c": {
-      "id": "498aae231f4c",
-      "title": "P7: Integration tests for tool call tracking",
-      "description": "Create tests/test_tool_tracking.py with comprehensive tests for the tool tracking feature.\n\nTest categories:\n1. Stream event parsing: test _parse_stream_event with init events (MCP status), assistant events (tool_use start), user events (tool_result completion), result events (final text), and invalid JSON handling.\n2. DB methods: test record_tool_call, get_tool_usage, get_tool_failure_summary, record_mcp_status, get_mcp_status with various filters.\n3. MCP server name extraction: test mcp__server__tool -> server parsing, non-MCP tool names, edge cases.\n4. AD_RESULT extraction: test extraction from stream-json result event, fallback to text parsing.\n5. End-to-end: mock a stream of JSON events, verify they produce correct DB records and planner context.\n\nUse pytest fixtures. Use in-memory SQLite for DB tests. Mock subprocess output for stream tests. All existing tests must still pass.\n\nRead the full spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md. File: tests/test_tool_tracking.py. Run full test suite after.",
-      "priority": 1,
-      "status": "completed",
-      "claimed_by": "95b223700c8b",
-      "depends_on": [],
-      "files_hint": [
-        "tests/test_tool_tracking.py"
-      ],
-      "attempt_count": 1,
-      "max_attempts": 3,
-      "result_summary": "Added 20 comprehensive integration tests to tests/test_tool_tracking.py covering stream event parsing edge cases, DB method filters/limits/nullables, MCP status deduplication, and AD_RESULT fallback chain. All 35 tests pass, full suite (3341) green, ruff and bandit clean."
-    },
-    "90e30f2f4c5f": {
-      "id": "90e30f2f4c5f",
-      "title": "P5: Planner visibility - tool failures and MCP status in context",
-      "description": "In swarm/context.py, add _render_tool_failures() and _render_mcp_status() methods that query the DB tables created in P1. Include their output in build_state() so the planner sees tool failure patterns and broken MCP servers in its cycle state text. Depends on P1 (DB tables and query methods in db.py). Read the spec at docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md for details.",
-      "priority": 1,
       "status": "claimed",
-      "claimed_by": "207f2645194f",
+      "claimed_by": "eaa5d19a9b26",
       "depends_on": [],
       "files_hint": [
-        "src/autodev/swarm/context.py"
-      ],
-      "attempt_count": 0,
-      "max_attempts": 3,
-      "result_summary": ""
-    },
-    "08e52577b377": {
-      "id": "08e52577b377",
-      "title": "Close duplicate P5/P6 tasks - work already done",
-      "description": "P5 (planner visibility) has TWO pending tasks (24b94afd26eb and 90e30f2f4c5f) but the work is already committed in context.py:548 (_render_tool_failures) and context.py:558 (_render_mcp_status), both called in build_state() at lines 526/529. P6 (CLI command) is also already implemented in cli.py:221-226 and cli.py:1483. These tasks should be marked complete to prevent agents from wasting time on already-done work. The planner will handle this administratively.",
-      "priority": 1,
-      "status": "pending",
-      "claimed_by": null,
-      "depends_on": [],
-      "files_hint": [],
-      "attempt_count": 0,
-      "max_attempts": 3,
-      "result_summary": ""
-    },
-    "0ca9eb3b8457": {
-      "id": "0ca9eb3b8457",
-      "title": "Verify all tests pass after P3+P4 wiring",
-      "description": "After the P3+P4 implementation lands (rewriting _stream_agent_output to use _parse_stream_event and switching to stream-json), run the full test suite and verification:\n1. .venv/bin/python -m pytest tests/test_tool_tracking.py -v (tool tracking specific tests)\n2. .venv/bin/python -m pytest -q (all tests)\n3. .venv/bin/ruff check src/ tests/\n4. .venv/bin/bandit -r src/ -lll -q\nAll must pass. If test_tool_tracking.py tests fail, the parse event wiring is wrong. If other tests fail, the stream-json switch broke something.",
-      "priority": 2,
-      "status": "pending",
-      "claimed_by": null,
-      "depends_on": [],
-      "files_hint": [
-        "tests/test_tool_tracking.py"
-      ],
-      "attempt_count": 0,
-      "max_attempts": 3,
-      "result_summary": ""
-    },
-    "850c00a71e59": {
-      "id": "850c00a71e59",
-      "title": "Final verification and commit after P6+P7",
-      "description": "After cli-tool-usage and p7-integration-tests agents complete: 1) Run full verification suite (.venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/ && .venv/bin/bandit -r src/ -lll -q). 2) Review changes to cli.py and test_tool_tracking.py for correctness. 3) Commit all remaining changes. 4) Confirm mission complete.",
-      "priority": 2,
-      "status": "pending",
-      "claimed_by": null,
-      "depends_on": [],
-      "files_hint": [
+        "docs/superpowers/specs/2026-03-15-tool-call-tracking-design.md",
+        "src/autodev/db.py",
+        "src/autodev/swarm/controller.py",
+        "src/autodev/swarm/context.py",
         "src/autodev/cli.py",
         "tests/test_tool_tracking.py"
       ],
@@ -194,79 +43,10 @@
     }
   },
   "planner": {
-    "cycle_count": 10,
+    "cycle_count": 1,
     "test_history": [],
-    "completion_history": [
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      1,
-      2,
-      3,
-      3,
-      4,
-      4,
-      6
-    ],
-    "failure_history": [
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0
-    ],
-    "cost_history": [
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0,
-      0.0
-    ]
+    "completion_history": [],
+    "failure_history": [],
+    "cost_history": []
   }
 }

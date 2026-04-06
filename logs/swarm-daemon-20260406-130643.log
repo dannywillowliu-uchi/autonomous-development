@@ -1,0 +1,9 @@
+=== Swarm daemon starting at Mon Apr  6 13:06:43 PDT 2026 ===
+13:06:47 INFO autodev.swarm.controller: Removing stale checkpoint (all agent PIDs dead)
+13:06:48 INFO autodev.swarm.controller: Swarm controller initialized for team autodev-autonomous-development
+13:06:49 INFO httpx: HTTP Request: POST https://api.telegram.org/bot8685447637:AAGCWVSvkG9QrpUalBgVwhwi9KL0NvbCUrs/sendMessage "HTTP/1.1 200 OK"
+13:06:49 INFO autodev.swarm.planner: Driving planner started
+13:11:45 INFO autodev.swarm.planner: Parsed 2 decisions from planner (cycle 1)
+13:11:45 INFO autodev.swarm.controller: Created task 535924ea6c1b: Verify tool call tracking completeness against spec
+13:11:45 WARNING autodev.config: build_claude_cmd: output_format='stream-json' requested. AD_RESULT markers will be embedded in JSON string fields and may not be parseable by brace-counting extractors. Use 'text' format for reliable AD_RESULT extraction.
+13:11:45 INFO autodev.swarm.controller: Spawned agent spec-completeness-verifier (reviewer) for task 535924ea6c1b

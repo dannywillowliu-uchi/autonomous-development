@@ -98,3 +98,9 @@
 00:22:12 INFO autodev.swarm.controller: Spawned agent final-commit-verifier (reviewer) for task 90e30f2f4c5f
 00:22:12 INFO autodev.swarm.controller: Planner waiting 120s: Let the final-commit-verifier agent run the full verification suite and commit. This is the last step before mission completion.
 00:24:12 INFO autodev.swarm.planner: Cycle 10: 2 decisions (spawn, wait), 2 ok, 0 failed
+00:24:42 INFO autodev.swarm.controller: Auto-committed task 'P5: Planner visibility - tool failures and MCP status in context': a60a42c7
+00:24:42 INFO httpx: HTTP Request: POST https://api.telegram.org/bot8685447637:AAGCWVSvkG9QrpUalBgVwhwi9KL0NvbCUrs/sendMessage "HTTP/1.1 200 OK"
+00:24:43 INFO autodev.swarm.controller: Auto-pushed to origin/main
+00:25:27 INFO autodev.swarm.planner: Parsed 1 decisions from planner (cycle 11)
+00:25:27 INFO autodev.swarm.controller: Planner waiting 10s: Mission is COMPLETE. All 7 priorities (P1-P7) implemented, committed, and verified: 3341 tests pass, ruff clean, bandit clean. No further agent work needed. Signaling graceful wind-down.
+00:25:37 INFO autodev.swarm.planner: Cycle 11: 1 decisions (wait), 1 ok, 0 failed
